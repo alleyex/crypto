@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alleyex.crypto.scheduler</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alleyex/Projects/crypto/.venv/bin/python</string>
+        <string>/Users/alleyex/Projects/crypto/scripts/run_scheduler.py</string>
+        <string>--interval</string>
+        <string>60</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/alleyex/Projects/crypto</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/alleyex/Projects/crypto/logs/launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alleyex/Projects/crypto/logs/launchd.stderr.log</string>
+</dict>
+</plist>

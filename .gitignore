@@ -2,3 +2,8 @@ planning/
 .venv/
 data/
 storage/
+logs/
+runtime/
+*.pyc
+
+.DS_Store
