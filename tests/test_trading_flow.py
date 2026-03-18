@@ -390,7 +390,8 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
         "app.api.main.read_scheduler_log",
         lambda lines=1: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
     )
-    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: {"sent": False})
+    called = []
+    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: called.append(report) or {"sent": False})
     monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
@@ -408,6 +409,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["scheduler"]["status"] == "ok"
     assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0
+    assert len(called) == 1
 
 
 def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(monkeypatch, tmp_path) -> None:
@@ -430,7 +432,8 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
         lambda: {"stopped": True, "stop_file": str(tmp_path / "scheduler.stop")},
     )
     monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
-    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: {"sent": False})
+    called = []
+    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: called.append(report) or {"sent": False})
     monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": True, "kill_switch_file": str(tmp_path / "kill.switch")},
@@ -446,6 +449,7 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
+    assert len(called) == 1
 
 
 def test_maybe_send_health_alert_deduplicates_same_degraded_state(monkeypatch, tmp_path) -> None:
@@ -545,12 +549,96 @@ def test_alerts_test_endpoint_returns_sender_result(monkeypatch) -> None:
 def test_send_telegram_message_returns_not_configured_when_env_missing(monkeypatch) -> None:
     monkeypatch.setattr("app.alerting.telegram.TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr("app.alerting.telegram.TELEGRAM_CHAT_ID", "")
+    audit_calls = []
+    monkeypatch.setattr("app.alerting.telegram.log_event", lambda **kwargs: audit_calls.append(kwargs))
 
     from app.alerting.telegram import send_telegram_message
 
     result = send_telegram_message("hello")
 
     assert result == {"sent": False, "reason": "Telegram is not configured."}
+    assert audit_calls == [
+        {
+            "event_type": "alert_delivery",
+            "status": "skipped",
+            "source": "telegram",
+            "message": "Telegram delivery skipped because configuration is missing.",
+            "payload": {
+                "text": "hello",
+                "sent": False,
+                "reason": "Telegram is not configured.",
+            },
+        }
+    ]
+
+
+def test_send_telegram_message_returns_failure_instead_of_raising(monkeypatch) -> None:
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_CHAT_ID", "chat")
+    audit_calls = []
+    monkeypatch.setattr("app.alerting.telegram.log_event", lambda **kwargs: audit_calls.append(kwargs))
+
+    import requests
+
+    def raise_timeout(*args, **kwargs):
+        raise requests.ConnectTimeout("timed out")
+
+    monkeypatch.setattr("app.alerting.telegram.requests.post", raise_timeout)
+
+    from app.alerting.telegram import send_telegram_message
+
+    result = send_telegram_message("hello")
+
+    assert result["sent"] is False
+    assert "Telegram send failed" in result["reason"]
+    assert audit_calls == [
+        {
+            "event_type": "alert_delivery",
+            "status": "failed",
+            "source": "telegram",
+            "message": "Telegram alert delivery failed.",
+            "payload": {
+                "text": "hello",
+                "sent": False,
+                "reason": result["reason"],
+            },
+        }
+    ]
+
+
+def test_send_telegram_message_logs_successful_delivery(monkeypatch) -> None:
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_CHAT_ID", "chat")
+    audit_calls = []
+    monkeypatch.setattr("app.alerting.telegram.log_event", lambda **kwargs: audit_calls.append(kwargs))
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "result": {"message_id": 1}}
+
+    monkeypatch.setattr("app.alerting.telegram.requests.post", lambda *args, **kwargs: DummyResponse())
+
+    from app.alerting.telegram import send_telegram_message
+
+    result = send_telegram_message("hello")
+
+    assert result == {"sent": True, "response": {"ok": True, "result": {"message_id": 1}}}
+    assert audit_calls == [
+        {
+            "event_type": "alert_delivery",
+            "status": "sent",
+            "source": "telegram",
+            "message": "Telegram alert delivered.",
+            "payload": {
+                "text": "hello",
+                "telegram_ok": True,
+                "chat_id": "chat",
+            },
+        }
+    ]
 
 
 def test_health_reports_database_info(monkeypatch, tmp_path) -> None:

@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Union
 
+from fastapi import BackgroundTasks
 from fastapi import FastAPI, Query
 from fastapi import Response
 from fastapi.responses import HTMLResponse
@@ -256,9 +257,9 @@ class AlertTestRequest(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
+def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
-    maybe_send_health_alert(report)
+    background_tasks.add_task(maybe_send_health_alert, report)
     return report
 
 
