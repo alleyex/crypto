@@ -9,6 +9,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.admin.page import render_admin_page
+from app.alerting.telegram import send_telegram_message
+from app.alerting.telegram import telegram_configured
 from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_info
 from app.core.settings import CANDLE_STALENESS_SECONDS
@@ -248,6 +250,10 @@ class TestSignalRequest(BaseModel):
     strategy_name: str = "manual_test"
 
 
+class AlertTestRequest(BaseModel):
+    message: str = "Crypto alert test message."
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return build_health_report()
@@ -266,6 +272,16 @@ def favicon() -> Response:
 @app.get("/admin", response_class=HTMLResponse)
 def admin() -> str:
     return render_admin_page()
+
+
+@app.get("/alerts/status")
+def alerts_status() -> dict[str, bool]:
+    return {"telegram_configured": telegram_configured()}
+
+
+@app.post("/alerts/test")
+def alerts_test(payload: AlertTestRequest) -> dict[str, Any]:
+    return send_telegram_message(payload.message)
 
 
 @app.get("/candles")

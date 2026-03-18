@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Dict, Tuple, Union
 
+from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
 
 
@@ -11,6 +12,7 @@ KILL_SWITCH_FILE = RUNTIME_DIR / "kill.switch"
 def enable_kill_switch() -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     KILL_SWITCH_FILE.write_text("kill\n", encoding="utf-8")
+    send_telegram_message("Crypto alert: kill switch has been enabled.")
     log_event(
         event_type="kill_switch",
         status="enabled",

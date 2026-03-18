@@ -474,6 +474,41 @@ def test_favicon_returns_no_content() -> None:
     assert response.status_code == 204
 
 
+def test_alerts_status_reports_configuration(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.main.telegram_configured", lambda: True)
+    client = TestClient(app)
+
+    response = client.get("/alerts/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"telegram_configured": True}
+
+
+def test_alerts_test_endpoint_returns_sender_result(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.api.main.send_telegram_message",
+        lambda text: {"sent": True, "response": {"ok": True, "text": text}},
+    )
+    client = TestClient(app)
+
+    response = client.post("/alerts/test", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert response.json()["sent"] is True
+    assert response.json()["response"]["text"] == "hello"
+
+
+def test_send_telegram_message_returns_not_configured_when_env_missing(monkeypatch) -> None:
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_CHAT_ID", "")
+
+    from app.alerting.telegram import send_telegram_message
+
+    result = send_telegram_message("hello")
+
+    assert result == {"sent": False, "reason": "Telegram is not configured."}
+
+
 def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "db-info.db"
     connection = sqlite3.connect(db_path)

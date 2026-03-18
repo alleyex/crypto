@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple, Union
 
+from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
 from app.scheduler.runner import LOG_FILE
 from app.scheduler.runner import RUNTIME_DIR
@@ -9,6 +10,7 @@ from app.scheduler.runner import STOP_FILE
 def set_stop_flag() -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     STOP_FILE.write_text("stop\n", encoding="utf-8")
+    send_telegram_message("Crypto alert: scheduler stop flag has been set.")
     log_event(
         event_type="scheduler_control",
         status="stopped",

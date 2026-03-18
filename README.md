@@ -62,6 +62,8 @@ export CRYPTO_MAX_DAILY_LOSS=50
 export CRYPTO_DB_BACKEND=sqlite
 export CRYPTO_SQLITE_PATH=storage/market_data.db
 export CRYPTO_DATABASE_URL=
+export TELEGRAM_BOT_TOKEN=
+export TELEGRAM_CHAT_ID=8703043602
 ```
 
 ## Main Commands
@@ -159,6 +161,7 @@ Manual operations guide:
 Read endpoints:
 
 - `GET /admin`
+- `GET /alerts/status`
 - `GET /audit-events`
 - `GET /health`
 - `GET /candles`
@@ -171,6 +174,7 @@ Read endpoints:
 
 Control endpoints:
 
+- `POST /alerts/test`
 - `POST /pipeline/run`
 - `POST /signals/test`
 - `POST /positions/rebuild`
@@ -198,6 +202,10 @@ curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s http://127.0.0.1:8000/kill-switch/status
 curl -s -X POST http://127.0.0.1:8000/kill-switch/enable
 curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
+curl -s http://127.0.0.1:8000/alerts/status
+curl -s -X POST http://127.0.0.1:8000/alerts/test \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Crypto alert test"}'
 ```
 
 `GET /health` returns:
@@ -219,6 +227,10 @@ curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 `GET /audit-events` provides:
 
 - recent structured audit records for pipeline, risk, scheduler, and kill switch actions
+
+`GET /alerts/status` provides:
+
+- whether Telegram alerting is configured
 
 Current note:
 
@@ -299,6 +311,22 @@ Current event sources:
 - risk evaluations
 - scheduler start / stop control
 - kill switch enable / disable control
+
+## Telegram Alerts
+
+Current Telegram alert triggers:
+
+- scheduler stop flag set
+- kill switch enabled
+
+Manual test endpoint:
+
+- `POST /alerts/test`
+
+Required environment variables:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
 ## Soak Validation
 
