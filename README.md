@@ -141,6 +141,10 @@ python scripts/read_stop_flag.py
 
 ## API Endpoints
 
+Manual operations guide:
+
+- `docs/API_OPERATIONS.md`
+
 Read endpoints:
 
 - `GET /health`
@@ -245,7 +249,6 @@ Logs:
 ## Next Recommended Work
 
 - Add PostgreSQL migration path
-- Add API docs for manual operations
 - Add dashboard or admin UI
 - Add alerting
 - Add CI status badge and branch protection
