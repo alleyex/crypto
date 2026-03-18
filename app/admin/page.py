@@ -354,6 +354,10 @@ def render_admin_page() -> str:
         <article class="panel data-card">
           <h2>Alert Delivery</h2>
           <p>Telegram configuration and the latest delivery attempt recorded in audit events.</p>
+          <div class="button-row" style="margin-bottom: 16px;">
+            <button data-action="alert-test">Send Test Alert</button>
+          </div>
+          <div class="message" id="alerts-message">No test alert sent from this page yet.</div>
           <pre id="alerts-json">Loading...</pre>
         </article>
       </section>
@@ -477,6 +481,7 @@ def render_admin_page() -> str:
           "scheduler-stop": "scheduler-message",
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
+          "alert-test": "alerts-message",
         };
         const target = el(messages[type]);
         target.textContent = "Running...";
@@ -494,6 +499,11 @@ def render_admin_page() -> str:
             result = await api("/kill-switch/enable", { method: "POST" });
           } else if (type === "kill-disable") {
             result = await api("/kill-switch/disable", { method: "POST" });
+          } else if (type === "alert-test") {
+            result = await api("/alerts/test", {
+              method: "POST",
+              body: JSON.stringify({ message: "Crypto admin dashboard test alert." }),
+            });
           }
           target.textContent = formatJson(result);
           await refreshAll();

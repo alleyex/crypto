@@ -504,7 +504,9 @@ def test_admin_page_is_served() -> None:
     assert "/pipeline/run" in response.text
     assert "/audit-events?limit=20" in response.text
     assert "/alerts/status" in response.text
+    assert "/alerts/test" in response.text
     assert "Alert Delivery" in response.text
+    assert "Send Test Alert" in response.text
 
 
 def test_root_redirects_to_admin() -> None:
