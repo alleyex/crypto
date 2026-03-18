@@ -38,6 +38,7 @@ Current default risk rules:
 - Reject `BUY` when an existing long position is already open
 - Reject trades during cooldown after the latest fill
 - Reject `BUY` if the resulting position would exceed the configured max position
+- Reject new trades after the realized loss limit has been breached
 
 ## Setup
 
@@ -57,6 +58,7 @@ export CRYPTO_ORDER_QTY=0.001
 export CRYPTO_MAX_POSITION_QTY=0.002
 export CRYPTO_COOLDOWN_SECONDS=300
 export CRYPTO_CANDLE_STALENESS_SECONDS=600
+export CRYPTO_MAX_DAILY_LOSS=50
 ```
 
 ## Main Commands
@@ -171,6 +173,11 @@ curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 - scheduler stop flag and latest log line
 - active runtime config values
 
+Current note:
+
+- `CRYPTO_MAX_DAILY_LOSS` is currently enforced against accumulated `positions.realized_pnl`
+- If you need strict calendar-day loss limits, the next step is adding a daily realized PnL ledger
+
 ## launchd
 
 Install the LaunchAgent:
@@ -220,5 +227,5 @@ Logs:
 - Add PostgreSQL migration path
 - Add API docs for manual operations
 - Add dashboard or admin UI
-- Add daily loss limit and alerting
+- Add alerting
 - Add CI status badge and branch protection

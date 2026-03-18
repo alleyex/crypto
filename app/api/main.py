@@ -9,6 +9,7 @@ from app.core.db import DB_FILE, get_connection
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
+from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -211,6 +212,7 @@ def build_health_report() -> dict[str, Any]:
             "max_position_qty": MAX_POSITION_QTY,
             "cooldown_seconds": COOLDOWN_SECONDS,
             "candle_staleness_seconds": CANDLE_STALENESS_SECONDS,
+            "max_daily_loss": MAX_DAILY_LOSS,
         },
         "checks": checks,
     }

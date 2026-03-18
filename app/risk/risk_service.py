@@ -4,6 +4,7 @@ from typing import Dict, Optional, Union
 
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
+from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 
 
@@ -45,7 +46,7 @@ LIMIT 1;
 
 
 SELECT_POSITION_SQL = """
-SELECT qty
+SELECT qty, realized_pnl
 FROM positions
 WHERE symbol = ?
 LIMIT 1;
@@ -100,6 +101,7 @@ def evaluate_latest_signal(
     order_qty: float = DEFAULT_ORDER_QTY,
     max_position_qty: float = MAX_POSITION_QTY,
     cooldown_seconds: int = COOLDOWN_SECONDS,
+    max_daily_loss: float = MAX_DAILY_LOSS,
 ) -> Optional[Dict[str, Union[int, str]]]:
     latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
     if latest_signal is None:
@@ -113,11 +115,18 @@ def evaluate_latest_signal(
     else:
         position_row = connection.execute(SELECT_POSITION_SQL, (symbol,)).fetchone()
         current_qty = float(position_row[0]) if position_row is not None else 0.0
+        realized_pnl = float(position_row[1]) if position_row is not None else 0.0
         latest_fill = None
         if _fills_table_exists(connection):
             latest_fill = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
 
-        if latest_fill is not None:
+        if realized_pnl <= -abs(max_daily_loss):
+            decision = "REJECTED"
+            reason = (
+                f"Daily loss limit breached: realized_pnl={realized_pnl}, "
+                f"limit=-{abs(max_daily_loss)}."
+            )
+        elif latest_fill is not None:
             last_fill_at = _parse_created_at(latest_fill[0])
             now = datetime.now(timezone.utc)
             cooldown_elapsed = (now - last_fill_at).total_seconds()

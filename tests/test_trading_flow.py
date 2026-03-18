@@ -185,6 +185,35 @@ def test_evaluate_latest_signal_rejects_when_cooldown_is_active() -> None:
         connection.close()
 
 
+def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> None:
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl)
+            VALUES (?, ?, ?, ?);
+            """,
+            ("BTCUSDT", 0.0, 0.0, -75.0),
+        )
+        connection.commit()
+
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+        risk_result = evaluate_latest_signal(
+            connection,
+            cooldown_seconds=0,
+            max_daily_loss=50.0,
+        )
+
+        assert risk_result is not None
+        assert risk_result["decision"] == "REJECTED"
+        assert "Daily loss limit breached" in risk_result["reason"]
+    finally:
+        connection.close()
+
+
 def test_update_positions_and_pnl_snapshots_track_realized_and_unrealized_pnl() -> None:
     connection = make_connection()
     try:
@@ -345,6 +374,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["candles"]["status"] == "ok"
     assert payload["checks"]["pipeline"]["status"] == "ok"
     assert payload["checks"]["scheduler"]["status"] == "ok"
+    assert payload["config"]["max_daily_loss"] == 50.0
 
 
 def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(monkeypatch, tmp_path) -> None:
