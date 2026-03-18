@@ -140,6 +140,16 @@ Record and append a soak validation snapshot:
 python scripts/read_soak_validation.py --record
 ```
 
+Recommended soak validation acceptance target:
+
+1. Keep the scheduler running continuously for 3 days.
+2. Record at least 1 soak snapshot per day.
+3. Confirm `scheduler/logs` keeps advancing with new `run=` lines.
+4. Confirm `/validation/soak` stays out of `error`.
+5. Confirm there are no unexpected `kill switch enabled` events.
+6. Confirm `orders`, `fills`, `positions`, and `pnl` remain internally consistent.
+7. Confirm Telegram alert delivery does not show repeated failures.
+
 Stop the scheduler:
 
 ```bash

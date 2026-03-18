@@ -168,6 +168,16 @@ Recommended cadence:
 - once per day during soak validation
 - once before stopping the run
 
+Suggested acceptance criteria for Stage 1 soak validation:
+
+1. Let the system run for 3 continuous days before calling the soak check complete.
+2. Record at least 1 snapshot per day with `python scripts/read_soak_validation.py --record` or `POST /validation/soak/record`.
+3. Confirm recent scheduler logs continue to show fresh `run=` lines instead of only stop-flag lines.
+4. Confirm `/validation/soak` is never `error`, and investigate any `degraded` result the same day.
+5. Confirm no unexpected kill switch activations occur during the run.
+6. Confirm `orders`, `fills`, `positions`, and `pnl` remain logically consistent.
+7. Confirm Telegram alert delivery does not show sustained failures in `alert_delivery` audit events.
+
 ## Suggested Manual Workflow
 
 1. Check `/health`
