@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.admin.page import render_admin_page
+from app.alerting.health import maybe_send_health_alert
 from app.alerting.telegram import send_telegram_message
 from app.alerting.telegram import telegram_configured
 from app.core.db import DB_FILE, get_connection
@@ -256,7 +257,9 @@ class AlertTestRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return build_health_report()
+    report = build_health_report()
+    maybe_send_health_alert(report)
+    return report
 
 
 @app.get("/", include_in_schema=False)

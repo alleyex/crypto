@@ -318,10 +318,16 @@ Current Telegram alert triggers:
 
 - scheduler stop flag set
 - kill switch enabled
+- health becomes degraded or error
 
 Manual test endpoint:
 
 - `POST /alerts/test`
+
+Deduplication:
+
+- health alerts are sent once per unique degraded/error state
+- when health returns to `ok`, the alert state is cleared
 
 Required environment variables:
 

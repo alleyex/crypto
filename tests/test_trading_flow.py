@@ -390,6 +390,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
         "app.api.main.read_scheduler_log",
         lambda lines=1: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
     )
+    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: {"sent": False})
     monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
@@ -429,6 +430,7 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
         lambda: {"stopped": True, "stop_file": str(tmp_path / "scheduler.stop")},
     )
     monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
+    monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: {"sent": False})
     monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": True, "kill_switch_file": str(tmp_path / "kill.switch")},
@@ -444,6 +446,47 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
+
+
+def test_maybe_send_health_alert_deduplicates_same_degraded_state(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "health_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.health.HEALTH_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.health.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.health import maybe_send_health_alert
+
+    report = {
+        "status": "degraded",
+        "checks": {
+            "scheduler": {"status": "degraded"},
+            "kill_switch": {"status": "ok"},
+        },
+    }
+
+    first = maybe_send_health_alert(report)
+    second = maybe_send_health_alert(report)
+
+    assert first["sent"] is True
+    assert second == {"sent": False, "reason": "Health alert already sent for current state."}
+    assert len(sent_messages) == 1
+
+
+def test_maybe_send_health_alert_clears_state_when_health_returns_ok(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "health_alert_state.json"
+    monkeypatch.setattr("app.alerting.health.HEALTH_ALERT_STATE_FILE", state_file)
+
+    from app.alerting.health import maybe_send_health_alert
+
+    state_file.write_text('{"fingerprint":"x","status":"degraded"}', encoding="utf-8")
+    result = maybe_send_health_alert({"status": "ok", "checks": {}})
+
+    assert result == {"sent": False, "reason": "Health status is ok."}
+    assert not state_file.exists()
 
 
 def test_admin_page_is_served() -> None:
