@@ -985,6 +985,36 @@ def test_build_soak_validation_report_marks_missing_runtime_activity_as_degraded
     assert "No signals generated." in report["issues"]
 
 
+def test_build_soak_validation_report_marks_scheduler_stop_flag_as_degraded(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "stopped-soak.db"
+    log_path = tmp_path / "scheduler.log"
+    log_path.write_text(
+        "[2026-03-18T16:08:53] scheduler stopped by flag: runtime/scheduler.stop\n",
+        encoding="utf-8",
+    )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        seed_candles(connection, [10, 11, 12, 13, 14])
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.validation.soak_report.read_scheduler_log",
+        lambda lines=200: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
+    )
+
+    report = build_soak_validation_report()
+
+    assert report["status"] == "degraded"
+    assert report["scheduler"]["stopped_by_flag"] is True
+    assert "Scheduler is stopped by flag." in report["issues"]
+
+
 def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path) -> None:
     history_file = tmp_path / "soak_history.jsonl"
     monkeypatch.setattr(

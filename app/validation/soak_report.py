@@ -79,6 +79,8 @@ def _positions_summary(connection: sqlite3.Connection) -> dict[str, float]:
 
 
 def _scheduler_log_summary(lines: list[str]) -> dict[str, Any]:
+    last_line = lines[-1] if lines else None
+    stopped_by_flag = bool(last_line and "scheduler stopped by flag" in last_line.lower())
     recent_errors = [
         line
         for line in lines
@@ -86,7 +88,8 @@ def _scheduler_log_summary(lines: list[str]) -> dict[str, Any]:
     ]
     return {
         "line_count": len(lines),
-        "last_line": lines[-1] if lines else None,
+        "last_line": last_line,
+        "stopped_by_flag": stopped_by_flag,
         "recent_error_count": len(recent_errors),
         "recent_errors": recent_errors[-5:],
     }
@@ -112,6 +115,8 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
 
     if scheduler["line_count"] == 0:
         issues.append("Scheduler log is empty.")
+    if scheduler["stopped_by_flag"]:
+        issues.append("Scheduler is stopped by flag.")
     if scheduler["recent_error_count"] > 0:
         issues.append("Scheduler log contains error markers.")
     if table_counts["candles"] == 0:
