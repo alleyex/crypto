@@ -7,6 +7,7 @@ from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
+from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.system.kill_switch import enable_kill_switch
 
 
@@ -117,15 +118,16 @@ def evaluate_latest_signal(
     else:
         position_row = connection.execute(SELECT_POSITION_SQL, (symbol,)).fetchone()
         current_qty = float(position_row[0]) if position_row is not None else 0.0
-        realized_pnl = float(position_row[1]) if position_row is not None else 0.0
+        total_realized_pnl = float(position_row[1]) if position_row is not None else 0.0
+        daily_realized_pnl = get_daily_realized_pnl(connection, symbol)
         latest_fill = None
         if _fills_table_exists(connection):
             latest_fill = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
 
-        if realized_pnl <= -abs(max_daily_loss):
+        if daily_realized_pnl <= -abs(max_daily_loss):
             decision = "REJECTED"
             reason = (
-                f"Daily loss limit breached: realized_pnl={realized_pnl}, "
+                f"Daily loss limit breached: daily_realized_pnl={daily_realized_pnl}, "
                 f"limit=-{abs(max_daily_loss)}."
             )
             enable_kill_switch(
@@ -205,6 +207,8 @@ def evaluate_latest_signal(
             "symbol": symbol,
             "signal_type": signal_type,
             "decision": decision,
+            "daily_realized_pnl": daily_realized_pnl if signal_type != "HOLD" else None,
+            "total_realized_pnl": total_realized_pnl if signal_type != "HOLD" else None,
         },
     )
 

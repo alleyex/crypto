@@ -11,6 +11,7 @@ from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
 from app.execution.paper_broker import execute_latest_risk
 from app.pipeline.run_pipeline import run_pipeline_collect
+from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
@@ -56,6 +57,24 @@ def seed_candles(connection: sqlite3.Connection, closes: list[float]) -> None:
     ensure_candles_table(connection)
     klines = [make_kline((index + 1) * 60_000, close) for index, close in enumerate(closes)]
     save_klines(connection, klines)
+
+
+def insert_fill(
+    connection: sqlite3.Connection,
+    order_id: int,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    created_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO fills (order_id, symbol, side, qty, price, created_at)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """,
+        (order_id, symbol, side, qty, price, created_at),
+    )
 
 
 def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
@@ -193,16 +212,28 @@ def test_evaluate_latest_signal_rejects_when_cooldown_is_active() -> None:
 def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> None:
     connection = make_connection()
     try:
+        ensure_execution_tables(connection)
         ensure_signals_table(connection)
         ensure_positions_table(connection)
         ensure_risk_table(connection)
         connection.execute(
             """
-            INSERT INTO positions (symbol, qty, avg_price, realized_pnl)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("BTCUSDT", 0.0, 0.0, -75.0),
+            ("buy-daily-1", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-18 10:00:00"),
         )
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("sell-daily-1", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-18 10:05:00"),
+        )
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-18 10:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-18 10:05:00")
         connection.commit()
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
@@ -215,6 +246,7 @@ def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> N
         assert risk_result is not None
         assert risk_result["decision"] == "REJECTED"
         assert "Daily loss limit breached" in risk_result["reason"]
+        assert "daily_realized_pnl=-75.0" in risk_result["reason"]
     finally:
         connection.close()
 
@@ -236,16 +268,28 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
         or "runtime/kill.switch",
     )
     try:
+        ensure_execution_tables(connection)
         ensure_signals_table(connection)
         ensure_positions_table(connection)
         ensure_risk_table(connection)
         connection.execute(
             """
-            INSERT INTO positions (symbol, qty, avg_price, realized_pnl)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("BTCUSDT", 0.0, 0.0, -75.0),
+            ("buy-daily-2", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-18 11:00:00"),
         )
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("sell-daily-2", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-18 11:05:00"),
+        )
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-18 11:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-18 11:05:00")
         connection.commit()
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
@@ -261,6 +305,48 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
         assert kill_switch_calls[0]["source"] == "risk_service"
         assert "Daily loss limit breached" in kill_switch_calls[0]["reason"]
         assert "auto-enabled" in kill_switch_calls[0]["notify_message"]
+    finally:
+        connection.close()
+
+
+def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("buy-prev-day", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-17 10:00:00"),
+        )
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("sell-prev-day", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-17 10:05:00"),
+        )
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-17 10:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-17 10:05:00")
+        connection.commit()
+
+        assert get_daily_realized_pnl(connection, "BTCUSDT", pnl_date="2026-03-17") == -75.0
+
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+        risk_result = evaluate_latest_signal(
+            connection,
+            cooldown_seconds=0,
+            max_daily_loss=50.0,
+        )
+
+        assert risk_result is not None
+        assert risk_result["decision"] == "APPROVED"
     finally:
         connection.close()
 

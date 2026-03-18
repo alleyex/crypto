@@ -234,8 +234,8 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
 
 Current note:
 
-- `CRYPTO_MAX_DAILY_LOSS` is currently enforced against accumulated `positions.realized_pnl`
-- If you need strict calendar-day loss limits, the next step is adding a daily realized PnL ledger
+- `CRYPTO_MAX_DAILY_LOSS` is enforced against the current UTC day realized PnL ledger rebuilt from `fills`
+- previous-day realized losses do not trip today's daily loss limit
 
 ## launchd
 
