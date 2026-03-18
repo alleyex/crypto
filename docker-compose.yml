@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+    command: python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
+      CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
+      CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
+      CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
+      CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  scheduler:
+    build:
+      context: .
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60}"
+    depends_on:
+      - api
+    environment:
+      CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
+      CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
+      CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
+      CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
+      CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime

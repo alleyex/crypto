@@ -87,6 +87,12 @@ Run the API locally:
 python scripts/run_api.py
 ```
 
+Run with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
 ## CLI Utilities
 
 Insert a manual test signal:
@@ -258,4 +264,33 @@ The report includes:
 - key table row counts
 - latest signal / order / pnl activity
 - open position count and realized PnL summary
+- a simple `ok` / `degraded` status with issues
+
+## Docker Compose
+
+The repository includes:
+
+- `Dockerfile`
+- `docker-compose.yml`
+
+Services:
+
+- `api`: FastAPI server on `http://127.0.0.1:8000`
+- `scheduler`: runs `scripts/run_scheduler.py`
+
+Shared bind mounts:
+
+- `./storage:/app/storage`
+- `./logs:/app/logs`
+- `./runtime:/app/runtime`
+
+Useful commands:
+
+```bash
+docker compose up --build
+docker compose up -d
+docker compose logs -f api
+docker compose logs -f scheduler
+docker compose down
+```
 - a simple `ok` / `degraded` status with issues
