@@ -219,6 +219,52 @@ def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> N
         connection.close()
 
 
+def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_is_breached(
+    monkeypatch,
+) -> None:
+    connection = make_connection()
+    kill_switch_calls = []
+    monkeypatch.setattr(
+        "app.risk.risk_service.enable_kill_switch",
+        lambda reason, source, notify_message: kill_switch_calls.append(
+            {
+                "reason": reason,
+                "source": source,
+                "notify_message": notify_message,
+            }
+        )
+        or "runtime/kill.switch",
+    )
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl)
+            VALUES (?, ?, ?, ?);
+            """,
+            ("BTCUSDT", 0.0, 0.0, -75.0),
+        )
+        connection.commit()
+
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+        risk_result = evaluate_latest_signal(
+            connection,
+            cooldown_seconds=0,
+            max_daily_loss=50.0,
+        )
+
+        assert risk_result is not None
+        assert risk_result["decision"] == "REJECTED"
+        assert len(kill_switch_calls) == 1
+        assert kill_switch_calls[0]["source"] == "risk_service"
+        assert "Daily loss limit breached" in kill_switch_calls[0]["reason"]
+        assert "auto-enabled" in kill_switch_calls[0]["notify_message"]
+    finally:
+        connection.close()
+
+
 def test_update_positions_and_pnl_snapshots_track_realized_and_unrealized_pnl() -> None:
     connection = make_connection()
     try:
@@ -699,6 +745,25 @@ def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     response = client.post("/kill-switch/disable")
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+
+
+def test_enable_kill_switch_marks_repeat_enable_without_duplicate_alert(monkeypatch, tmp_path) -> None:
+    kill_switch_path = tmp_path / "kill.switch"
+    monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", kill_switch_path)
+    sent_messages = []
+    audit_calls = []
+    monkeypatch.setattr("app.system.kill_switch.send_telegram_message", lambda text: sent_messages.append(text))
+    monkeypatch.setattr("app.system.kill_switch.log_event", lambda **kwargs: audit_calls.append(kwargs))
+
+    from app.system.kill_switch import enable_kill_switch
+
+    enable_kill_switch(reason="First enable.", source="test", notify_message="first")
+    enable_kill_switch(reason="Second enable.", source="test", notify_message="second")
+
+    assert kill_switch_path.exists()
+    assert sent_messages == ["first"]
+    assert audit_calls[0]["status"] == "enabled"
+    assert audit_calls[1]["status"] == "already_enabled"
 
 
 def test_audit_events_endpoint_returns_logged_events(monkeypatch, tmp_path) -> None:

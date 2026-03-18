@@ -7,6 +7,7 @@ from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
+from app.system.kill_switch import enable_kill_switch
 
 
 CREATE_RISK_EVENTS_TABLE_SQL = """
@@ -126,6 +127,16 @@ def evaluate_latest_signal(
             reason = (
                 f"Daily loss limit breached: realized_pnl={realized_pnl}, "
                 f"limit=-{abs(max_daily_loss)}."
+            )
+            enable_kill_switch(
+                reason=(
+                    "Kill switch auto-enabled by risk service after daily loss limit breach. "
+                    + reason
+                ),
+                source="risk_service",
+                notify_message=(
+                    "Crypto alert: kill switch auto-enabled after daily loss limit breach."
+                ),
             )
         elif latest_fill is not None:
             last_fill_at = _parse_created_at(latest_fill[0])

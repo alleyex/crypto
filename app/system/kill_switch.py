@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
@@ -9,16 +9,22 @@ RUNTIME_DIR = Path("runtime")
 KILL_SWITCH_FILE = RUNTIME_DIR / "kill.switch"
 
 
-def enable_kill_switch() -> str:
+def enable_kill_switch(
+    reason: str = "Kill switch enabled.",
+    source: str = "kill_switch",
+    notify_message: Optional[str] = "Crypto alert: kill switch has been enabled.",
+) -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    already_enabled = KILL_SWITCH_FILE.exists()
     KILL_SWITCH_FILE.write_text("kill\n", encoding="utf-8")
-    send_telegram_message("Crypto alert: kill switch has been enabled.")
+    if notify_message and not already_enabled:
+        send_telegram_message(notify_message)
     log_event(
         event_type="kill_switch",
-        status="enabled",
-        source="kill_switch",
-        message="Kill switch enabled.",
-        payload={"kill_switch_file": str(KILL_SWITCH_FILE)},
+        status="enabled" if not already_enabled else "already_enabled",
+        source=source,
+        message=reason,
+        payload={"kill_switch_file": str(KILL_SWITCH_FILE), "already_enabled": already_enabled},
     )
     return str(KILL_SWITCH_FILE)
 
