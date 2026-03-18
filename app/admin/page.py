@@ -89,6 +89,13 @@ def render_admin_page() -> str:
         gap: 10px;
       }
 
+      .issue-strip {
+        margin-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
       .chip {
         border: 1px solid var(--line);
         border-radius: 999px;
@@ -259,6 +266,9 @@ def render_admin_page() -> str:
           <div class="status-strip" id="status-strip">
             <div class="chip">Loading health...</div>
           </div>
+          <div class="issue-strip" id="issue-strip">
+            <div class="chip">Checking degraded reasons...</div>
+          </div>
         </div>
         <div class="panel hero-side">
           <div class="side-stat">
@@ -424,6 +434,33 @@ def render_admin_page() -> str:
           chip.className = "chip";
           chip.innerHTML = `<strong>${label}</strong>: <span class="${statusClass(value)}">${value}</span>`;
           strip.appendChild(chip);
+        }
+
+        const issueStrip = el("issue-strip");
+        issueStrip.innerHTML = "";
+        const issues = Object.entries(health.checks)
+          .filter(([, check]) => ["degraded", "error"].includes(check.status))
+          .map(([name, check]) => ({
+            name,
+            reason: check.reason || "Status requires attention.",
+            status: check.status,
+          }));
+
+        if (issues.length === 0) {
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.innerHTML = `<strong>health issues</strong>: <span class="ok">none</span>`;
+          issueStrip.appendChild(chip);
+          return;
+        }
+
+        for (const issue of issues) {
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.innerHTML =
+            `<strong>${issue.name}</strong>: ` +
+            `<span class="${statusClass(issue.status)}">${issue.reason}</span>`;
+          issueStrip.appendChild(chip);
         }
       }
 

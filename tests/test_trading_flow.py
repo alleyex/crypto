@@ -506,6 +506,7 @@ def test_admin_page_is_served() -> None:
     assert "/alerts/status" in response.text
     assert "/alerts/test" in response.text
     assert "Alert Delivery" in response.text
+    assert 'id="issue-strip"' in response.text
     assert "Send Test Alert" in response.text
 
 
