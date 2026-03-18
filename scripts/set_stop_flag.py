@@ -1,13 +1,15 @@
 from pathlib import Path
 
+import sys
 
-STOP_FILE = Path("runtime") / "scheduler.stop"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.scheduler.control import set_stop_flag
 
 
 def main() -> None:
-    STOP_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STOP_FILE.write_text("stop\n", encoding="utf-8")
-    print(f"Stop flag created: {STOP_FILE}")
+    stop_file = set_stop_flag()
+    print(f"Stop flag created: {stop_file}")
 
 
 if __name__ == "__main__":

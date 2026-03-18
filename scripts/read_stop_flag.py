@@ -1,12 +1,16 @@
 from pathlib import Path
 
+import sys
 
-STOP_FILE = Path("runtime") / "scheduler.stop"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.scheduler.control import get_stop_status
 
 
 def main() -> None:
-    if STOP_FILE.exists():
-        print(f"STOPPED: {STOP_FILE}")
+    status = get_stop_status()
+    if status["stopped"]:
+        print(f"STOPPED: {status['stop_file']}")
         return
 
     print("RUNNING: no stop flag present")

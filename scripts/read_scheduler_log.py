@@ -1,15 +1,19 @@
 from pathlib import Path
 
+import sys
 
-LOG_FILE = Path("logs") / "scheduler.log"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.scheduler.control import read_scheduler_log
 
 
 def main() -> None:
-    if not LOG_FILE.exists():
-        print(f"Log file not found: {LOG_FILE}")
+    lines = read_scheduler_log(lines=200)
+    if not lines:
+        print("Log file not found or empty: logs/scheduler.log")
         return
 
-    print(LOG_FILE.read_text(encoding="utf-8"))
+    print("\n".join(lines))
 
 
 if __name__ == "__main__":

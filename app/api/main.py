@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Dict, Literal, List, Union
 
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
@@ -16,6 +16,10 @@ from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
 from app.query.read_service import get_signals
+from app.scheduler.control import clear_stop_flag
+from app.scheduler.control import get_stop_status
+from app.scheduler.control import read_scheduler_log
+from app.scheduler.control import set_stop_flag
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 
@@ -139,3 +143,25 @@ def update_pnl() -> dict[str, int]:
         return {"snapshot_count": snapshot_count}
     finally:
         connection.close()
+
+
+@app.get("/scheduler/status")
+def scheduler_status() -> dict:
+    return get_stop_status()
+
+
+@app.post("/scheduler/stop")
+def scheduler_stop() -> Dict[str, Union[str, bool]]:
+    stop_file = set_stop_flag()
+    return {"stopped": True, "stop_file": stop_file}
+
+
+@app.post("/scheduler/start")
+def scheduler_start() -> Dict[str, Union[str, bool]]:
+    removed, stop_file = clear_stop_flag()
+    return {"stopped": False, "stop_file": stop_file, "flag_removed": removed}
+
+
+@app.get("/scheduler/logs")
+def scheduler_logs(lines: int = Query(default=20, ge=1, le=500)) -> Dict[str, List[str]]:
+    return {"lines": read_scheduler_log(lines=lines)}
