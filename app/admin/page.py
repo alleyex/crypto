@@ -337,6 +337,11 @@ def render_admin_page() -> str:
           <pre id="health-json">Loading...</pre>
         </article>
         <article class="panel data-card">
+          <h2>Runtime Heartbeats</h2>
+          <p>Latest liveness records for scheduler, pipeline, market data, and alerting.</p>
+          <pre id="heartbeats-json">Loading...</pre>
+        </article>
+        <article class="panel data-card">
           <h2>Positions</h2>
           <p>Current position and realized PnL state.</p>
           <pre id="positions-json">Loading...</pre>
@@ -528,6 +533,11 @@ def render_admin_page() -> str:
         });
       }
 
+      function updateHeartbeats(health) {
+        const heartbeatCheck = health.checks.heartbeats || { components: [] };
+        el("heartbeats-json").textContent = formatJson(heartbeatCheck);
+      }
+
       async function refreshAll() {
         const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory] = await Promise.all([
           api("/health"),
@@ -545,6 +555,7 @@ def render_admin_page() -> str:
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
         updateSoakValidation(soakReport, soakHistory);
+        updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);

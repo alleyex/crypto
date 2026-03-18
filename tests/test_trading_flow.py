@@ -646,6 +646,8 @@ def test_admin_page_is_served() -> None:
     assert "/validation/soak/history" in response.text
     assert "/validation/soak/record" in response.text
     assert "Alert Delivery" in response.text
+    assert "Runtime Heartbeats" in response.text
+    assert 'id="heartbeats-json"' in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
     assert "Last Pipeline" in response.text
