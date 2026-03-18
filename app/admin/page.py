@@ -334,6 +334,11 @@ def render_admin_page() -> str:
           <p>Last manual pipeline action run from this page.</p>
           <pre id="pipeline-json">No manual pipeline run yet.</pre>
         </article>
+        <article class="panel data-card">
+          <h2>Audit Events</h2>
+          <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
+          <pre id="audit-json">Loading...</pre>
+        </article>
       </section>
 
       <div class="footer-note">
@@ -402,12 +407,13 @@ def render_admin_page() -> str:
       }
 
       async function refreshAll() {
-        const [health, positions, orders, pnl, logs] = await Promise.all([
+        const [health, positions, orders, pnl, logs, auditEvents] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
           api("/pnl?limit=10"),
           api("/scheduler/logs?lines=20"),
+          api("/audit-events?limit=20"),
         ]);
 
         updateHeadline(health);
@@ -416,6 +422,7 @@ def render_admin_page() -> str:
         el("orders-json").textContent = formatJson(orders);
         el("pnl-json").textContent = formatJson(pnl);
         el("logs-json").textContent = formatJson(logs);
+        el("audit-json").textContent = formatJson(auditEvents);
       }
 
       async function runAction(type) {
