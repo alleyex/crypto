@@ -30,6 +30,9 @@ from app.scheduler.control import set_stop_flag
 from app.scheduler.runner import LOG_FILE
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
+from app.system.kill_switch import disable_kill_switch
+from app.system.kill_switch import enable_kill_switch
+from app.system.kill_switch import get_kill_switch_status
 
 
 app = FastAPI(title="Crypto Trading MVP API")
@@ -102,6 +105,18 @@ def _scheduler_check() -> dict[str, Any]:
     elif not log_lines:
         result["status"] = "degraded"
         result["reason"] = "Scheduler log is empty."
+    return result
+
+
+def _kill_switch_check() -> dict[str, Any]:
+    kill_switch_status = get_kill_switch_status()
+    result: dict[str, Any] = {
+        "status": "degraded" if kill_switch_status["enabled"] else "ok",
+        "enabled": kill_switch_status["enabled"],
+        "kill_switch_file": kill_switch_status["kill_switch_file"],
+    }
+    if kill_switch_status["enabled"]:
+        result["reason"] = "Kill switch is enabled."
     return result
 
 
@@ -194,6 +209,7 @@ def build_health_report() -> dict[str, Any]:
         connection.close()
 
     checks["scheduler"] = _scheduler_check()
+    checks["kill_switch"] = _kill_switch_check()
 
     for check in checks.values():
         check_status = check.get("status", "ok")
@@ -356,3 +372,20 @@ def scheduler_start() -> Dict[str, Union[str, bool]]:
 @app.get("/scheduler/logs")
 def scheduler_logs(lines: int = Query(default=20, ge=1, le=500)) -> Dict[str, List[str]]:
     return {"lines": read_scheduler_log(lines=lines)}
+
+
+@app.get("/kill-switch/status")
+def kill_switch_status() -> dict:
+    return get_kill_switch_status()
+
+
+@app.post("/kill-switch/enable")
+def kill_switch_enable() -> Dict[str, Union[str, bool]]:
+    kill_switch_file = enable_kill_switch()
+    return {"enabled": True, "kill_switch_file": kill_switch_file}
+
+
+@app.post("/kill-switch/disable")
+def kill_switch_disable() -> Dict[str, Union[str, bool]]:
+    removed, kill_switch_file = disable_kill_switch()
+    return {"enabled": False, "kill_switch_file": kill_switch_file, "flag_removed": removed}

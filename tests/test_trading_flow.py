@@ -25,6 +25,8 @@ from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
+from app.system.kill_switch import disable_kill_switch
+from app.system.kill_switch import enable_kill_switch
 
 
 def make_connection() -> sqlite3.Connection:
@@ -320,6 +322,27 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         connection.close()
 
 
+def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch, tmp_path) -> None:
+    kill_switch_path = tmp_path / "kill.switch"
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.get_kill_switch_status",
+        lambda: {"enabled": True, "kill_switch_file": str(kill_switch_path)},
+    )
+
+    result = run_pipeline_collect()
+
+    assert result["steps"] == [
+        {
+            "step": "kill_switch",
+            "status": "blocked",
+            "enabled": True,
+            "kill_switch_file": str(kill_switch_path),
+            "reason": "Kill switch is enabled.",
+        }
+    ]
+
+
 def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "health.db"
     log_path = tmp_path / "scheduler.log"
@@ -363,6 +386,10 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
         "app.api.main.read_scheduler_log",
         lambda lines=1: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
     )
+    monkeypatch.setattr(
+        "app.api.main.get_kill_switch_status",
+        lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
+    )
 
     client = TestClient(app)
     response = client.get("/health")
@@ -374,6 +401,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["candles"]["status"] == "ok"
     assert payload["checks"]["pipeline"]["status"] == "ok"
     assert payload["checks"]["scheduler"]["status"] == "ok"
+    assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0
 
 
@@ -397,6 +425,10 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
         lambda: {"stopped": True, "stop_file": str(tmp_path / "scheduler.stop")},
     )
     monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
+    monkeypatch.setattr(
+        "app.api.main.get_kill_switch_status",
+        lambda: {"enabled": True, "kill_switch_file": str(tmp_path / "kill.switch")},
+    )
 
     client = TestClient(app)
     response = client.get("/health")
@@ -407,3 +439,24 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["candles"]["status"] == "degraded"
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
+    assert payload["checks"]["kill_switch"]["status"] == "degraded"
+
+
+def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
+    kill_switch_path = tmp_path / "kill.switch"
+    monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", kill_switch_path)
+    monkeypatch.setattr("app.api.main.KILL_SWITCH_FILE", kill_switch_path, raising=False)
+
+    client = TestClient(app)
+
+    response = client.post("/kill-switch/enable")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+
+    response = client.get("/kill-switch/status")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+
+    response = client.post("/kill-switch/disable")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False

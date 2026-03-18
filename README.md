@@ -150,6 +150,9 @@ Control endpoints:
 - `POST /scheduler/stop`
 - `POST /scheduler/start`
 - `GET /scheduler/logs?lines=20`
+- `GET /kill-switch/status`
+- `POST /kill-switch/enable`
+- `POST /kill-switch/disable`
 
 Example API usage:
 
@@ -163,6 +166,9 @@ curl -s http://127.0.0.1:8000/scheduler/status
 curl -s -X POST http://127.0.0.1:8000/scheduler/stop
 curl -s -X POST http://127.0.0.1:8000/scheduler/start
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
+curl -s http://127.0.0.1:8000/kill-switch/status
+curl -s -X POST http://127.0.0.1:8000/kill-switch/enable
+curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 ```
 
 `GET /health` returns:
@@ -172,6 +178,7 @@ curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 - latest pipeline activity
 - scheduler stop flag and latest log line
 - active runtime config values
+- kill switch status
 
 Current note:
 
@@ -212,6 +219,7 @@ Logs:
 
 - Database: `storage/market_data.db`
 - Scheduler stop flag: `runtime/scheduler.stop`
+- Kill switch flag: `runtime/kill.switch`
 - Scheduler log: `logs/scheduler.log`
 
 ## Current Limitations

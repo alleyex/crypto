@@ -14,10 +14,23 @@ from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import generate_signal
+from app.system.kill_switch import get_kill_switch_status
+from app.system.kill_switch import kill_switch_enabled
 
 
 def run_pipeline_collect() -> Dict[str, Any]:
     result: Dict[str, Any] = {"database": str(DB_FILE), "steps": []}
+
+    if kill_switch_enabled():
+        result["steps"].append(
+            {
+                "step": "kill_switch",
+                "status": "blocked",
+                **get_kill_switch_status(),
+                "reason": "Kill switch is enabled.",
+            }
+        )
+        return result
 
     connection = get_connection()
     try:
