@@ -106,6 +106,13 @@ Run with Docker Compose:
 docker compose up --build
 ```
 
+Docker Compose runtime validation status:
+
+- verified on macOS Apple Silicon with Docker Desktop
+- `api` and `scheduler` containers both start successfully
+- `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
+- Stage 1 local container startup verification is complete
+
 ## CLI Utilities
 
 Insert a manual test signal:
@@ -149,6 +156,11 @@ Recommended soak validation acceptance target:
 5. Confirm there are no unexpected `kill switch enabled` events.
 6. Confirm `orders`, `fills`, `positions`, and `pnl` remain internally consistent.
 7. Confirm Telegram alert delivery does not show repeated failures.
+
+Stage 1 completion note:
+
+- Docker Compose local runtime verification is complete.
+- The main remaining Stage 1 item is collecting a real 3-day soak validation record.
 
 The scheduler now records a soak validation snapshot automatically after each scheduled run, so history will accumulate even without manual recording.
 Set `CRYPTO_SOAK_ACTIVITY_STALENESS_SECONDS` if you want soak validation to mark old pipeline activity as degraded sooner or later.

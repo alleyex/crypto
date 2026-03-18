@@ -187,6 +187,17 @@ Suggested acceptance criteria for Stage 1 soak validation:
 5. Enable scheduler
 6. Record soak validation snapshots over time
 
+## Docker Compose Validation
+
+Stage 1 Docker Compose runtime validation is complete when:
+
+1. `docker compose up --build` starts both `api` and `scheduler`.
+2. `docker compose ps` shows both services as `Up`.
+3. `docker compose logs --tail=50` shows scheduler `run=` lines without container crashes.
+4. `curl http://127.0.0.1:8000/health` returns a valid JSON payload with top-level `status`.
+
+The project has now passed this local validation on macOS Apple Silicon with Docker Desktop.
+
 ## Common Recovery Actions
 
 Scheduler stopped unexpectedly:
