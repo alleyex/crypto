@@ -93,6 +93,8 @@ Open the admin UI:
 http://127.0.0.1:8000/admin
 ```
 
+The root path `/` now redirects to `/admin`.
+
 Run with Docker Compose:
 
 ```bash
@@ -154,6 +156,7 @@ Manual operations guide:
 Read endpoints:
 
 - `GET /admin`
+- `GET /audit-events`
 - `GET /health`
 - `GET /candles`
 - `GET /signals`
@@ -208,6 +211,10 @@ curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 - health overview
 - positions, orders, pnl, and scheduler log panels
 - buttons for pipeline run, scheduler control, and kill switch control
+
+`GET /audit-events` provides:
+
+- recent structured audit records for pipeline, risk, scheduler, and kill switch actions
 
 Current note:
 
@@ -265,6 +272,17 @@ Logs:
 - Add dashboard or admin UI
 - Add alerting
 - Add CI status badge and branch protection
+
+## Audit Log
+
+Structured audit events are stored in the `audit_events` table.
+
+Current event sources:
+
+- pipeline runs
+- risk evaluations
+- scheduler start / stop control
+- kill switch enable / disable control
 
 ## Soak Validation
 

@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Union
 
 from fastapi import FastAPI, Query
+from fastapi import Response
 from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.admin.page import render_admin_page
@@ -19,6 +21,7 @@ from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
 from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_candles
+from app.query.read_service import get_audit_events
 from app.query.read_service import get_fills
 from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
@@ -248,6 +251,16 @@ def health() -> dict[str, Any]:
     return build_health_report()
 
 
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/admin", status_code=307)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=204)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin() -> str:
     return render_admin_page()
@@ -258,6 +271,15 @@ def candles(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
     try:
         return get_candles(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+@app.get("/audit-events")
+def audit_events(limit: int = Query(default=20, ge=1, le=200)) -> list[dict]:
+    connection = get_connection()
+    try:
+        return get_audit_events(connection, limit=limit)
     finally:
         connection.close()
 

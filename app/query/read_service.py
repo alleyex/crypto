@@ -122,6 +122,21 @@ LIMIT ?;
 """
 
 
+SELECT_AUDIT_EVENTS_SQL = """
+SELECT
+    id,
+    event_type,
+    status,
+    source,
+    message,
+    payload_json,
+    created_at
+FROM audit_events
+ORDER BY id DESC
+LIMIT ?;
+"""
+
+
 def get_candles(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
@@ -148,3 +163,7 @@ def get_positions(connection: sqlite3.Connection, limit: int = 5) -> list[dict[s
 
 def get_pnl_snapshots(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_PNL_SQL, limit)
+
+
+def get_audit_events(connection: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+    return _fetch_all(connection, SELECT_AUDIT_EVENTS_SQL, limit)

@@ -15,6 +15,7 @@ from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
 from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_fills
+from app.query.read_service import get_audit_events
 from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
@@ -454,6 +455,23 @@ def test_admin_page_is_served() -> None:
     assert "/pipeline/run" in response.text
 
 
+def test_root_redirects_to_admin() -> None:
+    client = TestClient(app)
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/admin"
+
+
+def test_favicon_returns_no_content() -> None:
+    client = TestClient(app)
+
+    response = client.get("/favicon.ico")
+
+    assert response.status_code == 204
+
+
 def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     kill_switch_path = tmp_path / "kill.switch"
     monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", kill_switch_path)
@@ -472,6 +490,64 @@ def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     response = client.post("/kill-switch/disable")
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+
+
+def test_audit_events_endpoint_returns_logged_events(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "audit.db"
+
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.api.main.get_connection", lambda: sqlite3.connect(db_path))
+
+    from app.audit.service import ensure_table as ensure_audit_table
+    from app.audit.service import insert_event
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_audit_table(connection)
+        insert_event(
+            connection,
+            event_type="manual_action",
+            status="completed",
+            source="test",
+            message="Manual action recorded.",
+            payload={"action": "demo"},
+        )
+    finally:
+        connection.close()
+
+    client = TestClient(app)
+    response = client.get("/audit-events?limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["event_type"] == "manual_action"
+    assert payload[0]["status"] == "completed"
+
+
+def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "pipeline-audit.db"
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.fetch_klines",
+        lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+    )
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+
+    run_pipeline_collect()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        events = get_audit_events(connection, limit=10)
+    finally:
+        connection.close()
+
+    event_types = [event["event_type"] for event in events]
+    assert "pipeline_run" in event_types
+    assert "risk_evaluation" in event_types
 
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:

@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple, Union
 
+from app.audit.service import log_event
 from app.scheduler.runner import LOG_FILE
 from app.scheduler.runner import RUNTIME_DIR
 from app.scheduler.runner import STOP_FILE
@@ -8,13 +9,34 @@ from app.scheduler.runner import STOP_FILE
 def set_stop_flag() -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     STOP_FILE.write_text("stop\n", encoding="utf-8")
+    log_event(
+        event_type="scheduler_control",
+        status="stopped",
+        source="scheduler_control",
+        message="Scheduler stop flag set.",
+        payload={"stop_file": str(STOP_FILE)},
+    )
     return str(STOP_FILE)
 
 
 def clear_stop_flag() -> Tuple[bool, str]:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
+        log_event(
+            event_type="scheduler_control",
+            status="started",
+            source="scheduler_control",
+            message="Scheduler stop flag cleared.",
+            payload={"stop_file": str(STOP_FILE), "flag_removed": True},
+        )
         return True, str(STOP_FILE)
+    log_event(
+        event_type="scheduler_control",
+        status="started",
+        source="scheduler_control",
+        message="Scheduler start requested but no stop flag was present.",
+        payload={"stop_file": str(STOP_FILE), "flag_removed": False},
+    )
     return False, str(STOP_FILE)
 
 

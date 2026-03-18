@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, Optional, Union
 
+from app.audit.service import log_event
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
@@ -182,6 +183,19 @@ def evaluate_latest_signal(
         (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason),
     )
     connection.commit()
+    log_event(
+        event_type="risk_evaluation",
+        status=str(decision).lower(),
+        source="risk_service",
+        message=reason,
+        payload={
+            "risk_event_id": cursor.lastrowid,
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "signal_type": signal_type,
+            "decision": decision,
+        },
+    )
 
     return {
         "id": cursor.lastrowid,

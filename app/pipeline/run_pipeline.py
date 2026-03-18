@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
 from app.data.binance_client import fetch_klines
 from app.data.candles_service import ensure_table as ensure_candles_table
@@ -18,8 +19,26 @@ from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
 
 
+def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[str, Any]:
+    log_event(
+        event_type="pipeline_run",
+        status=status,
+        source="pipeline",
+        message=message,
+        payload=result,
+    )
+    return result
+
+
 def run_pipeline_collect() -> Dict[str, Any]:
     result: Dict[str, Any] = {"database": str(DB_FILE), "steps": []}
+    log_event(
+        event_type="pipeline_run",
+        status="started",
+        source="pipeline",
+        message="Pipeline run started.",
+        payload={"database": str(DB_FILE)},
+    )
 
     if kill_switch_enabled():
         result["steps"].append(
@@ -30,7 +49,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
                 "reason": "Kill switch is enabled.",
             }
         )
-        return result
+        return _finalize_result(result, "blocked", "Pipeline run blocked by kill switch.")
 
     connection = get_connection()
     try:
@@ -45,7 +64,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
             result["steps"].append(
                 {"step": "generate_signal", "status": "skipped", "reason": "Not enough candle data"}
             )
-            return result
+            return _finalize_result(result, "completed", "Pipeline run completed with skipped signal generation.")
         result["steps"].append({"step": "generate_signal", **signal_result})
 
         ensure_positions_table(connection)
@@ -53,7 +72,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
         risk_result = evaluate_latest_signal(connection)
         if risk_result is None:
             result["steps"].append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
-            return result
+            return _finalize_result(result, "completed", "Pipeline run completed with skipped risk evaluation.")
         result["steps"].append({"step": "evaluate_risk", **risk_result})
 
         ensure_execution_tables(connection)
@@ -72,7 +91,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
     finally:
         connection.close()
 
-    return result
+    return _finalize_result(result, "completed", "Pipeline run completed.")
 
 
 def print_pipeline_result(result: Dict[str, Any]) -> None:
