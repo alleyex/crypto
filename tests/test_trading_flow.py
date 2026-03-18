@@ -294,6 +294,7 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
         "app.pipeline.run_pipeline.fetch_klines",
         lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],

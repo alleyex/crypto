@@ -180,9 +180,20 @@ def render_admin_page() -> str:
 
       .message {
         margin-top: 12px;
-        min-height: 20px;
-        color: var(--muted);
-        font-size: 14px;
+        min-height: 120px;
+        max-height: 220px;
+        overflow: auto;
+        padding: 14px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        background: #0b1219;
+        color: #d2e5f7;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        font-family: "SFMono-Regular", "Menlo", monospace;
       }
 
       .grid {
@@ -432,10 +443,10 @@ def render_admin_page() -> str:
           } else if (type === "kill-disable") {
             result = await api("/kill-switch/disable", { method: "POST" });
           }
-          target.textContent = JSON.stringify(result);
+          target.textContent = formatJson(result);
           await refreshAll();
         } catch (error) {
-          target.textContent = `Error: ${error.message}`;
+          target.textContent = `Error:\\n${error.message}`;
         }
       }
 
