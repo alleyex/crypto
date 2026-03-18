@@ -292,6 +292,11 @@ def render_admin_page() -> str:
             <div class="value" id="alerts-status">Loading</div>
             <div class="inline-note" id="alerts-detail">Checking Telegram delivery state...</div>
           </div>
+          <div class="side-stat">
+            <label>Last Pipeline</label>
+            <div class="value" id="pipeline-status">Loading</div>
+            <div class="inline-note" id="pipeline-detail">Checking pipeline run summary...</div>
+          </div>
         </div>
       </section>
 
@@ -490,6 +495,23 @@ def render_admin_page() -> str:
         });
       }
 
+      function updatePipelineSummary(auditEvents) {
+        const runs = auditEvents.filter((event) => event.event_type === "pipeline_run");
+        const latestCompleted = runs.find((event) => event.status !== "started") || runs[0] || null;
+
+        if (!latestCompleted) {
+          el("pipeline-status").textContent = "NONE";
+          el("pipeline-status").className = "value warn";
+          el("pipeline-detail").textContent = "No pipeline runs recorded yet.";
+          return;
+        }
+
+        const displayStatus = String(latestCompleted.status || "unknown").toUpperCase();
+        el("pipeline-status").textContent = displayStatus;
+        el("pipeline-status").className = `value ${statusClass(latestCompleted.status)}`;
+        el("pipeline-detail").textContent = `${latestCompleted.created_at} | ${latestCompleted.message}`;
+      }
+
       async function refreshAll() {
         const [health, positions, orders, pnl, logs, auditEvents, alertStatus] = await Promise.all([
           api("/health"),
@@ -503,6 +525,7 @@ def render_admin_page() -> str:
 
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
+        updatePipelineSummary(auditEvents);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
