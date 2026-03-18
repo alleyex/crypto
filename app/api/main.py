@@ -43,6 +43,9 @@ from app.strategy.ma_cross import insert_signal
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
+from app.validation.soak_history import read_soak_validation_history
+from app.validation.soak_history import record_soak_validation_snapshot
+from app.validation.soak_report import build_soak_validation_report
 
 
 app = FastAPI(title="Crypto Trading MVP API")
@@ -401,6 +404,21 @@ def update_pnl() -> dict[str, int]:
         return {"snapshot_count": snapshot_count}
     finally:
         connection.close()
+
+
+@app.get("/validation/soak")
+def soak_validation() -> dict[str, Any]:
+    return build_soak_validation_report()
+
+
+@app.post("/validation/soak/record")
+def record_soak_validation() -> dict[str, Any]:
+    return record_soak_validation_snapshot()
+
+
+@app.get("/validation/soak/history")
+def soak_validation_history(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, Any]]:
+    return read_soak_validation_history(limit=limit)
 
 
 @app.get("/scheduler/status")

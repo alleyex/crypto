@@ -134,6 +134,12 @@ Read soak validation summary:
 python scripts/read_soak_validation.py
 ```
 
+Record and append a soak validation snapshot:
+
+```bash
+python scripts/read_soak_validation.py --record
+```
+
 Stop the scheduler:
 
 ```bash
@@ -163,6 +169,8 @@ Read endpoints:
 - `GET /admin`
 - `GET /alerts/status`
 - `GET /audit-events`
+- `GET /validation/soak`
+- `GET /validation/soak/history`
 - `GET /health`
 - `GET /candles`
 - `GET /signals`
@@ -175,6 +183,7 @@ Read endpoints:
 Control endpoints:
 
 - `POST /alerts/test`
+- `POST /validation/soak/record`
 - `POST /pipeline/run`
 - `POST /signals/test`
 - `POST /positions/rebuild`

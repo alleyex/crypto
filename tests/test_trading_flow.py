@@ -30,6 +30,8 @@ from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
+from app.validation.soak_history import read_soak_validation_history
+from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
 
 
@@ -976,3 +978,52 @@ def test_build_soak_validation_report_marks_missing_runtime_activity_as_degraded
     assert "Scheduler log is empty." in report["issues"]
     assert "No candles stored." in report["issues"]
     assert "No signals generated." in report["issues"]
+
+
+def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path) -> None:
+    history_file = tmp_path / "soak_history.jsonl"
+    monkeypatch.setattr(
+        "app.validation.soak_history.SOAK_HISTORY_FILE",
+        history_file,
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.build_soak_validation_report",
+        lambda: {"status": "ok", "checked_at": "2026-03-18T10:00:00+00:00", "issues": []},
+    )
+
+    snapshot = record_soak_validation_snapshot()
+    history = read_soak_validation_history(limit=5)
+
+    assert snapshot["status"] == "ok"
+    assert history_file.exists()
+    assert len(history) == 1
+    assert history[0]["checked_at"] == "2026-03-18T10:00:00+00:00"
+
+
+def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_path) -> None:
+    history_file = tmp_path / "soak_history.jsonl"
+    monkeypatch.setattr("app.validation.soak_history.SOAK_HISTORY_FILE", history_file)
+    monkeypatch.setattr(
+        "app.api.main.build_soak_validation_report",
+        lambda: {"status": "ok", "checked_at": "2026-03-18T10:00:00+00:00", "issues": []},
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.build_soak_validation_report",
+        lambda: {"status": "ok", "checked_at": "2026-03-18T10:00:00+00:00", "issues": []},
+    )
+
+    client = TestClient(app)
+
+    report_response = client.get("/validation/soak")
+    assert report_response.status_code == 200
+    assert report_response.json()["status"] == "ok"
+
+    record_response = client.post("/validation/soak/record")
+    assert record_response.status_code == 200
+    assert record_response.json()["checked_at"] == "2026-03-18T10:00:00+00:00"
+
+    history_response = client.get("/validation/soak/history?limit=5")
+    assert history_response.status_code == 200
+    history = history_response.json()
+    assert len(history) == 1
+    assert history[0]["status"] == "ok"
