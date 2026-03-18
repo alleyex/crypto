@@ -375,6 +375,15 @@ def render_admin_page() -> str:
           <div class="message" id="alerts-message">No test alert sent from this page yet.</div>
           <pre id="alerts-json">Loading...</pre>
         </article>
+        <article class="panel data-card">
+          <h2>Soak Validation</h2>
+          <p>Record runtime validation snapshots and inspect the most recent soak history.</p>
+          <div class="button-row" style="margin-bottom: 16px;">
+            <button data-action="soak-record">Record Snapshot</button>
+          </div>
+          <div class="message" id="soak-message">No soak validation snapshot recorded from this page yet.</div>
+          <pre id="soak-json">Loading...</pre>
+        </article>
       </section>
 
       <div class="footer-note">
@@ -512,8 +521,15 @@ def render_admin_page() -> str:
         el("pipeline-detail").textContent = `${latestCompleted.created_at} | ${latestCompleted.message}`;
       }
 
+      function updateSoakValidation(currentReport, history) {
+        el("soak-json").textContent = formatJson({
+          current_report: currentReport,
+          recent_history: history,
+        });
+      }
+
       async function refreshAll() {
-        const [health, positions, orders, pnl, logs, auditEvents, alertStatus] = await Promise.all([
+        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -521,11 +537,14 @@ def render_admin_page() -> str:
           api("/scheduler/logs?lines=20"),
           api("/audit-events?limit=20"),
           api("/alerts/status"),
+          api("/validation/soak"),
+          api("/validation/soak/history?limit=10"),
         ]);
 
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
+        updateSoakValidation(soakReport, soakHistory);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
@@ -542,6 +561,7 @@ def render_admin_page() -> str:
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
           "alert-test": "alerts-message",
+          "soak-record": "soak-message",
         };
         const target = el(messages[type]);
         target.textContent = "Running...";
@@ -564,6 +584,8 @@ def render_admin_page() -> str:
               method: "POST",
               body: JSON.stringify({ message: "Crypto admin dashboard test alert." }),
             });
+          } else if (type === "soak-record") {
+            result = await api("/validation/soak/record", { method: "POST" });
           }
           target.textContent = formatJson(result);
           await refreshAll();

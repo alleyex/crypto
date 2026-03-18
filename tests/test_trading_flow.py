@@ -639,11 +639,16 @@ def test_admin_page_is_served() -> None:
     assert "/audit-events?limit=20" in response.text
     assert "/alerts/status" in response.text
     assert "/alerts/test" in response.text
+    assert "/validation/soak" in response.text
+    assert "/validation/soak/history" in response.text
+    assert "/validation/soak/record" in response.text
     assert "Alert Delivery" in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
     assert "Last Pipeline" in response.text
     assert "Send Test Alert" in response.text
+    assert "Soak Validation" in response.text
+    assert "Record Snapshot" in response.text
 
 
 def test_root_redirects_to_admin() -> None:
