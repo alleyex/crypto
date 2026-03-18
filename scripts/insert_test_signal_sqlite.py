@@ -1,22 +1,13 @@
-import sqlite3
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-DB_FILE = Path("storage") / "market_data.db"
+from app.core.db import DB_FILE, get_connection
+from app.strategy.ma_cross import ensure_table, insert_signal
+
+
 VALID_SIGNALS = {"BUY", "SELL", "HOLD"}
-
-
-INSERT_SIGNAL_SQL = """
-INSERT INTO signals (
-    symbol,
-    timeframe,
-    strategy_name,
-    signal_type,
-    short_ma,
-    long_ma
-) VALUES (?, ?, ?, ?, ?, ?);
-"""
 
 
 def main() -> None:
@@ -34,13 +25,10 @@ def main() -> None:
         print(f"Database not found: {DB_FILE}")
         sys.exit(1)
 
-    connection = sqlite3.connect(DB_FILE)
+    connection = get_connection()
     try:
-        connection.execute(
-            INSERT_SIGNAL_SQL,
-            ("BTCUSDT", "1m", "manual_test", signal_type, 0.0, 0.0),
-        )
-        connection.commit()
+        ensure_table(connection)
+        insert_signal(connection, signal_type=signal_type)
     finally:
         connection.close()
 
