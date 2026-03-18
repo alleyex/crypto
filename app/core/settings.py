@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 
 def _get_float(name: str, default: float) -> float:
@@ -20,3 +21,6 @@ MAX_POSITION_QTY = _get_float("CRYPTO_MAX_POSITION_QTY", 0.002)
 COOLDOWN_SECONDS = _get_int("CRYPTO_COOLDOWN_SECONDS", 300)
 CANDLE_STALENESS_SECONDS = _get_int("CRYPTO_CANDLE_STALENESS_SECONDS", 600)
 MAX_DAILY_LOSS = _get_float("CRYPTO_MAX_DAILY_LOSS", 50.0)
+DB_BACKEND = os.getenv("CRYPTO_DB_BACKEND", "sqlite").strip().lower()
+SQLITE_PATH = Path(os.getenv("CRYPTO_SQLITE_PATH", "storage/market_data.db"))
+DATABASE_URL = os.getenv("CRYPTO_DATABASE_URL", "").strip()

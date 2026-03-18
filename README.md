@@ -59,6 +59,9 @@ export CRYPTO_MAX_POSITION_QTY=0.002
 export CRYPTO_COOLDOWN_SECONDS=300
 export CRYPTO_CANDLE_STALENESS_SECONDS=600
 export CRYPTO_MAX_DAILY_LOSS=50
+export CRYPTO_DB_BACKEND=sqlite
+export CRYPTO_SQLITE_PATH=storage/market_data.db
+export CRYPTO_DATABASE_URL=
 ```
 
 ## Main Commands
@@ -205,6 +208,7 @@ curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 - scheduler stop flag and latest log line
 - active runtime config values
 - kill switch status
+- active database backend info
 
 `GET /admin` provides:
 
@@ -268,10 +272,22 @@ Logs:
 
 ## Next Recommended Work
 
-- Add PostgreSQL migration path
 - Add dashboard or admin UI
 - Add alerting
 - Add CI status badge and branch protection
+
+## PostgreSQL Migration Path
+
+The current runtime still uses SQLite, but the database configuration is now prepared for a future backend switch.
+
+Details:
+
+- `docs/POSTGRES_MIGRATION.md`
+
+Important:
+
+- `CRYPTO_DB_BACKEND=postgres` is not production-ready yet
+- the current code will fail fast if PostgreSQL is selected before SQL compatibility work is completed
 
 ## Audit Log
 

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.admin.page import render_admin_page
 from app.core.db import DB_FILE, get_connection
+from app.core.db import get_database_info
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -228,6 +229,7 @@ def build_health_report() -> dict[str, Any]:
         "status": overall_status,
         "checked_at": _utc_now().isoformat(),
         "database": str(DB_FILE),
+        "database_info": get_database_info(),
         "config": {
             "order_qty": DEFAULT_ORDER_QTY,
             "max_position_qty": MAX_POSITION_QTY,

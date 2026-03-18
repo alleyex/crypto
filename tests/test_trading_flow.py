@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.main import app
+from app.core.db import get_database_info
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
@@ -471,6 +472,39 @@ def test_favicon_returns_no_content() -> None:
     response = client.get("/favicon.ico")
 
     assert response.status_code == 204
+
+
+def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "db-info.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.api.main.DB_FILE", db_path)
+    monkeypatch.setattr(
+        "app.api.main.get_database_info",
+        lambda: {"backend": "sqlite", "sqlite_path": str(db_path)},
+    )
+    monkeypatch.setattr("app.api.main.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.api.main.get_stop_status",
+        lambda: {"stopped": False, "stop_file": str(tmp_path / "scheduler.stop")},
+    )
+    monkeypatch.setattr(
+        "app.api.main.get_kill_switch_status",
+        lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
+    )
+    monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
+
+    client = TestClient(app)
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database_info"]["backend"] == "sqlite"
+    assert payload["database_info"]["sqlite_path"] == str(db_path)
 
 
 def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
