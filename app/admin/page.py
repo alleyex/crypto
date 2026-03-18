@@ -124,6 +124,13 @@ def render_admin_page() -> str:
         font-weight: 700;
       }
 
+      .inline-note {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
       .controls {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -270,6 +277,11 @@ def render_admin_page() -> str:
             <label>Last Refresh</label>
             <div class="value" id="last-refresh">Never</div>
           </div>
+          <div class="side-stat">
+            <label>Alerts</label>
+            <div class="value" id="alerts-status">Loading</div>
+            <div class="inline-note" id="alerts-detail">Checking Telegram delivery state...</div>
+          </div>
         </div>
       </section>
 
@@ -339,6 +351,11 @@ def render_admin_page() -> str:
           <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
           <pre id="audit-json">Loading...</pre>
         </article>
+        <article class="panel data-card">
+          <h2>Alert Delivery</h2>
+          <p>Telegram configuration and the latest delivery attempt recorded in audit events.</p>
+          <pre id="alerts-json">Loading...</pre>
+        </article>
       </section>
 
       <div class="footer-note">
@@ -406,17 +423,45 @@ def render_admin_page() -> str:
         }
       }
 
+      function updateAlerts(alertStatus, auditEvents) {
+        const deliveries = auditEvents.filter((event) => event.event_type === "alert_delivery");
+        const latest = deliveries[0] || null;
+        const configured = Boolean(alertStatus.telegram_configured);
+        const displayStatus = configured ? (latest ? latest.status.toUpperCase() : "READY") : "DISABLED";
+        const displayClass =
+          latest && latest.status === "failed"
+            ? "bad"
+            : configured
+              ? "ok"
+              : "warn";
+
+        el("alerts-status").textContent = displayStatus;
+        el("alerts-status").className = `value ${displayClass}`;
+        el("alerts-detail").textContent = latest
+          ? `${latest.created_at} | ${latest.message}`
+          : configured
+            ? "Telegram configured. No delivery attempts recorded yet."
+            : "Telegram bot token or chat id is not configured.";
+
+        el("alerts-json").textContent = formatJson({
+          alert_status: alertStatus,
+          latest_delivery: latest,
+        });
+      }
+
       async function refreshAll() {
-        const [health, positions, orders, pnl, logs, auditEvents] = await Promise.all([
+        const [health, positions, orders, pnl, logs, auditEvents, alertStatus] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
           api("/pnl?limit=10"),
           api("/scheduler/logs?lines=20"),
           api("/audit-events?limit=20"),
+          api("/alerts/status"),
         ]);
 
         updateHeadline(health);
+        updateAlerts(alertStatus, auditEvents);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
