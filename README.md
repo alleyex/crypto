@@ -150,6 +150,8 @@ Recommended soak validation acceptance target:
 6. Confirm `orders`, `fills`, `positions`, and `pnl` remain internally consistent.
 7. Confirm Telegram alert delivery does not show repeated failures.
 
+The scheduler now records a soak validation snapshot automatically after each scheduled run, so history will accumulate even without manual recording.
+
 Stop the scheduler:
 
 ```bash

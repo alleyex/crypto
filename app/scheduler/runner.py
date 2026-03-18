@@ -43,6 +43,26 @@ def stop_requested() -> bool:
     return STOP_FILE.exists()
 
 
+def _record_soak_snapshot() -> None:
+    try:
+        from app.validation.soak_history import record_soak_validation_snapshot
+
+        report = record_soak_validation_snapshot()
+        snapshot_line = (
+            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"soak_snapshot status={report.get('status', 'unknown')}"
+        )
+        print(snapshot_line)
+        _write_log(snapshot_line)
+    except Exception as exc:
+        error_line = (
+            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"soak_snapshot failed: {exc}"
+        )
+        print(error_line)
+        _write_log(error_line)
+
+
 def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) -> None:
     run_count = 0
 
@@ -61,6 +81,7 @@ def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) 
         log_line = f"[{started_at}] run={run_count} {summary}"
         print(log_line)
         _write_log(log_line)
+        _record_soak_snapshot()
 
         if iterations is not None and run_count >= iterations:
             break

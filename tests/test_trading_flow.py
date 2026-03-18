@@ -30,6 +30,7 @@ from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
+from app.scheduler.runner import run_scheduler
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
@@ -915,6 +916,34 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     event_types = [event["event_type"] for event in events]
     assert "pipeline_run" in event_types
     assert "risk_evaluation" in event_types
+
+
+def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler.log"
+    recorded = []
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr(
+        "app.scheduler.runner.run_pipeline_collect",
+        lambda: {
+            "steps": [
+                {"step": "generate_signal", "signal_type": "BUY"},
+                {"step": "evaluate_risk", "decision": "APPROVED"},
+                {"step": "paper_execute", "status": "FILLED", "side": "BUY"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1)
+
+    assert recorded == [{"status": "ok"}]
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "run=1 signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
+    assert "soak_snapshot status=ok" in log_text
 
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:
