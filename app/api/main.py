@@ -1,9 +1,15 @@
+import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Union
 
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 
 from app.core.db import DB_FILE, get_connection
+from app.core.settings import CANDLE_STALENESS_SECONDS
+from app.core.settings import COOLDOWN_SECONDS
+from app.core.settings import DEFAULT_ORDER_QTY
+from app.core.settings import MAX_POSITION_QTY
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
@@ -20,11 +26,194 @@ from app.scheduler.control import clear_stop_flag
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
 from app.scheduler.control import set_stop_flag
+from app.scheduler.runner import LOG_FILE
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 
 
 app = FastAPI(title="Crypto Trading MVP API")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_sqlite_timestamp(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _database_check(connection: sqlite3.Connection) -> dict[str, Any]:
+    row = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC;").fetchall()
+    table_names = [item[0] for item in row]
+    return {
+        "status": "ok",
+        "database": str(DB_FILE),
+        "table_count": len(table_names),
+        "tables": table_names,
+    }
+
+
+def _candle_check(connection: sqlite3.Connection) -> dict[str, Any]:
+    latest_candle = connection.execute(
+        """
+        SELECT symbol, timeframe, open_time, close_time
+        FROM candles
+        ORDER BY open_time DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+    if latest_candle is None:
+        return {
+            "status": "degraded",
+            "reason": "No candle data found.",
+        }
+
+    symbol, timeframe, open_time, close_time = latest_candle
+    latest_close_at = datetime.fromtimestamp(int(close_time) / 1000, tz=timezone.utc)
+    age_seconds = int((_utc_now() - latest_close_at).total_seconds())
+    status = "ok" if age_seconds <= CANDLE_STALENESS_SECONDS else "degraded"
+    return {
+        "status": status,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "latest_open_time": int(open_time),
+        "latest_close_time": int(close_time),
+        "latest_close_at": latest_close_at.isoformat(),
+        "age_seconds": age_seconds,
+        "staleness_threshold_seconds": CANDLE_STALENESS_SECONDS,
+    }
+
+
+def _scheduler_check() -> dict[str, Any]:
+    stop_status = get_stop_status()
+    log_lines = read_scheduler_log(lines=1)
+    status = "degraded" if stop_status["stopped"] else "ok"
+    result: dict[str, Any] = {
+        "status": status,
+        "stopped": stop_status["stopped"],
+        "stop_file": stop_status["stop_file"],
+        "log_file": str(LOG_FILE),
+        "log_exists": LOG_FILE.exists(),
+        "last_log_line": log_lines[0] if log_lines else None,
+    }
+    if stop_status["stopped"]:
+        result["reason"] = "Scheduler stop flag is set."
+    elif not log_lines:
+        result["status"] = "degraded"
+        result["reason"] = "Scheduler log is empty."
+    return result
+
+
+def _pipeline_check(connection: sqlite3.Connection) -> dict[str, Any]:
+    latest_signal = connection.execute(
+        """
+        SELECT signal_type, created_at
+        FROM signals
+        ORDER BY id DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+    latest_risk = connection.execute(
+        """
+        SELECT decision, reason, created_at
+        FROM risk_events
+        ORDER BY id DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+    latest_order = connection.execute(
+        """
+        SELECT side, status, created_at
+        FROM orders
+        ORDER BY id DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+
+    if latest_signal is None and latest_risk is None and latest_order is None:
+        return {
+            "status": "degraded",
+            "reason": "No pipeline activity found yet.",
+        }
+
+    result: dict[str, Any] = {"status": "ok"}
+    if latest_signal is not None:
+        result["latest_signal"] = {
+            "signal_type": latest_signal[0],
+            "created_at": latest_signal[1],
+            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_signal[1])).total_seconds()),
+        }
+    if latest_risk is not None:
+        result["latest_risk"] = {
+            "decision": latest_risk[0],
+            "reason": latest_risk[1],
+            "created_at": latest_risk[2],
+            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_risk[2])).total_seconds()),
+        }
+    if latest_order is not None:
+        result["latest_order"] = {
+            "side": latest_order[0],
+            "status": latest_order[1],
+            "created_at": latest_order[2],
+            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_order[2])).total_seconds()),
+        }
+    return result
+
+
+def build_health_report() -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    overall_status = "ok"
+
+    try:
+        connection = get_connection()
+    except sqlite3.Error as exc:
+        return {
+            "status": "error",
+            "database": str(DB_FILE),
+            "checks": {
+                "database": {
+                    "status": "error",
+                    "reason": str(exc),
+                }
+            },
+        }
+
+    try:
+        checks["database"] = _database_check(connection)
+        checks["candles"] = _candle_check(connection)
+        checks["pipeline"] = _pipeline_check(connection)
+    except sqlite3.Error as exc:
+        checks["database"] = {
+            "status": "error",
+            "reason": str(exc),
+            "database": str(DB_FILE),
+        }
+        overall_status = "error"
+    finally:
+        connection.close()
+
+    checks["scheduler"] = _scheduler_check()
+
+    for check in checks.values():
+        check_status = check.get("status", "ok")
+        if check_status == "error":
+            overall_status = "error"
+            break
+        if check_status == "degraded" and overall_status != "error":
+            overall_status = "degraded"
+
+    return {
+        "status": overall_status,
+        "checked_at": _utc_now().isoformat(),
+        "database": str(DB_FILE),
+        "config": {
+            "order_qty": DEFAULT_ORDER_QTY,
+            "max_position_qty": MAX_POSITION_QTY,
+            "cooldown_seconds": COOLDOWN_SECONDS,
+            "candle_staleness_seconds": CANDLE_STALENESS_SECONDS,
+        },
+        "checks": checks,
+    }
 
 
 class TestSignalRequest(BaseModel):
@@ -35,8 +224,8 @@ class TestSignalRequest(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "database": str(DB_FILE)}
+def health() -> dict[str, Any]:
+    return build_health_report()
 
 
 @app.get("/candles")

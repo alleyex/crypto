@@ -31,6 +31,14 @@ Main flow:
 
 `candles -> signals -> risk_events -> orders -> fills -> positions -> pnl`
 
+Current default risk rules:
+
+- Reject `HOLD`
+- Reject duplicate signal types
+- Reject `BUY` when an existing long position is already open
+- Reject trades during cooldown after the latest fill
+- Reject `BUY` if the resulting position would exceed the configured max position
+
 ## Setup
 
 Create and use the virtual environment:
@@ -40,6 +48,15 @@ cd /Users/alleyex/Projects/crypto
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Optional runtime configuration:
+
+```bash
+export CRYPTO_ORDER_QTY=0.001
+export CRYPTO_MAX_POSITION_QTY=0.002
+export CRYPTO_COOLDOWN_SECONDS=300
+export CRYPTO_CANDLE_STALENESS_SECONDS=600
 ```
 
 ## Main Commands
@@ -146,6 +163,14 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/start
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 ```
 
+`GET /health` returns:
+
+- database table status
+- latest candle freshness
+- latest pipeline activity
+- scheduler stop flag and latest log line
+- active runtime config values
+
 ## launchd
 
 Install the LaunchAgent:
@@ -188,13 +213,12 @@ Logs:
 - Single market: `BTCUSDT`
 - Single timeframe: `1m`
 - Basic MA cross strategy only
-- Basic risk rules only
 - Paper trading only
 
 ## Next Recommended Work
 
-- Add stronger risk controls
-- Add a proper health/monitoring endpoint
 - Add PostgreSQL migration path
 - Add API docs for manual operations
 - Add dashboard or admin UI
+- Add daily loss limit and alerting
+- Add CI status badge and branch protection

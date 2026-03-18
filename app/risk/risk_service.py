@@ -1,5 +1,10 @@
 import sqlite3
+from datetime import datetime, timezone
 from typing import Dict, Optional, Union
+
+from app.core.settings import COOLDOWN_SECONDS
+from app.core.settings import DEFAULT_ORDER_QTY
+from app.core.settings import MAX_POSITION_QTY
 
 
 CREATE_RISK_EVENTS_TABLE_SQL = """
@@ -47,6 +52,15 @@ LIMIT 1;
 """
 
 
+SELECT_LATEST_FILL_SQL = """
+SELECT created_at
+FROM fills
+WHERE symbol = ?
+ORDER BY id DESC
+LIMIT 1;
+"""
+
+
 INSERT_RISK_EVENT_SQL = """
 INSERT INTO risk_events (
     signal_id,
@@ -70,7 +84,23 @@ def ensure_table(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
-def evaluate_latest_signal(connection: sqlite3.Connection) -> Optional[Dict[str, Union[int, str]]]:
+def _parse_created_at(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _fills_table_exists(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fills' LIMIT 1;"
+    ).fetchone()
+    return row is not None
+
+
+def evaluate_latest_signal(
+    connection: sqlite3.Connection,
+    order_qty: float = DEFAULT_ORDER_QTY,
+    max_position_qty: float = MAX_POSITION_QTY,
+    cooldown_seconds: int = COOLDOWN_SECONDS,
+) -> Optional[Dict[str, Union[int, str]]]:
     latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
     if latest_signal is None:
         return None
@@ -83,8 +113,44 @@ def evaluate_latest_signal(connection: sqlite3.Connection) -> Optional[Dict[str,
     else:
         position_row = connection.execute(SELECT_POSITION_SQL, (symbol,)).fetchone()
         current_qty = float(position_row[0]) if position_row is not None else 0.0
+        latest_fill = None
+        if _fills_table_exists(connection):
+            latest_fill = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
 
-        if signal_type == "BUY" and current_qty > 0:
+        if latest_fill is not None:
+            last_fill_at = _parse_created_at(latest_fill[0])
+            now = datetime.now(timezone.utc)
+            cooldown_elapsed = (now - last_fill_at).total_seconds()
+            if cooldown_elapsed < cooldown_seconds:
+                decision = "REJECTED"
+                reason = (
+                    f"Cooldown active: last fill {int(cooldown_elapsed)} seconds ago, "
+                    f"minimum {cooldown_seconds}."
+                )
+            elif signal_type == "BUY" and current_qty + order_qty > max_position_qty:
+                decision = "REJECTED"
+                reason = f"Max position exceeded: current={current_qty}, limit={max_position_qty}."
+            elif signal_type == "BUY" and current_qty > 0:
+                decision = "REJECTED"
+                reason = "Existing long position already open."
+            elif signal_type == "SELL" and current_qty <= 0:
+                decision = "REJECTED"
+                reason = "No position available to sell."
+            else:
+                previous_signal = connection.execute(
+                    SELECT_PREVIOUS_SIGNAL_SQL,
+                    (signal_id,),
+                ).fetchone()
+                if previous_signal and previous_signal[0] == signal_type:
+                    decision = "REJECTED"
+                    reason = "Duplicate signal type."
+                else:
+                    decision = "APPROVED"
+                    reason = "Passed basic risk checks."
+        elif signal_type == "BUY" and current_qty + order_qty > max_position_qty:
+            decision = "REJECTED"
+            reason = f"Max position exceeded: current={current_qty}, limit={max_position_qty}."
+        elif signal_type == "BUY" and current_qty > 0:
             decision = "REJECTED"
             reason = "Existing long position already open."
         elif signal_type == "SELL" and current_qty <= 0:
