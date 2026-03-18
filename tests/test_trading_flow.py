@@ -443,6 +443,17 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
 
 
+def test_admin_page_is_served() -> None:
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Admin Console" in response.text
+    assert "/pipeline/run" in response.text
+
+
 def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     kill_switch_path = tmp_path / "kill.switch"
     monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", kill_switch_path)

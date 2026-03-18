@@ -87,6 +87,12 @@ Run the API locally:
 python scripts/run_api.py
 ```
 
+Open the admin UI:
+
+```bash
+http://127.0.0.1:8000/admin
+```
+
 Run with Docker Compose:
 
 ```bash
@@ -147,6 +153,7 @@ Manual operations guide:
 
 Read endpoints:
 
+- `GET /admin`
 - `GET /health`
 - `GET /candles`
 - `GET /signals`
@@ -195,6 +202,12 @@ curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 - scheduler stop flag and latest log line
 - active runtime config values
 - kill switch status
+
+`GET /admin` provides:
+
+- health overview
+- positions, orders, pnl, and scheduler log panels
+- buttons for pipeline run, scheduler control, and kill switch control
 
 Current note:
 

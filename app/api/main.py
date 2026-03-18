@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Union
 
 from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from app.admin.page import render_admin_page
 from app.core.db import DB_FILE, get_connection
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
@@ -244,6 +246,11 @@ class TestSignalRequest(BaseModel):
 @app.get("/health")
 def health() -> dict[str, Any]:
     return build_health_report()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin() -> str:
+    return render_admin_page()
 
 
 @app.get("/candles")
