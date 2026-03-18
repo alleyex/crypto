@@ -297,6 +297,16 @@ def render_admin_page() -> str:
             <div class="value" id="pipeline-status">Loading</div>
             <div class="inline-note" id="pipeline-detail">Checking pipeline run summary...</div>
           </div>
+          <div class="side-stat">
+            <label>Market Data</label>
+            <div class="value" id="market-data-status">Loading</div>
+            <div class="inline-note" id="market-data-detail">Checking market data heartbeat...</div>
+          </div>
+          <div class="side-stat">
+            <label>Alerting</label>
+            <div class="value" id="alerting-runtime-status">Loading</div>
+            <div class="inline-note" id="alerting-runtime-detail">Checking alerting heartbeat...</div>
+          </div>
         </div>
       </section>
 
@@ -481,6 +491,44 @@ def render_admin_page() -> str:
             `<span class="${statusClass(issue.status)}">${issue.reason}</span>`;
           issueStrip.appendChild(chip);
         }
+
+        const heartbeatCheck = health.checks.heartbeats || { components: [] };
+        const heartbeatMap = Object.fromEntries(
+          (heartbeatCheck.components || []).map((item) => [item.component, item])
+        );
+
+        const marketData = heartbeatMap.market_data;
+        el("market-data-status").textContent = marketData ? String(marketData.status).toUpperCase() : "NONE";
+        el("market-data-status").className = `value ${statusClass(marketData ? marketData.status : "degraded")}`;
+        el("market-data-detail").textContent = marketData
+          ? `${marketData.last_seen_at} | ${marketData.message}`
+          : "No market data heartbeat recorded yet.";
+
+        const alertingRuntime = heartbeatMap.alerting;
+        el("alerting-runtime-status").textContent = alertingRuntime
+          ? String(alertingRuntime.status).toUpperCase()
+          : "NONE";
+        el("alerting-runtime-status").className = `value ${statusClass(alertingRuntime ? alertingRuntime.status : "degraded")}`;
+        el("alerting-runtime-detail").textContent = alertingRuntime
+          ? `${alertingRuntime.last_seen_at} | ${alertingRuntime.message}`
+          : "No alerting heartbeat recorded yet.";
+
+        const heartbeatIssues = (heartbeatCheck.components || [])
+          .filter((item) => ["failed", "stopped"].includes(item.status))
+          .map((item) => ({
+            name: `heartbeat:${item.component}`,
+            status: item.status,
+            reason: item.message,
+          }));
+
+        for (const issue of heartbeatIssues) {
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.innerHTML =
+            `<strong>${issue.name}</strong>: ` +
+            `<span class="${statusClass(issue.status)}">${issue.reason}</span>`;
+          issueStrip.appendChild(chip);
+        }
       }
 
       function updateAlerts(alertStatus, auditEvents) {
@@ -535,7 +583,10 @@ def render_admin_page() -> str:
 
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
-        el("heartbeats-json").textContent = formatJson(heartbeatCheck);
+        const lines = (heartbeatCheck.components || []).map((item) =>
+          `${item.component} | ${String(item.status).toUpperCase()} | ${item.last_seen_at} | ${item.message}`
+        );
+        el("heartbeats-json").textContent = lines.length ? lines.join("\\n") : "No runtime heartbeats recorded yet.";
       }
 
       async function refreshAll() {
