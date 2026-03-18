@@ -240,6 +240,15 @@ def render_admin_page() -> str:
         font-size: 13px;
       }
 
+      .auto-refresh {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 16px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
       @media (max-width: 960px) {
         .hero,
         .controls,
@@ -317,6 +326,10 @@ def render_admin_page() -> str:
           <div class="button-row">
             <button data-action="pipeline">Run Pipeline</button>
             <button class="secondary" data-refresh="all">Refresh Data</button>
+          </div>
+          <div class="auto-refresh">
+            <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
+            <span id="auto-refresh-status">Auto refresh every 10 seconds.</span>
           </div>
           <div class="message" id="pipeline-message"></div>
         </div>
@@ -402,12 +415,15 @@ def render_admin_page() -> str:
       </section>
 
       <div class="footer-note">
-        Refreshes are manual on purpose. This page is for control and inspection, not unattended monitoring.
+        Auto refresh runs every 10 seconds. Use Pause Auto Refresh before inspecting a fixed snapshot.
       </div>
     </main>
 
     <script>
       const el = (id) => document.getElementById(id);
+      const AUTO_REFRESH_INTERVAL_MS = 10000;
+      let autoRefreshTimer = null;
+      let autoRefreshEnabled = true;
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
@@ -589,6 +605,32 @@ def render_admin_page() -> str:
         el("heartbeats-json").textContent = lines.length ? lines.join("\\n") : "No runtime heartbeats recorded yet.";
       }
 
+      function updateAutoRefreshStatus() {
+        const button = document.querySelector('[data-action="auto-refresh-toggle"]');
+        if (!button) return;
+        button.textContent = autoRefreshEnabled ? "Pause Auto Refresh" : "Resume Auto Refresh";
+        el("auto-refresh-status").textContent = autoRefreshEnabled
+          ? "Auto refresh every 10 seconds."
+          : "Auto refresh paused.";
+      }
+
+      function scheduleAutoRefresh() {
+        if (autoRefreshTimer) {
+          clearInterval(autoRefreshTimer);
+          autoRefreshTimer = null;
+        }
+        if (!autoRefreshEnabled) {
+          updateAutoRefreshStatus();
+          return;
+        }
+        autoRefreshTimer = setInterval(() => {
+          refreshAll().catch((error) => {
+            el("health-json").textContent = `Failed to load data: ${error.message}`;
+          });
+        }, AUTO_REFRESH_INTERVAL_MS);
+        updateAutoRefreshStatus();
+      }
+
       async function refreshAll() {
         const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory] = await Promise.all([
           api("/health"),
@@ -618,6 +660,7 @@ def render_admin_page() -> str:
       async function runAction(type) {
         const messages = {
           pipeline: "pipeline-message",
+          "auto-refresh-toggle": "pipeline-message",
           "scheduler-start": "scheduler-message",
           "scheduler-stop": "scheduler-message",
           "kill-enable": "kill-message",
@@ -630,7 +673,14 @@ def render_admin_page() -> str:
 
         try {
           let result;
-          if (type === "pipeline") {
+          if (type === "auto-refresh-toggle") {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            scheduleAutoRefresh();
+            result = {
+              auto_refresh_enabled: autoRefreshEnabled,
+              interval_seconds: AUTO_REFRESH_INTERVAL_MS / 1000,
+            };
+          } else if (type === "pipeline") {
             result = await api("/pipeline/run", { method: "POST" });
             el("pipeline-json").textContent = formatJson(result);
           } else if (type === "scheduler-start") {
@@ -664,6 +714,8 @@ def render_admin_page() -> str:
         button.addEventListener("click", refreshAll);
       });
 
+      updateAutoRefreshStatus();
+      scheduleAutoRefresh();
       refreshAll().catch((error) => {
         el("health-json").textContent = `Failed to load data: ${error.message}`;
       });

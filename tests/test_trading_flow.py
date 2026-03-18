@@ -647,6 +647,8 @@ def test_admin_page_is_served() -> None:
     assert "/validation/soak/record" in response.text
     assert "Alert Delivery" in response.text
     assert "Runtime Heartbeats" in response.text
+    assert "Pause Auto Refresh" in response.text
+    assert "Auto refresh every 10 seconds." in response.text
     assert 'id="heartbeats-json"' in response.text
     assert 'id="market-data-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
