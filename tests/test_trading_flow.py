@@ -27,6 +27,7 @@ from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
+from app.validation.soak_report import build_soak_validation_report
 
 
 def make_connection() -> sqlite3.Connection:
@@ -460,3 +461,71 @@ def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     response = client.post("/kill-switch/disable")
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+
+
+def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "soak.db"
+    log_path = tmp_path / "scheduler.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[2026-03-18T10:00:00] run=1 signal=BUY risk=APPROVED execution=FILLED BUY",
+                "[2026-03-18T10:01:00] run=2 signal=SELL risk=REJECTED execution=REJECTED",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+        ensure_positions_table(connection)
+        ensure_pnl_table(connection)
+        seed_candles(connection, [10, 11, 12, 13, 14])
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+        evaluate_latest_signal(connection, cooldown_seconds=0)
+        execute_latest_risk(connection)
+        update_positions(connection)
+        update_pnl_snapshots(connection)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.validation.soak_report.read_scheduler_log",
+        lambda lines=200: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
+    )
+
+    report = build_soak_validation_report()
+
+    assert report["status"] == "ok"
+    assert report["scheduler"]["line_count"] == 2
+    assert report["scheduler"]["recent_error_count"] == 0
+    assert report["table_counts"]["candles"] == 5
+    assert report["table_counts"]["signals"] == 1
+    assert report["table_counts"]["orders"] == 1
+    assert report["positions"]["open_symbols"] == 1
+
+
+def test_build_soak_validation_report_marks_missing_runtime_activity_as_degraded(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "empty-soak.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.validation.soak_report.read_scheduler_log", lambda lines=200: [])
+
+    report = build_soak_validation_report()
+
+    assert report["status"] == "degraded"
+    assert "Scheduler log is empty." in report["issues"]
+    assert "No candles stored." in report["issues"]
+    assert "No signals generated." in report["issues"]

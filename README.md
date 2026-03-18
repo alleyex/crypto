@@ -109,6 +109,12 @@ Read scheduler log:
 python scripts/read_scheduler_log.py
 ```
 
+Read soak validation summary:
+
+```bash
+python scripts/read_soak_validation.py
+```
+
 Stop the scheduler:
 
 ```bash
@@ -237,3 +243,19 @@ Logs:
 - Add dashboard or admin UI
 - Add alerting
 - Add CI status badge and branch protection
+
+## Soak Validation
+
+Use this to record a runtime summary during multi-day paper trading checks:
+
+```bash
+python scripts/read_soak_validation.py
+```
+
+The report includes:
+
+- scheduler log summary
+- key table row counts
+- latest signal / order / pnl activity
+- open position count and realized PnL summary
+- a simple `ok` / `degraded` status with issues
