@@ -31,6 +31,8 @@ from app.strategy.ma_cross import generate_signal
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
 from app.scheduler.runner import run_scheduler
+from app.system.heartbeat import get_heartbeats
+from app.system.heartbeat import upsert_heartbeat
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
@@ -788,11 +790,42 @@ def test_send_telegram_message_logs_successful_delivery(monkeypatch) -> None:
     ]
 
 
+def test_send_telegram_message_records_alerting_heartbeat(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "alerting-heartbeat.db"
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr("app.alerting.telegram.TELEGRAM_CHAT_ID", "chat")
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.alerting.telegram.log_event", lambda **kwargs: None)
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    monkeypatch.setattr("app.alerting.telegram.requests.post", lambda *args, **kwargs: DummyResponse())
+
+    from app.alerting.telegram import send_telegram_message
+
+    result = send_telegram_message("hello")
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+
+    assert result["sent"] is True
+    assert any(item["component"] == "alerting" and item["status"] == "ok" for item in heartbeats)
+
+
 def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "db-info.db"
     connection = sqlite3.connect(db_path)
     try:
         ensure_candles_table(connection)
+        upsert_heartbeat(connection, "scheduler", "ok", "Scheduler loop completed.")
     finally:
         connection.close()
 
@@ -819,6 +852,7 @@ def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
     payload = response.json()
     assert payload["database_info"]["backend"] == "sqlite"
     assert payload["database_info"]["sqlite_path"] == str(db_path)
+    assert payload["checks"]["heartbeats"]["status"] == "ok"
 
 
 def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
@@ -899,6 +933,7 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
         "app.pipeline.run_pipeline.fetch_klines",
         lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
@@ -917,12 +952,21 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     assert "pipeline_run" in event_types
     assert "risk_evaluation" in event_types
 
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(item["component"] == "pipeline" and item["status"] == "completed" for item in heartbeats)
+
 
 def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     log_path = tmp_path / "scheduler.log"
+    db_path = tmp_path / "scheduler-heartbeat.db"
     recorded = []
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
         "app.scheduler.runner.run_pipeline_collect",
         lambda: {
@@ -944,6 +988,13 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     log_text = log_path.read_text(encoding="utf-8")
     assert "run=1 signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
     assert "soak_snapshot status=ok" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(item["component"] == "scheduler" and item["status"] == "ok" for item in heartbeats)
 
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:
@@ -974,6 +1025,7 @@ def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_
         execute_latest_risk(connection)
         update_positions(connection)
         update_pnl_snapshots(connection)
+        upsert_heartbeat(connection, "scheduler", "ok", "Scheduler loop completed.")
     finally:
         connection.close()
 
@@ -992,6 +1044,7 @@ def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_
     assert report["table_counts"]["signals"] == 1
     assert report["table_counts"]["orders"] == 1
     assert report["positions"]["open_symbols"] == 1
+    assert any(item["component"] == "scheduler" for item in report["heartbeats"])
 
 
 def test_build_soak_validation_report_marks_missing_runtime_activity_as_degraded(monkeypatch, tmp_path) -> None:
@@ -1042,6 +1095,71 @@ def test_build_soak_validation_report_marks_scheduler_stop_flag_as_degraded(monk
     assert report["status"] == "degraded"
     assert report["scheduler"]["stopped_by_flag"] is True
     assert "Scheduler is stopped by flag." in report["issues"]
+
+
+def test_build_soak_validation_report_marks_stale_activity_as_degraded(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "stale-soak.db"
+    log_path = tmp_path / "scheduler.log"
+    log_path.write_text(
+        "[2026-03-18T16:08:53] run=1 signal=BUY risk=APPROVED execution=FILLED BUY\n",
+        encoding="utf-8",
+    )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+        ensure_positions_table(connection)
+        ensure_pnl_table(connection)
+        seed_candles(connection, [10, 11, 12, 13, 14])
+        connection.execute(
+            """
+            INSERT INTO signals (
+                symbol, timeframe, strategy_name, signal_type, short_ma, long_ma, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("BTCUSDT", "1m", "manual_test", "BUY", 10.0, 9.0, "2026-03-18 00:00:00"),
+        )
+        connection.execute(
+            """
+            INSERT INTO risk_events (
+                signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (1, "BTCUSDT", "1m", "manual_test", "BUY", "APPROVED", "ok", "2026-03-18 00:00:00"),
+        )
+        connection.execute(
+            """
+            INSERT INTO pnl_snapshots (
+                symbol, qty, avg_price, market_price, unrealized_pnl, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            ("BTCUSDT", 0.0, 0.0, 0.0, 0.0, "2026-03-18 00:00:00"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 3, 18, 1, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("app.validation.soak_report.datetime", FrozenDateTime)
+    monkeypatch.setattr("app.validation.soak_report.SOAK_ACTIVITY_STALENESS_SECONDS", 60)
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.validation.soak_report.read_scheduler_log",
+        lambda lines=200: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
+    )
+
+    report = build_soak_validation_report()
+
+    assert report["status"] == "degraded"
+    assert report["latest_activity"]["signals"]["age_seconds"] == 3600
+    assert any("signals activity is stale" in issue for issue in report["issues"])
 
 
 def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path) -> None:

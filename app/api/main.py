@@ -41,6 +41,7 @@ from app.scheduler.runner import LOG_FILE
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 from app.system.kill_switch import disable_kill_switch
+from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.validation.soak_history import read_soak_validation_history
@@ -68,6 +69,14 @@ def _database_check(connection: sqlite3.Connection) -> dict[str, Any]:
         "table_count": len(table_names),
         "tables": table_names,
     }
+
+
+def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def _candle_check(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -134,6 +143,14 @@ def _kill_switch_check() -> dict[str, Any]:
 
 
 def _pipeline_check(connection: sqlite3.Connection) -> dict[str, Any]:
+    required_tables = ("signals", "risk_events", "orders")
+    missing_tables = [table_name for table_name in required_tables if not _table_exists(connection, table_name)]
+    if missing_tables:
+        return {
+            "status": "degraded",
+            "reason": f"Pipeline tables missing: {', '.join(missing_tables)}.",
+        }
+
     latest_signal = connection.execute(
         """
         SELECT signal_type, created_at
@@ -189,6 +206,23 @@ def _pipeline_check(connection: sqlite3.Connection) -> dict[str, Any]:
     return result
 
 
+def _heartbeat_check(connection: sqlite3.Connection) -> dict[str, Any]:
+    heartbeats = get_heartbeats(connection)
+    if not heartbeats:
+        return {
+            "status": "degraded",
+            "reason": "No runtime heartbeats recorded yet.",
+            "components": [],
+        }
+
+    degraded = [item for item in heartbeats if item["status"] in ("failed", "stopped")]
+    return {
+        "status": "degraded" if degraded else "ok",
+        "components": heartbeats,
+        "reason": "Runtime heartbeat contains degraded components." if degraded else None,
+    }
+
+
 def build_health_report() -> dict[str, Any]:
     checks: dict[str, Any] = {}
     overall_status = "ok"
@@ -211,6 +245,7 @@ def build_health_report() -> dict[str, Any]:
         checks["database"] = _database_check(connection)
         checks["candles"] = _candle_check(connection)
         checks["pipeline"] = _pipeline_check(connection)
+        checks["heartbeats"] = _heartbeat_check(connection)
     except sqlite3.Error as exc:
         checks["database"] = {
             "status": "error",

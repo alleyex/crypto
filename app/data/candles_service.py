@@ -1,6 +1,8 @@
 import sqlite3
 from typing import Optional
 
+from app.system.heartbeat import upsert_heartbeat
+
 
 CREATE_CANDLES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS candles (
@@ -84,6 +86,17 @@ def save_klines(
     ]
     connection.executemany(INSERT_CANDLE_SQL, rows)
     connection.commit()
+    upsert_heartbeat(
+        connection,
+        component="market_data",
+        status="ok",
+        message="Market data saved.",
+        payload={
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "saved_klines": len(rows),
+        },
+    )
     return len(rows)
 
 

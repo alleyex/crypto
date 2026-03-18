@@ -4,7 +4,9 @@ from typing import Any
 from typing import Optional
 
 from app.core.db import get_connection
+from app.core.settings import SOAK_ACTIVITY_STALENESS_SECONDS
 from app.scheduler.control import read_scheduler_log
+from app.system.heartbeat import get_heartbeats
 
 
 TRACKED_TABLES = (
@@ -50,6 +52,10 @@ def _latest_timestamp(
     if row is None:
         return None
     return str(row[0])
+
+
+def _parse_created_at(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 
 def _positions_summary(connection: sqlite3.Connection) -> dict[str, float]:
@@ -107,6 +113,7 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
             "pnl_snapshots": _latest_timestamp(connection, "pnl_snapshots"),
         }
         positions = _positions_summary(connection)
+        heartbeats = get_heartbeats(connection)
     finally:
         connection.close()
 
@@ -123,6 +130,30 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
         issues.append("No candles stored.")
     if table_counts["signals"] == 0:
         issues.append("No signals generated.")
+    if not heartbeats:
+        issues.append("No runtime heartbeats recorded yet.")
+    for heartbeat in heartbeats:
+        if heartbeat["status"] in ("failed", "stopped"):
+            issues.append(
+                f"{heartbeat['component']} heartbeat is {heartbeat['status']}: {heartbeat['message']}"
+            )
+
+    latest_activity_with_age: dict[str, Any] = {}
+    for name, created_at in latest_activity.items():
+        if created_at is None:
+            latest_activity_with_age[name] = None
+            continue
+
+        age_seconds = int((_utc_now() - _parse_created_at(created_at)).total_seconds())
+        latest_activity_with_age[name] = {
+            "created_at": created_at,
+            "age_seconds": age_seconds,
+        }
+        if age_seconds > SOAK_ACTIVITY_STALENESS_SECONDS:
+            issues.append(
+                f"{name} activity is stale: age_seconds={age_seconds}, "
+                f"threshold={SOAK_ACTIVITY_STALENESS_SECONDS}."
+            )
 
     status = "ok" if not issues else "degraded"
 
@@ -132,6 +163,8 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
         "issues": issues,
         "scheduler": scheduler,
         "table_counts": table_counts,
-        "latest_activity": latest_activity,
+        "latest_activity": latest_activity_with_age,
         "positions": positions,
+        "staleness_threshold_seconds": SOAK_ACTIVITY_STALENESS_SECONDS,
+        "heartbeats": heartbeats,
     }

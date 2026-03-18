@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.pipeline.run_pipeline import run_pipeline_collect
+from app.system.heartbeat import record_heartbeat
 
 
 LOG_DIR = Path("logs")
@@ -72,15 +73,33 @@ def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) 
             log_line = f"[{stopped_at}] scheduler stopped by flag: {STOP_FILE}"
             print(log_line)
             _write_log(log_line)
+            record_heartbeat(
+                component="scheduler",
+                status="stopped",
+                message="Scheduler stopped by flag.",
+                payload={"stop_file": str(STOP_FILE)},
+            )
             break
 
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
+        record_heartbeat(
+            component="scheduler",
+            status="running",
+            message="Scheduler loop started.",
+            payload={"run_count": run_count},
+        )
         result = run_pipeline_collect()
         summary = _summarize_result(result)
         log_line = f"[{started_at}] run={run_count} {summary}"
         print(log_line)
         _write_log(log_line)
+        record_heartbeat(
+            component="scheduler",
+            status="ok",
+            message="Scheduler loop completed.",
+            payload={"run_count": run_count, "summary": summary},
+        )
         _record_soak_snapshot()
 
         if iterations is not None and run_count >= iterations:

@@ -6,6 +6,7 @@ from app.audit.service import log_event
 from app.core.settings import TELEGRAM_BOT_TOKEN
 from app.core.settings import TELEGRAM_CHAT_ID
 from app.core.settings import TELEGRAM_TIMEOUT_SECONDS
+from app.system.heartbeat import record_heartbeat
 
 
 def telegram_configured() -> bool:
@@ -40,6 +41,12 @@ def send_telegram_message(text: str) -> dict[str, Any]:
                 **result,
             },
         )
+        record_heartbeat(
+            component="alerting",
+            status="skipped",
+            message="Telegram delivery skipped because configuration is missing.",
+            payload={"text": text},
+        )
         return result
 
     try:
@@ -66,6 +73,12 @@ def send_telegram_message(text: str) -> dict[str, Any]:
                 "chat_id": TELEGRAM_CHAT_ID,
             },
         )
+        record_heartbeat(
+            component="alerting",
+            status="ok",
+            message="Telegram alert delivered.",
+            payload={"text": text, "chat_id": TELEGRAM_CHAT_ID},
+        )
         return result
     except requests.RequestException as exc:
         result = {
@@ -79,5 +92,11 @@ def send_telegram_message(text: str) -> dict[str, Any]:
                 "text": text,
                 **result,
             },
+        )
+        record_heartbeat(
+            component="alerting",
+            status="failed",
+            message="Telegram alert delivery failed.",
+            payload={"text": text, "reason": result["reason"]},
         )
         return result

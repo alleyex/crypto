@@ -151,6 +151,8 @@ Recommended soak validation acceptance target:
 7. Confirm Telegram alert delivery does not show repeated failures.
 
 The scheduler now records a soak validation snapshot automatically after each scheduled run, so history will accumulate even without manual recording.
+Set `CRYPTO_SOAK_ACTIVITY_STALENESS_SECONDS` if you want soak validation to mark old pipeline activity as degraded sooner or later.
+Health and soak validation now also use runtime heartbeats from scheduler, pipeline, market data, and alerting components.
 
 Stop the scheduler:
 

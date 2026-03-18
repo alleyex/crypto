@@ -15,11 +15,18 @@ from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import generate_signal
+from app.system.heartbeat import record_heartbeat
 from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
 
 
 def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[str, Any]:
+    record_heartbeat(
+        component="pipeline",
+        status=status,
+        message=message,
+        payload={"step_count": len(result.get("steps", []))},
+    )
     log_event(
         event_type="pipeline_run",
         status=status,
@@ -32,6 +39,12 @@ def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[
 
 def run_pipeline_collect() -> Dict[str, Any]:
     result: Dict[str, Any] = {"database": str(DB_FILE), "steps": []}
+    record_heartbeat(
+        component="pipeline",
+        status="started",
+        message="Pipeline run started.",
+        payload={"database": str(DB_FILE)},
+    )
     log_event(
         event_type="pipeline_run",
         status="started",
