@@ -2526,6 +2526,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="queue-status"' in response.text
     assert 'id="queue-json"' in response.text
     assert 'id="queue-message"' in response.text
+    assert 'id="queue-board"' in response.text
+    assert 'id="queue-filter-select"' in response.text
     assert 'data-action="queue-enqueue-strategy"' in response.text
     assert 'data-action="queue-drain-strategy"' in response.text
     assert 'data-action="queue-drain-execution"' in response.text
@@ -2536,6 +2538,11 @@ def test_admin_page_is_served() -> None:
     assert "Drain Execution Job" in response.text
     assert "Retry Failed Strategy Job" in response.text
     assert "Retry Failed Execution Job" in response.text
+    assert '<option value="failed">failed only</option>' in response.text
+    assert '<option value="queued">queued only</option>' in response.text
+    assert '<option value="market_data">market_data</option>' in response.text
+    assert '<option value="strategy">strategy</option>' in response.text
+    assert '<option value="execution">execution</option>' in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
@@ -2645,6 +2652,12 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
         "app.api.main.get_job_queue_summary",
         lambda connection: {
             "counts": {"queued": 2, "leased": 1, "completed": 4, "failed": 1, "total": 8},
+            "job_type_counts": {
+                "market_data": {"queued": 0, "leased": 0, "completed": 1, "failed": 0, "total": 1},
+                "strategy": {"queued": 2, "leased": 1, "completed": 2, "failed": 1, "total": 6},
+                "execution": {"queued": 0, "leased": 0, "completed": 1, "failed": 0, "total": 1},
+            },
+            "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
             "latest_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
         },
     )
@@ -2653,6 +2666,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["counts"]["queued"] == 2
+    assert response.json()["job_type_counts"]["strategy"]["failed"] == 1
+    assert response.json()["failed_jobs"][0]["id"] == 9
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
 
 

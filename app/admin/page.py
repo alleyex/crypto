@@ -697,6 +697,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Queue Summary</h2>
           <p>Queued worker job counts and the latest queue entries.</p>
+          <div class="inline-controls">
+            <label for="queue-filter-select">Filter</label>
+            <select id="queue-filter-select">
+              <option value="all">all</option>
+              <option value="failed">failed only</option>
+              <option value="queued">queued only</option>
+              <option value="market_data">market_data</option>
+              <option value="strategy">strategy</option>
+              <option value="execution">execution</option>
+            </select>
+          </div>
           <div class="button-row" style="margin-bottom: 16px;">
             <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
             <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
@@ -705,6 +716,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
           </div>
           <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
+          <div class="trade-list" id="queue-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
           <pre id="queue-json">Loading...</pre>
         </article>
         <article class="panel data-card">
@@ -748,6 +762,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let strategyFilterMode = "all";
       let closedTradesStrategyFilter = "all";
       let queueSummaryState = null;
+      let queueFilterMode = "all";
       const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
@@ -1533,6 +1548,46 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("heartbeats-json").textContent = lines.length ? lines.join("\\n") : "No runtime heartbeats recorded yet.";
       }
 
+      function renderQueueSummary(queueSummary) {
+        const board = el("queue-board");
+        if (!board) return;
+        const counts = queueSummary?.counts || {};
+        const byType = queueSummary?.job_type_counts || {};
+        const jobs = Array.isArray(queueSummary?.latest_jobs) ? queueSummary.latest_jobs : [];
+        const filteredJobs = jobs.filter((job) => {
+          if (queueFilterMode === "all") return true;
+          if (queueFilterMode === "failed") return job.status === "failed";
+          if (queueFilterMode === "queued") return job.status === "queued";
+          return job.job_type === queueFilterMode;
+        });
+        const summaryBits = [
+          `total=${counts.total ?? 0}`,
+          `queued=${counts.queued ?? 0}`,
+          `leased=${counts.leased ?? 0}`,
+          `failed=${counts.failed ?? 0}`,
+        ];
+        const typeBits = ["market_data", "strategy", "execution"].map((jobType) => {
+          const item = byType[jobType] || {};
+          return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0}`;
+        });
+        if (filteredJobs.length === 0) {
+          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>No queue jobs match the current filter.</div>`;
+          return;
+        }
+        board.innerHTML = filteredJobs.map((job) => {
+          const payloadText = job.payload ? formatJson(job.payload) : "{}";
+          const errorText = job.error_message ? `<br><strong>Error</strong> ${job.error_message}` : "";
+          const jobStatusClass = statusClass(job.status === "failed" ? "error" : job.status === "queued" ? "degraded" : "ok");
+          return `
+            <div class="strategy-card">
+              <div class="chip"><strong>${job.job_type}</strong>: <span class="${jobStatusClass}">${String(job.status).toUpperCase()}</span></div>
+              <div><strong>Job</strong> #${job.id} | attempts=${job.attempt_count} | created=${job.created_at}</div>
+              <div><strong>Payload</strong> ${payloadText}${errorText}</div>
+            </div>
+          `;
+        }).join("");
+      }
+
       function updateAutoRefreshStatus() {
         const button = document.querySelector('[data-action="auto-refresh-toggle"]');
         if (!button) return;
@@ -1639,6 +1694,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         updateStrategySummary(strategySummary);
         updateClosedTrades(closedTrades);
         updateSchedulerControlActivity(auditEvents);
+        renderQueueSummary(queueSummary);
         updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
@@ -1871,6 +1927,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         refreshAll().catch((error) => {
           el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
         });
+      });
+
+      el("queue-filter-select")?.addEventListener("change", (event) => {
+        queueFilterMode = event.target.value;
+        try {
+          renderQueueSummary(queueSummaryState || {});
+        } catch (error) {
+          el("queue-board").innerHTML = `<div class="strategy-card">Failed to filter queue jobs: ${error.message}</div>`;
+        }
       });
 
       el("strategy-summary-board")?.addEventListener("click", (event) => {

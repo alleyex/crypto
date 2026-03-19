@@ -215,6 +215,33 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
     )
     counts = {str(row["status"]): int(row["job_count"]) for row in rows}
     latest_jobs = get_job_queue_jobs(connection, limit=5)
+    job_type_rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT
+            job_type,
+            status,
+            COUNT(*) AS job_count
+        FROM job_queue
+        GROUP BY job_type, status
+        ORDER BY job_type ASC, status ASC;
+        """,
+    )
+    job_type_counts: dict[str, dict[str, int]] = {
+        "market_data": {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
+        "strategy": {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
+        "execution": {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
+    }
+    for row in job_type_rows:
+        job_type = str(row["job_type"])
+        status = str(row["status"])
+        job_count = int(row["job_count"])
+        entry = job_type_counts.setdefault(
+            job_type,
+            {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
+        )
+        entry[status] = job_count
+        entry["total"] += job_count
     return {
         "counts": {
             "queued": counts.get("queued", 0),
@@ -223,6 +250,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
             "failed": counts.get("failed", 0),
             "total": sum(counts.values()),
         },
+        "job_type_counts": job_type_counts,
+        "failed_jobs": [job for job in latest_jobs if job["status"] == "failed"],
         "latest_jobs": latest_jobs,
     }
 
