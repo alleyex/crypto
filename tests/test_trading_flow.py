@@ -2689,6 +2689,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "latest_failed_job": None,
                     "latest_retry_job": None,
                     "recent_terminal_statuses": ["C"],
+                    "recent_terminal_trend": "C",
                 },
                 "strategy": {
                     "queued": 2,
@@ -2703,6 +2704,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "latest_failed_job": {"id": 9, "job_type": "strategy", "status": "failed", "attempt_count": 3},
                     "latest_retry_job": {"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2},
                     "recent_terminal_statuses": ["F", "C"],
+                    "recent_terminal_trend": "FC",
                 },
                 "execution": {
                     "queued": 0,
@@ -2717,6 +2719,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "latest_failed_job": None,
                     "latest_retry_job": None,
                     "recent_terminal_statuses": ["C"],
+                    "recent_terminal_trend": "C",
                 },
             },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
@@ -2751,6 +2754,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["job_type_counts"]["strategy"]["latest_failed_job"]["id"] == 9
     assert response.json()["job_type_counts"]["strategy"]["latest_retry_job"]["id"] == 8
     assert response.json()["job_type_counts"]["strategy"]["recent_terminal_statuses"] == ["F", "C"]
+    assert response.json()["job_type_counts"]["strategy"]["recent_terminal_trend"] == "FC"
     assert response.json()["failed_jobs"][0]["id"] == 9
     assert response.json()["retry_jobs"][0]["attempt_count"] == 2
     assert response.json()["latest_failed_job"]["error_message"] == "strategy failed"
@@ -2806,7 +2810,9 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         assert summary["job_type_counts"]["strategy"]["latest_failed_job"]["id"] == strategy_job_id
         assert summary["job_type_counts"]["strategy"]["latest_retry_job"]["id"] == strategy_job_id
         assert summary["job_type_counts"]["strategy"]["recent_terminal_statuses"] == ["F"]
+        assert summary["job_type_counts"]["strategy"]["recent_terminal_trend"] == "F"
         assert summary["job_type_counts"]["market_data"]["recent_terminal_statuses"] == ["C"]
+        assert summary["job_type_counts"]["market_data"]["recent_terminal_trend"] == "C"
         assert summary["job_type_counts"]["market_data"]["latest_failed_job"] is None
         assert summary["job_type_counts"]["execution"]["total"] == 1
         assert summary["retry_jobs"][0]["id"] == strategy_job_id

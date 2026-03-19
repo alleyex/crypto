@@ -281,6 +281,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
             "F" if job["status"] == "failed" else "C"
             for job in type_terminal_jobs[:3]
         ]
+        entry["recent_terminal_trend"] = "".join(entry["recent_terminal_statuses"])
     retry_jobs = [job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1]
     latest_failed_job = next((job for job in latest_jobs if job["status"] == "failed"), None)
     latest_retry_job = next((job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1), None)

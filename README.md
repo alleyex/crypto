@@ -217,7 +217,7 @@ Docker Compose runtime validation status:
 - split worker scheduler modes can also run in queue-dispatch or queue-drain mode via `python scripts/run_scheduler.py --queue-dispatch|--queue-drain`
 - admin now exposes queue controls for enqueueing strategy jobs and draining strategy/execution jobs
 - admin queue controls also support retrying the latest failed strategy or execution job
-- admin queue summary now exposes per-job-type counts, failure/attempt metrics, retry counts, failure streaks, per-job-type latest failed/retried markers, recent terminal status trends, overall latest failed/retried job details, and filterable recent jobs
+- admin queue summary now exposes per-job-type counts, failure/attempt metrics, retry counts, failure streaks, per-job-type latest failed/retried markers, recent terminal status trends/trend strings, overall latest failed/retried job details, and filterable recent jobs
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks
