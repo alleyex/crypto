@@ -25,23 +25,34 @@ SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-o
 
 
 def _summarize_result(result: dict) -> str:
-    signal = "n/a"
-    decision = "n/a"
-    execution = "n/a"
+    signal_items: list[str] = []
+    decision_items: list[str] = []
+    execution_items: list[str] = []
+
+    def _format_summary_item(label: Optional[str], value: str) -> str:
+        if label:
+            return f"{label}={value}"
+        return value
 
     for step in result.get("steps", []):
         if step["step"] == "generate_signal" and "signal_type" in step:
-            signal = step["signal_type"]
+            label = step.get("symbol") or step.get("strategy_name")
+            signal_items.append(_format_summary_item(label, str(step["signal_type"])))
         elif step["step"] == "evaluate_risk" and "decision" in step:
-            decision = step["decision"]
+            label = step.get("symbol") or step.get("strategy_name")
+            decision_items.append(_format_summary_item(label, str(step["decision"])))
         elif step["step"] == "paper_execute":
+            label = step.get("symbol") or step.get("strategy_name")
             if step.get("status") == "FILLED":
-                execution = f"FILLED {step['side']}"
+                execution_items.append(_format_summary_item(label, f"FILLED {step['side']}"))
             elif "decision" in step:
-                execution = step["decision"]
+                execution_items.append(_format_summary_item(label, str(step["decision"])))
             else:
-                execution = step.get("reason", "SKIPPED")
+                execution_items.append(_format_summary_item(label, str(step.get("reason", "SKIPPED"))))
 
+    signal = ";".join(signal_items) if signal_items else "n/a"
+    decision = ";".join(decision_items) if decision_items else "n/a"
+    execution = ";".join(execution_items) if execution_items else "n/a"
     return f"signal={signal} risk={decision} execution={execution}"
 
 

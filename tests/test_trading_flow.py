@@ -57,6 +57,7 @@ from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
+from app.pipeline.run_pipeline import print_pipeline_result
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -2011,6 +2012,56 @@ def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> N
     assert result["steps"][1]["strategy_name"] == "momentum_3bar"
 
 
+def test_print_pipeline_result_includes_symbol_and_strategy_scope() -> None:
+    buffer = StringIO()
+    result = {
+        "steps": [
+            {
+                "step": "save_klines",
+                "saved_klines": 10,
+                "symbol_results": [
+                    {"symbol": "BTCUSDT", "saved_klines": 5},
+                    {"symbol": "ETHUSDT", "saved_klines": 5},
+                ],
+            },
+            {
+                "step": "generate_signal",
+                "strategy_name": "ma_cross",
+                "symbol": "BTCUSDT",
+                "signal_type": "BUY",
+                "short_ma": 13.0,
+                "long_ma": 12.0,
+            },
+            {
+                "step": "evaluate_risk",
+                "strategy_name": "ma_cross",
+                "symbol": "BTCUSDT",
+                "decision": "APPROVED",
+                "reason": "Passed basic risk checks.",
+            },
+            {
+                "step": "paper_execute",
+                "strategy_name": "ma_cross",
+                "symbol": "BTCUSDT",
+                "status": "FILLED",
+                "side": "BUY",
+                "qty": 0.25,
+                "price": 14.0,
+            },
+        ]
+    }
+
+    with contextlib.redirect_stdout(buffer):
+        print_pipeline_result(result)
+
+    output = buffer.getvalue()
+    assert "[symbol=BTCUSDT] saved_klines=5" in output
+    assert "[symbol=ETHUSDT] saved_klines=5" in output
+    assert "[strategy=ma_cross symbol=BTCUSDT] signal=BUY" in output
+    assert "[strategy=ma_cross symbol=BTCUSDT] decision=APPROVED" in output
+    assert "[strategy=ma_cross symbol=BTCUSDT] order_status=FILLED" in output
+
+
 def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch, tmp_path) -> None:
     kill_switch_path = tmp_path / "kill.switch"
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: True)
@@ -3549,8 +3600,8 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     log_text = log_path.read_text(encoding="utf-8")
     assert "mode=strategy-only" in log_text
     assert "strategies=ma_cross,momentum_3bar" in log_text
-    assert "signal=SELL" in log_text
-    assert "risk=REJECTED" in log_text
+    assert "signal=ma_cross=BUY;momentum_3bar=SELL" in log_text
+    assert "risk=ma_cross=APPROVED;momentum_3bar=REJECTED" in log_text
 
     connection = sqlite3.connect(db_path)
     try:

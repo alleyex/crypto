@@ -13,6 +13,17 @@ from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
 
 
+def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
+    scope_parts: List[str] = []
+    if "strategy_name" in step_result:
+        scope_parts.append(f"strategy={step_result['strategy_name']}")
+    if "symbol" in step_result:
+        scope_parts.append(f"symbol={step_result['symbol']}")
+    if not scope_parts:
+        return ""
+    return "[" + " ".join(scope_parts) + "] "
+
+
 def _safe_record_heartbeat(
     component: str,
     status: str,
@@ -159,30 +170,41 @@ def print_pipeline_result(result: Dict[str, Any]) -> None:
     for step_result in result["steps"]:
         step = step_result["step"]
         if step == "save_klines":
-            print(f"Saved {step_result['saved_klines']} klines to {DB_FILE}")
+            symbol_results = step_result.get("symbol_results") or []
+            if symbol_results:
+                for symbol_result in symbol_results:
+                    print(
+                        f"[symbol={symbol_result['symbol']}] "
+                        f"saved_klines={symbol_result['saved_klines']} to {DB_FILE}"
+                    )
+            else:
+                print(f"Saved {step_result['saved_klines']} klines to {DB_FILE}")
         elif step == "generate_signal":
             if step_result.get("status") == "skipped":
-                print(step_result["reason"])
+                print(f"{_step_scope_prefix(step_result)}{step_result['reason']}")
             else:
-                print(f"short_ma={step_result['short_ma']:.2f}")
-                print(f"long_ma={step_result['long_ma']:.2f}")
-                print(f"signal={step_result['signal_type']}")
+                prefix = _step_scope_prefix(step_result)
+                print(f"{prefix}short_ma={step_result['short_ma']:.2f}")
+                print(f"{prefix}long_ma={step_result['long_ma']:.2f}")
+                print(f"{prefix}signal={step_result['signal_type']}")
         elif step == "evaluate_risk":
             if step_result.get("status") == "skipped":
-                print(step_result["reason"])
+                print(f"{_step_scope_prefix(step_result)}{step_result['reason']}")
             else:
-                print(f"decision={step_result['decision']}")
-                print(f"reason={step_result['reason']}")
+                prefix = _step_scope_prefix(step_result)
+                print(f"{prefix}decision={step_result['decision']}")
+                print(f"{prefix}reason={step_result['reason']}")
         elif step == "paper_execute":
+            prefix = _step_scope_prefix(step_result)
             if step_result.get("status") == "FILLED":
-                print(f"executed_signal={step_result['side']}")
-                print(f"qty={step_result['qty']}")
-                print(f"price={step_result['price']}")
-                print("order_status=FILLED")
+                print(f"{prefix}executed_signal={step_result['side']}")
+                print(f"{prefix}qty={step_result['qty']}")
+                print(f"{prefix}price={step_result['price']}")
+                print(f"{prefix}order_status=FILLED")
             elif "decision" in step_result:
-                print(f"Latest risk event is not executable: {step_result['decision']}")
+                print(f"{prefix}risk_event_status={step_result['decision']}")
             else:
-                print(f"Execution skipped: {step_result.get('reason', step_result)}")
+                print(f"{prefix}execution_skipped={step_result.get('reason', step_result)}")
         elif step == "update_positions":
             print("Positions updated.")
         elif step == "update_pnl":
