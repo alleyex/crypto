@@ -892,7 +892,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const board = el("strategy-summary-board");
         if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategy activity recorded yet.</div>';
-          updateSelectedStrategyDetails([]);
+          updateSelectedStrategyDetails([], []);
           return;
         }
 
@@ -907,7 +907,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (sortedStrategies.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategies match the current filter.</div>';
-          updateSelectedStrategyDetails(strategySummary);
+          updateSelectedStrategyDetails(strategySummary, []);
           return;
         }
 
@@ -970,10 +970,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `;
         }).join("");
 
-        updateSelectedStrategyDetails(strategySummary);
+        updateSelectedStrategyDetails(strategySummary, window.__strategyClosedTrades || []);
       }
 
-      function updateSelectedStrategyDetails(strategySummary) {
+      function updateSelectedStrategyDetails(strategySummary, closedTrades) {
         const board = el("selected-strategy-board");
         if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategy details available yet.</div>';
@@ -1009,6 +1009,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               ? "bad"
               : "warn"
           : "warn";
+        const recentClosedTrades = Array.isArray(closedTrades) ? closedTrades.slice(0, 3) : [];
+        const recentClosedTradesHtml = recentClosedTrades.length
+          ? recentClosedTrades.map((item) => {
+              const itemPnlClass = Number(item.realized_pnl || 0) > 0
+                ? "ok"
+                : Number(item.realized_pnl || 0) < 0
+                  ? "bad"
+                  : "warn";
+              return `
+                <div class="strategy-metric">
+                  <strong>${item.symbol} · ${item.closed_at}</strong>
+                  <span class="${itemPnlClass}">${item.status} / ${Number(item.realized_pnl || 0).toFixed(6)}</span>
+                </div>
+              `;
+            }).join("")
+          : '<div class="strategy-metric"><strong>Recent Closed Trades</strong>none</div>';
         board.innerHTML = `
           <div class="strategy-card selected">
             <div class="strategy-card-header">
@@ -1029,6 +1045,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <div class="strategy-metric"><strong>Latest Fill At</strong>${selected.latest_fill_at || "none"}</div>
               <div class="strategy-metric"><strong>Latest Closed Symbol</strong>${latestClosedTrade?.symbol || "none"}</div>
               <div class="strategy-metric"><strong>Latest Closed PnL</strong>${latestClosedTrade ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6) : "n/a"}</div>
+              ${recentClosedTradesHtml}
             </div>
           </div>
         `;
@@ -1126,6 +1143,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/scheduler/strategy"),
         ]);
 
+        window.__strategyClosedTrades = closedTrades;
         window.__schedulerStrategyStatus = schedulerStrategy;
         const strategySelect = el("pipeline-strategy-select");
         if (strategySelect && strategies?.default_strategy && !strategySelect.dataset.initialized) {
