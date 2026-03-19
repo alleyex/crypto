@@ -149,6 +149,32 @@ def request_json(method: str, url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def request_json_with_retry(method: str, url: str, attempts: int = 5, delay_seconds: float = 1.0) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return request_json(method, url)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in (500, 502, 503, 504) or attempt >= attempts:
+                raise
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            json.JSONDecodeError,
+            ConnectionResetError,
+            ConnectionAbortedError,
+            http.client.RemoteDisconnected,
+        ) as exc:
+            last_error = exc
+            if attempt >= attempts:
+                raise
+        time.sleep(delay_seconds)
+
+    assert last_error is not None
+    raise last_error
+
+
 def wait_for_api(base_url: str, timeout_seconds: float) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
@@ -224,9 +250,9 @@ def validate_compose_runtime(
     try:
         run_command(compose_args + ["up", "--build", "-d"], env)
         health = wait_for_api(base_url, startup_timeout)
-        pipeline = request_json("POST", f"{base_url}/pipeline/run")
-        orders = request_json("GET", f"{base_url}/orders?limit=5")
-        audit_events = request_json("GET", f"{base_url}/audit-events?limit=5")
+        pipeline = request_json_with_retry("POST", f"{base_url}/pipeline/run")
+        orders = request_json_with_retry("GET", f"{base_url}/orders?limit=5")
+        audit_events = request_json_with_retry("GET", f"{base_url}/audit-events?limit=5")
         scheduler_logs = run_command(compose_args + ["logs", "--tail=80", "scheduler"], env).stdout
         docker_logs = collect_compose_logs(compose_args, env)
         api_logs = collect_service_logs(compose_args, env, "api")

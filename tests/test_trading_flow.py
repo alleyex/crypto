@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from app.query.read_service import get_orders as query_get_orders
 from scripts.run_postgres_compose_validation import build_override_compose
 from scripts.run_postgres_compose_validation import attach_metadata
 from scripts.run_postgres_compose_validation import make_env
+from scripts.run_postgres_compose_validation import request_json_with_retry
 from scripts.run_postgres_compose_validation import run_validation_mode
 from scripts.run_postgres_compose_validation import wait_for_api
 from scripts.write_postgres_validation_artifact import build_artifact_manifest
@@ -401,6 +403,26 @@ def test_wait_for_api_retries_on_connection_reset(monkeypatch) -> None:
     assert result == {"status": "ok"}
     assert len(calls) == 3
     assert sleep_calls == [1, 1]
+
+
+def test_request_json_with_retry_retries_transient_http_500(monkeypatch) -> None:
+    calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    def fake_request_json(method: str, url: str):
+        calls.append(url)
+        if len(calls) < 3:
+            raise urllib.error.HTTPError(url, 500, "Internal Server Error", hdrs=None, fp=None)
+        return {"ok": True}
+
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.request_json", fake_request_json)
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    result = request_json_with_retry("POST", "http://127.0.0.1:8012/pipeline/run", attempts=3, delay_seconds=0.5)
+
+    assert result == {"ok": True}
+    assert len(calls) == 3
+    assert sleep_calls == [0.5, 0.5]
 
 
 def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
