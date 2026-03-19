@@ -115,9 +115,9 @@ def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[s
     if mode not in ("pipeline", "strategy-only"):
         return [fallback_strategy_name]
     try:
-        from app.scheduler.control import read_active_strategies
+        from app.scheduler.control import read_effective_active_strategies
 
-        return read_active_strategies()
+        return read_effective_active_strategies()
     except Exception:
         return [fallback_strategy_name]
 
@@ -195,6 +195,22 @@ def run_scheduler(
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
+        if not active_strategy_names:
+            log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"
+            print(log_line)
+            _write_log(log_line, mode)
+            record_heartbeat(
+                component=component,
+                status="ok",
+                message=f"{component} loop skipped because no enabled active strategies are configured.",
+                payload={"run_count": run_count, "mode": mode, "strategy_names": [], "skipped": True},
+            )
+            _record_soak_snapshot()
+            if iterations is not None and run_count >= iterations:
+                break
+            time.sleep(interval_seconds)
+            continue
+
         active_strategy_name = active_strategy_names[0]
         record_heartbeat(
             component=component,

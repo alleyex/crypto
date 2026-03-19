@@ -2258,6 +2258,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
+    assert 'id="scheduler-disabled-strategy-select"' in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text
@@ -2445,34 +2446,60 @@ def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> N
 
 def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     client = TestClient(app)
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(
         "app.api.main.get_strategy_status",
         lambda: {
             "strategy_name": "ma_cross",
             "strategy_names": ["ma_cross", "momentum_3bar"],
+            "disabled_strategy_names": ["momentum_3bar"],
+            "effective_strategy_names": ["ma_cross"],
             "default_strategy": "ma_cross",
             "strategy_file": "runtime/scheduler.strategy",
+            "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
-    monkeypatch.setattr(
-        "app.api.main.set_active_strategies",
-        lambda strategy_names: {
+    def fake_set_active_strategies(strategy_names):
+        captured["active"] = strategy_names
+        return {
             "strategy_name": strategy_names[0],
             "strategy_names": strategy_names,
             "strategy_file": "runtime/scheduler.strategy",
-        },
-    )
+        }
+
+    def fake_set_disabled_strategies(strategy_names):
+        captured["disabled"] = strategy_names
+        return {
+            "disabled_strategy_names": strategy_names,
+            "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
+        }
+
+    monkeypatch.setattr("app.api.main.set_active_strategies", fake_set_active_strategies)
+    monkeypatch.setattr("app.api.main.set_disabled_strategies", fake_set_disabled_strategies)
 
     status_response = client.get("/scheduler/strategy")
-    update_response = client.post("/scheduler/strategy", json={"strategy_names": ["ma_cross", "momentum_3bar"]})
+    update_response = client.post(
+        "/scheduler/strategy",
+        json={
+            "strategy_names": ["ma_cross", "momentum_3bar"],
+            "disabled_strategy_names": ["momentum_3bar"],
+        },
+    )
 
     assert status_response.status_code == 200
     assert status_response.json()["strategy_name"] == "ma_cross"
     assert status_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
+    assert status_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
+    assert status_response.json()["effective_strategy_names"] == ["ma_cross"]
     assert update_response.status_code == 200
     assert update_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
+    assert update_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
+    assert captured == {
+        "active": ["ma_cross", "momentum_3bar"],
+        "disabled": ["momentum_3bar"],
+    }
 
 
 def test_favicon_returns_no_content() -> None:
@@ -3053,7 +3080,7 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "app.scheduler.runner.run_strategy_jobs",
@@ -3088,6 +3115,41 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     finally:
         connection.close()
     assert any(item["component"] == "strategy_worker" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_run_scheduler_skips_when_no_enabled_active_strategies(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "strategy-worker.log"
+    db_path = tmp_path / "scheduler-empty-strategy-heartbeat.db"
+    recorded = []
+
+    monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: [])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only")
+
+    assert recorded == [{"status": "ok"}]
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "skipped=no-enabled-active-strategies" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(
+        item["component"] == "strategy_worker"
+        and item["status"] == "ok"
+        and "no enabled active strategies" in item["message"]
+        for item in heartbeats
+    )
 
 
 def test_read_scheduler_log_aggregates_split_worker_logs(monkeypatch, tmp_path) -> None:

@@ -469,7 +469,13 @@ __STRATEGY_OPTIONS__
             <select id="scheduler-strategy-select" multiple size="2">
 __STRATEGY_OPTIONS__
             </select>
-            <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy</button>
+          </div>
+          <div class="inline-controls">
+            <label for="scheduler-disabled-strategy-select">Disabled Strategy</label>
+            <select id="scheduler-disabled-strategy-select" multiple size="2">
+__STRATEGY_OPTIONS__
+            </select>
+            <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy State</button>
           </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
@@ -720,7 +726,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("scheduler-status").className = `value ${statusClass(scheduler.status)}`;
         const schedulerStrategy = window.__schedulerStrategyStatus || null;
         el("scheduler-detail").textContent = schedulerStrategy
-          ? `active strategies: ${(schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name]).join(", ")}`
+          ? `effective strategies: ${(schedulerStrategy.effective_strategy_names || schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name]).join(", ") || "none"}`
           : "Scheduler strategy not loaded yet.";
 
         const killSwitch = health.checks.kill_switch;
@@ -1156,6 +1162,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             option.selected = schedulerStrategy.strategy_names.includes(option.value);
           });
         }
+        const schedulerDisabledStrategySelect = el("scheduler-disabled-strategy-select");
+        if (schedulerDisabledStrategySelect && schedulerStrategy?.disabled_strategy_names) {
+          Array.from(schedulerDisabledStrategySelect.options).forEach((option) => {
+            option.selected = schedulerStrategy.disabled_strategy_names.includes(option.value);
+          });
+        }
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
@@ -1211,12 +1223,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const selectedSchedulerStrategies = Array.from(
               el("scheduler-strategy-select")?.selectedOptions || []
             ).map((option) => option.value);
+            const selectedDisabledStrategies = Array.from(
+              el("scheduler-disabled-strategy-select")?.selectedOptions || []
+            ).map((option) => option.value);
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify({
                 strategy_names: selectedSchedulerStrategies.length
                   ? selectedSchedulerStrategies
                   : ["__DEFAULT_STRATEGY_NAME__"],
+                disabled_strategy_names: selectedDisabledStrategies,
               }),
             });
           } else if (type === "kill-enable") {
