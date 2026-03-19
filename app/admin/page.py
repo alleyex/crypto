@@ -660,6 +660,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <pre id="pipeline-json">No manual pipeline run yet.</pre>
         </article>
         <article class="panel data-card">
+          <h2>Scheduler Control Activity</h2>
+          <p>Recent scheduler strategy operations extracted from structured audit actions.</p>
+          <div class="trade-list" id="scheduler-control-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+        <article class="panel data-card">
           <h2>Audit Events</h2>
           <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
           <pre id="audit-json">Loading...</pre>
@@ -1211,6 +1218,39 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }).join("");
       }
 
+      function updateSchedulerControlActivity(auditEvents) {
+        const board = el("scheduler-control-board");
+        const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
+          .filter((event) => event.event_type === "scheduler_control")
+          .slice(0, 6);
+        if (schedulerEvents.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No scheduler control activity recorded yet.</div>';
+          return;
+        }
+
+        board.innerHTML = schedulerEvents.map((event) => {
+          const action = event.payload?.action || "unknown";
+          const preset = event.payload?.preset || "";
+          const strategyNames = event.payload?.strategy_names || event.payload?.disabled_strategy_names || [];
+          const strategyLabel = Array.isArray(strategyNames) && strategyNames.length
+            ? strategyNames.join(", ")
+            : event.payload?.strategy_name || "n/a";
+          const statusClassName = statusClass(event.status || "degraded");
+          const detailBits = [
+            preset ? `preset=${preset}` : "",
+            event.payload?.effective_strategy_limit != null ? `limit=${event.payload.effective_strategy_limit}` : "",
+            strategyLabel !== "n/a" ? `strategies=${strategyLabel}` : "",
+          ].filter(Boolean);
+          return `
+            <div class="trade-row">
+              <div><strong>Action</strong>${action}<br>${event.created_at}</div>
+              <div><strong>Status</strong><span class="${statusClassName}">${event.status}</span><br>${event.source}</div>
+              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}</div>
+            </div>
+          `;
+        }).join("");
+      }
+
       function applyClosedTradesStrategyFilter(strategyName) {
         const select = el("closed-trades-strategy-select");
         if (select) {
@@ -1452,6 +1492,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         updateSoakValidation(soakReport, soakHistory);
         updateStrategySummary(strategySummary);
         updateClosedTrades(closedTrades);
+        updateSchedulerControlActivity(auditEvents);
         updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
