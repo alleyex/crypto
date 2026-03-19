@@ -15,6 +15,7 @@ from app.pipeline.strategy_job import run_strategy_jobs
 
 JOB_TYPES = ("market_data", "strategy", "execution")
 JOB_STATUSES = ("queued", "leased", "completed", "failed")
+PIPELINE_QUEUE_JOB_TYPES = ("market_data", "strategy", "execution")
 
 
 INSERT_JOB_SQL = """
@@ -82,6 +83,34 @@ def enqueue_job(
     )
     connection.commit()
     return job_id
+
+
+def enqueue_pipeline_jobs(
+    connection: DBConnection,
+    *,
+    strategy_name: Optional[str] = None,
+    strategy_names: Optional[list[str]] = None,
+    symbol_names: Optional[list[str]] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    ensure_table(connection)
+    job_payload = build_job_payload(
+        strategy_name=strategy_name,
+        strategy_names=strategy_names,
+        symbol_names=symbol_names,
+        payload=payload,
+    )
+    jobs: list[dict[str, Any]] = []
+    for job_type in PIPELINE_QUEUE_JOB_TYPES:
+        job_id = enqueue_job(connection, job_type, payload=job_payload or None)
+        jobs.append(
+            {
+                "job_id": job_id,
+                "job_type": job_type,
+                "payload": job_payload,
+            }
+        )
+    return jobs
 
 
 def list_jobs(

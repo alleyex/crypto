@@ -372,6 +372,7 @@ Control endpoints:
 - `GET /queue/jobs`
 - `GET /queue/summary`
 - `POST /queue/jobs`
+- `POST /queue/jobs/enqueue-pipeline`
 - `POST /queue/jobs/run-next`
 - `POST /queue/jobs/{job_id}/retry`
 - `GET /scheduler/logs?lines=20`
@@ -413,6 +414,9 @@ curl -s http://127.0.0.1:8000/queue/summary
 curl -s -X POST http://127.0.0.1:8000/queue/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
+curl -s -X POST http://127.0.0.1:8000/queue/jobs/enqueue-pipeline \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
 curl -s -X POST http://127.0.0.1:8000/queue/jobs/run-next \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy"}'

@@ -26,6 +26,7 @@ from app.core.db import list_tables
 from app.core.db import table_exists
 from app.core.job_queue import build_job_payload
 from app.core.job_queue import JOB_TYPES
+from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import list_jobs as list_queue_jobs
 from app.core.job_queue import retry_job
@@ -431,6 +432,13 @@ class SchedulerSymbolsRequest(BaseModel):
     symbol_names: Optional[List[str]] = None
 
 
+class QueuePipelineRequest(BaseModel):
+    strategy_name: str = DEFAULT_STRATEGY_NAME
+    strategy_names: Optional[List[str]] = None
+    symbol_names: Optional[List[str]] = None
+    payload: Optional[Dict[str, Any]] = None
+
+
 def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
     return build_job_payload(
         strategy_name=payload.strategy_name,
@@ -528,6 +536,27 @@ def create_queue_job(payload: QueueJobRequest) -> dict[str, Any]:
             "available_job_types": list(JOB_TYPES),
             "payload": job_payload,
             "job": list_queue_jobs(connection, limit=1, job_type=payload.job_type)[0],
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/queue/jobs/enqueue-pipeline")
+def create_pipeline_queue_jobs(payload: QueuePipelineRequest) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_name=payload.strategy_name,
+            strategy_names=payload.strategy_names,
+            symbol_names=payload.symbol_names,
+            payload=payload.payload,
+        )
+        return {
+            "status": "queued",
+            "job_count": len(jobs),
+            "job_types": [job["job_type"] for job in jobs],
+            "jobs": jobs,
         }
     finally:
         connection.close()

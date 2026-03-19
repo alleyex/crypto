@@ -2701,6 +2701,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="queue-board"' in response.text
     assert 'id="queue-filter-select"' in response.text
     assert 'data-action="queue-enqueue-strategy"' in response.text
+    assert 'data-action="queue-enqueue-pipeline"' in response.text
     assert 'data-action="queue-drain-strategy"' in response.text
     assert 'data-action="queue-drain-execution"' in response.text
     assert 'data-action="queue-retry-strategy"' in response.text
@@ -2718,6 +2719,7 @@ def test_admin_page_is_served() -> None:
     assert "Latest failed:" in response.text
     assert "Latest retry:" in response.text
     assert "Enqueue Strategy Job" in response.text
+    assert "Enqueue Pipeline Chain" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
     assert "Retry Failed Strategy Job" in response.text
@@ -3469,6 +3471,28 @@ def test_job_queue_lifecycle_round_trip() -> None:
         connection.close()
 
 
+def test_enqueue_pipeline_jobs_creates_ordered_queue_batch() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+
+        jobs = __import__("app.core.job_queue", fromlist=["enqueue_pipeline_jobs"]).enqueue_pipeline_jobs(
+            connection,
+            strategy_name="momentum_3bar",
+            strategy_names=["ma_cross", "momentum_3bar"],
+            symbol_names=["BTCUSDT", "ETHUSDT"],
+            payload={"source": "test_batch"},
+        )
+
+        assert [job["job_type"] for job in jobs] == ["market_data", "strategy", "execution"]
+        queue_rows = list_jobs(connection, limit=10)
+        assert [job["job_type"] for job in queue_rows] == ["execution", "strategy", "market_data"]
+        assert queue_rows[0]["payload"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert queue_rows[0]["payload"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    finally:
+        connection.close()
+
+
 def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
     client = TestClient(app)
     captured: dict[str, Any] = {}
@@ -3525,6 +3549,40 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
     assert list_response.status_code == 200
     assert list_response.json()[0]["job_type"] == "strategy"
     assert list_response.json()[0]["status"] == "queued"
+
+
+def test_enqueue_pipeline_queue_jobs_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    def fake_enqueue_pipeline_jobs(connection, **kwargs):
+        captured.update(kwargs)
+        return [
+            {"job_id": 10, "job_type": "market_data", "payload": kwargs},
+            {"job_id": 11, "job_type": "strategy", "payload": kwargs},
+            {"job_id": 12, "job_type": "execution", "payload": kwargs},
+        ]
+
+    monkeypatch.setattr("app.api.main.enqueue_pipeline_jobs", fake_enqueue_pipeline_jobs)
+
+    response = client.post(
+        "/queue/jobs/enqueue-pipeline",
+        json={
+            "strategy_name": "momentum_3bar",
+            "strategy_names": ["ma_cross", "momentum_3bar"],
+            "symbol_names": ["BTCUSDT", "ETHUSDT"],
+            "payload": {"source": "api_test"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["job_count"] == 3
+    assert response.json()["job_types"] == ["market_data", "strategy", "execution"]
+    assert captured["strategy_name"] == "momentum_3bar"
+    assert captured["strategy_names"] == ["ma_cross", "momentum_3bar"]
+    assert captured["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert captured["payload"] == {"source": "api_test"}
 
 
 def test_run_next_queued_job_completes_strategy_job(monkeypatch) -> None:
