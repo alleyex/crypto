@@ -19,14 +19,30 @@ EFFECTIVE_LIMIT_FILE = RUNTIME_DIR / "scheduler.strategy.limit"
 StrategyPriorityPreset = Literal["sequential", "reverse", "active_first", "reset"]
 
 
+def _log_scheduler_control_event(
+    *,
+    status: str,
+    message: str,
+    payload: dict[str, Union[str, int, bool, list[str], dict[str, int], dict[str, str], None]],
+    action: str,
+) -> None:
+    audit_payload = {"action": action, **payload}
+    log_event(
+        event_type="scheduler_control",
+        status=status,
+        source="scheduler_control",
+        message=message,
+        payload=audit_payload,
+    )
+
+
 def set_stop_flag() -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     STOP_FILE.write_text("stop\n", encoding="utf-8")
     send_telegram_message("Crypto alert: scheduler stop flag has been set.")
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="stopped",
-        source="scheduler_control",
+        action="stop",
         message="Scheduler stop flag set.",
         payload={"stop_file": str(STOP_FILE)},
     )
@@ -36,18 +52,16 @@ def set_stop_flag() -> str:
 def clear_stop_flag() -> Tuple[bool, str]:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
-        log_event(
-            event_type="scheduler_control",
+        _log_scheduler_control_event(
             status="started",
-            source="scheduler_control",
+            action="start",
             message="Scheduler stop flag cleared.",
             payload={"stop_file": str(STOP_FILE), "flag_removed": True},
         )
         return True, str(STOP_FILE)
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="started",
-        source="scheduler_control",
+        action="start",
         message="Scheduler start requested but no stop flag was present.",
         payload={"stop_file": str(STOP_FILE), "flag_removed": False},
     )
@@ -194,7 +208,12 @@ def set_active_strategy(strategy_name: str) -> Dict[str, str]:
     return {"strategy_name": result["strategy_name"], "strategy_file": result["strategy_file"]}
 
 
-def set_active_strategies(strategy_names: list[str]) -> Dict[str, Union[str, list[str]]]:
+def set_active_strategies(
+    strategy_names: list[str],
+    *,
+    audit_action: str = "set_active_strategies",
+    audit_message: str = "Scheduler active strategies updated.",
+) -> Dict[str, Union[str, list[str]]]:
     if not strategy_names:
         raise ValueError("At least one strategy must be provided.")
 
@@ -206,11 +225,10 @@ def set_active_strategies(strategy_names: list[str]) -> Dict[str, Union[str, lis
 
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     STRATEGY_FILE.write_text("\n".join(unique_names) + "\n", encoding="utf-8")
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="updated",
-        source="scheduler_control",
-        message="Scheduler active strategies updated.",
+        action=audit_action,
+        message=audit_message,
         payload={
             "strategy_name": unique_names[0],
             "strategy_names": unique_names,
@@ -224,7 +242,12 @@ def set_active_strategies(strategy_names: list[str]) -> Dict[str, Union[str, lis
     }
 
 
-def set_disabled_strategies(strategy_names: list[str]) -> Dict[str, Union[str, list[str]]]:
+def set_disabled_strategies(
+    strategy_names: list[str],
+    *,
+    audit_action: str = "set_disabled_strategies",
+    audit_message: str = "Scheduler disabled strategies updated.",
+) -> Dict[str, Union[str, list[str]]]:
     unique_names = list(dict.fromkeys(strategy_names))
     allowed_names = set(list_registered_strategies())
     invalid_names = [name for name in unique_names if name not in allowed_names]
@@ -237,11 +260,10 @@ def set_disabled_strategies(strategy_names: list[str]) -> Dict[str, Union[str, l
     elif DISABLED_STRATEGY_FILE.exists():
         DISABLED_STRATEGY_FILE.unlink()
 
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="updated",
-        source="scheduler_control",
-        message="Scheduler disabled strategies updated.",
+        action=audit_action,
+        message=audit_message,
         payload={
             "disabled_strategy_names": unique_names,
             "disabled_strategy_file": str(DISABLED_STRATEGY_FILE),
@@ -253,7 +275,13 @@ def set_disabled_strategies(strategy_names: list[str]) -> Dict[str, Union[str, l
     }
 
 
-def set_strategy_priorities(strategy_priorities: dict[str, int]) -> Dict[str, Union[str, dict[str, int]]]:
+def set_strategy_priorities(
+    strategy_priorities: dict[str, int],
+    *,
+    audit_action: str = "set_strategy_priorities",
+    audit_message: str = "Scheduler strategy priorities updated.",
+    extra_payload: Optional[dict[str, Union[str, int, bool, list[str], dict[str, int], dict[str, str], None]]] = None,
+) -> Dict[str, Union[str, dict[str, int]]]:
     allowed_names = set(list_registered_strategies())
     invalid_names = [name for name in strategy_priorities if name not in allowed_names]
     if invalid_names:
@@ -266,14 +294,14 @@ def set_strategy_priorities(strategy_priorities: dict[str, int]) -> Dict[str, Un
     elif PRIORITY_FILE.exists():
         PRIORITY_FILE.unlink()
 
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="updated",
-        source="scheduler_control",
-        message="Scheduler strategy priorities updated.",
+        action=audit_action,
+        message=audit_message,
         payload={
             "strategy_priorities": normalized,
             "priority_file": str(PRIORITY_FILE),
+            **(extra_payload or {}),
         },
     )
     return {
@@ -282,7 +310,12 @@ def set_strategy_priorities(strategy_priorities: dict[str, int]) -> Dict[str, Un
     }
 
 
-def set_disabled_strategy_notes(strategy_notes: dict[str, str]) -> Dict[str, Union[str, dict[str, str]]]:
+def set_disabled_strategy_notes(
+    strategy_notes: dict[str, str],
+    *,
+    audit_action: str = "set_disabled_strategy_notes",
+    audit_message: str = "Scheduler disabled strategy notes updated.",
+) -> Dict[str, Union[str, dict[str, str]]]:
     allowed_names = set(list_registered_strategies())
     invalid_names = [name for name in strategy_notes if name not in allowed_names]
     if invalid_names:
@@ -299,11 +332,10 @@ def set_disabled_strategy_notes(strategy_notes: dict[str, str]) -> Dict[str, Uni
     elif DISABLED_REASON_FILE.exists():
         DISABLED_REASON_FILE.unlink()
 
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="updated",
-        source="scheduler_control",
-        message="Scheduler disabled strategy notes updated.",
+        action=audit_action,
+        message=audit_message,
         payload={
             "disabled_strategy_notes": normalized,
             "disabled_reason_file": str(DISABLED_REASON_FILE),
@@ -315,7 +347,13 @@ def set_disabled_strategy_notes(strategy_notes: dict[str, str]) -> Dict[str, Uni
     }
 
 
-def set_effective_strategy_limit(limit: Optional[int]) -> Dict[str, Union[str, int, None]]:
+def set_effective_strategy_limit(
+    limit: Optional[int],
+    *,
+    audit_action: str = "set_effective_strategy_limit",
+    audit_message: str = "Scheduler effective strategy limit updated.",
+    extra_payload: Optional[dict[str, Union[str, int, bool, list[str], dict[str, int], dict[str, str], None]]] = None,
+) -> Dict[str, Union[str, int, None]]:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     normalized_limit = int(limit) if limit is not None else None
     if normalized_limit is not None and normalized_limit <= 0:
@@ -327,14 +365,14 @@ def set_effective_strategy_limit(limit: Optional[int]) -> Dict[str, Union[str, i
     else:
         EFFECTIVE_LIMIT_FILE.write_text(f"{normalized_limit}\n", encoding="utf-8")
 
-    log_event(
-        event_type="scheduler_control",
+    _log_scheduler_control_event(
         status="updated",
-        source="scheduler_control",
-        message="Scheduler effective strategy limit updated.",
+        action=audit_action,
+        message=audit_message,
         payload={
             "effective_strategy_limit": normalized_limit,
             "effective_limit_file": str(EFFECTIVE_LIMIT_FILE),
+            **(extra_payload or {}),
         },
     )
     return {

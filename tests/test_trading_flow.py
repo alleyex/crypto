@@ -2505,37 +2505,42 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
-    def fake_set_active_strategies(strategy_names):
+    def fake_set_active_strategies(strategy_names, **kwargs):
         captured["active"] = strategy_names
+        captured["active_kwargs"] = kwargs
         return {
             "strategy_name": strategy_names[0],
             "strategy_names": strategy_names,
             "strategy_file": "runtime/scheduler.strategy",
         }
 
-    def fake_set_disabled_strategies(strategy_names):
+    def fake_set_disabled_strategies(strategy_names, **kwargs):
         captured["disabled"] = strategy_names
+        captured["disabled_kwargs"] = kwargs
         return {
             "disabled_strategy_names": strategy_names,
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
         }
 
-    def fake_set_strategy_priorities(strategy_priorities):
+    def fake_set_strategy_priorities(strategy_priorities, **kwargs):
         captured["priorities"] = strategy_priorities
+        captured["priorities_kwargs"] = kwargs
         return {
             "strategy_priorities": strategy_priorities,
             "priority_file": "runtime/scheduler.strategy.priority.json",
         }
 
-    def fake_set_disabled_strategy_notes(strategy_notes):
+    def fake_set_disabled_strategy_notes(strategy_notes, **kwargs):
         captured["notes"] = strategy_notes
+        captured["notes_kwargs"] = kwargs
         return {
             "disabled_strategy_notes": strategy_notes,
             "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
         }
 
-    def fake_set_effective_strategy_limit(limit):
+    def fake_set_effective_strategy_limit(limit, **kwargs):
         captured["limit"] = limit
+        captured["limit_kwargs"] = kwargs
         return {
             "effective_strategy_limit": limit,
             "effective_limit_file": "runtime/scheduler.strategy.limit",
@@ -2556,6 +2561,8 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
             "disabled_strategy_notes": {"momentum_3bar": "cooldown investigation"},
             "effective_strategy_limit": 1,
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
         },
     )
 
@@ -2577,6 +2584,26 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
         "priorities": {"ma_cross": 0, "momentum_3bar": 10},
         "notes": {"momentum_3bar": "cooldown investigation"},
         "limit": 1,
+        "active_kwargs": {
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
+        },
+        "disabled_kwargs": {
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
+        },
+        "priorities_kwargs": {
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
+        },
+        "notes_kwargs": {
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
+        },
+        "limit_kwargs": {
+            "audit_action": "save_strategy_state",
+            "audit_message": "Applied scheduler strategy state from admin.",
+        },
     }
 
 
@@ -2602,8 +2629,9 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
             "available_strategies": ["ma_cross", "momentum_3bar"],
         }
 
-    def fake_set_strategy_priorities(strategy_priorities):
+    def fake_set_strategy_priorities(strategy_priorities, **kwargs):
         captured["priorities"] = strategy_priorities
+        captured["kwargs"] = kwargs
         return {
             "strategy_priorities": strategy_priorities,
             "priority_file": "runtime/scheduler.strategy.priority.json",
@@ -2616,6 +2644,8 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert captured["priorities"] == {"momentum_3bar": 0, "ma_cross": 1}
+    assert captured["kwargs"]["audit_action"] == "priority_preset:active_first"
+    assert captured["kwargs"]["extra_payload"] == {"preset": "active_first"}
     assert response.json()["strategy_names"] == ["momentum_3bar"]
 
 
@@ -2642,12 +2672,19 @@ def test_scheduler_strategy_limit_preset_endpoint(monkeypatch) -> None:
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
-    monkeypatch.setattr("app.api.main.set_effective_strategy_limit", lambda limit: captured.setdefault("limit", limit))
+    def fake_set_effective_strategy_limit(limit, **kwargs):
+        captured["limit"] = limit
+        captured["kwargs"] = kwargs
+        return {"effective_strategy_limit": limit}
+
+    monkeypatch.setattr("app.api.main.set_effective_strategy_limit", fake_set_effective_strategy_limit)
 
     response = client.post("/scheduler/strategy/limit-preset", json={"preset": "top_2"})
 
     assert response.status_code == 200
     assert captured["limit"] == 2
+    assert captured["kwargs"]["audit_action"] == "limit_preset:top_2"
+    assert captured["kwargs"]["extra_payload"] == {"preset": "top_2"}
     assert response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
 
 

@@ -1259,6 +1259,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const nextPriority = currentValues.length ? Math.min(...currentValues) - 1 : 0;
         priorities[strategyName] = nextPriority;
         payload.strategy_priorities = priorities;
+        payload.audit_action = `promote:${strategyName}`;
+        payload.audit_message = `Promoted strategy priority for ${strategyName}.`;
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1274,6 +1276,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const nextPriority = currentValues.length ? Math.max(...currentValues) + 1 : 1;
         priorities[strategyName] = nextPriority;
         payload.strategy_priorities = priorities;
+        payload.audit_action = `demote:${strategyName}`;
+        payload.audit_message = `Demoted strategy priority for ${strategyName}.`;
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1289,6 +1293,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (!payload.disabled_strategy_notes[strategyName]) {
           payload.disabled_strategy_notes[strategyName] = "Disabled from strategy leaderboard.";
         }
+        payload.audit_action = `disable:${strategyName}`;
+        payload.audit_message = `Disabled strategy ${strategyName} from the leaderboard.`;
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1303,6 +1309,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (payload.disabled_strategy_notes[strategyName] === "Disabled from strategy leaderboard.") {
           delete payload.disabled_strategy_notes[strategyName];
         }
+        payload.audit_action = `enable:${strategyName}`;
+        payload.audit_message = `Enabled strategy ${strategyName} from the leaderboard.`;
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1346,6 +1354,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         });
         const payload = collectSchedulerStrategyPayload();
         payload.disabled_strategy_notes = {};
+        payload.audit_action = "clear_disabled_notes";
+        payload.audit_message = "Cleared scheduler disabled strategy notes.";
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1488,9 +1498,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           } else if (type === "scheduler-stop") {
             result = await api("/scheduler/stop", { method: "POST" });
           } else if (type === "scheduler-strategy-save") {
+            const payload = collectSchedulerStrategyPayload();
+            payload.audit_action = "save_strategy_state";
+            payload.audit_message = "Applied scheduler strategy state from admin.";
             result = await api("/scheduler/strategy", {
               method: "POST",
-              body: JSON.stringify(collectSchedulerStrategyPayload()),
+              body: JSON.stringify(payload),
             });
           } else if (type === "scheduler-preset-top1") {
             await applySchedulerPreset(1);

@@ -320,6 +320,8 @@ class SchedulerStrategyRequest(BaseModel):
     strategy_priorities: Optional[Dict[str, int]] = None
     disabled_strategy_notes: Optional[Dict[str, str]] = None
     effective_strategy_limit: Optional[int] = None
+    audit_action: Optional[str] = None
+    audit_message: Optional[str] = None
 
 
 class SchedulerStrategyPresetRequest(BaseModel):
@@ -545,15 +547,35 @@ def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, An
         )
     ):
         if payload.strategy_names is not None:
-            set_active_strategies(payload.strategy_names)
+            set_active_strategies(
+                payload.strategy_names,
+                audit_action=payload.audit_action or "set_active_strategies",
+                audit_message=payload.audit_message or "Scheduler active strategies updated.",
+            )
         if payload.disabled_strategy_names is not None:
-            set_disabled_strategies(payload.disabled_strategy_names)
+            set_disabled_strategies(
+                payload.disabled_strategy_names,
+                audit_action=payload.audit_action or "set_disabled_strategies",
+                audit_message=payload.audit_message or "Scheduler disabled strategies updated.",
+            )
         if payload.strategy_priorities is not None:
-            set_strategy_priorities(payload.strategy_priorities)
+            set_strategy_priorities(
+                payload.strategy_priorities,
+                audit_action=payload.audit_action or "set_strategy_priorities",
+                audit_message=payload.audit_message or "Scheduler strategy priorities updated.",
+            )
         if payload.disabled_strategy_notes is not None:
-            set_disabled_strategy_notes(payload.disabled_strategy_notes)
+            set_disabled_strategy_notes(
+                payload.disabled_strategy_notes,
+                audit_action=payload.audit_action or "set_disabled_strategy_notes",
+                audit_message=payload.audit_message or "Scheduler disabled strategy notes updated.",
+            )
         if payload.effective_strategy_limit is not None or "effective_strategy_limit" in payload.__fields_set__:
-            set_effective_strategy_limit(payload.effective_strategy_limit)
+            set_effective_strategy_limit(
+                payload.effective_strategy_limit,
+                audit_action=payload.audit_action or "set_effective_strategy_limit",
+                audit_message=payload.audit_message or "Scheduler effective strategy limit updated.",
+            )
         return get_strategy_status()
     return set_active_strategy(payload.strategy_name)
 
@@ -566,7 +588,12 @@ def scheduler_strategy_apply_preset(payload: SchedulerStrategyPresetRequest) -> 
         available_strategies=status.get("available_strategies"),
         active_strategy_names=status.get("strategy_names"),
     )
-    set_strategy_priorities(priorities)
+    set_strategy_priorities(
+        priorities,
+        audit_action=f"priority_preset:{payload.preset}",
+        audit_message=f"Applied scheduler priority preset: {payload.preset}.",
+        extra_payload={"preset": payload.preset},
+    )
     return get_strategy_status()
 
 
@@ -577,7 +604,12 @@ def scheduler_strategy_apply_limit_preset(payload: SchedulerStrategyLimitPresetR
         "top_2": 2,
         "all_enabled": None,
     }
-    set_effective_strategy_limit(preset_to_limit[payload.preset])
+    set_effective_strategy_limit(
+        preset_to_limit[payload.preset],
+        audit_action=f"limit_preset:{payload.preset}",
+        audit_message=f"Applied scheduler limit preset: {payload.preset}.",
+        extra_payload={"preset": payload.preset},
+    )
     return get_strategy_status()
 
 
