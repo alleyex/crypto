@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
@@ -15,6 +15,7 @@ STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy"
 DISABLED_STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy.disabled"
 PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
 DISABLED_REASON_FILE = RUNTIME_DIR / "scheduler.strategy.disabled.reason.json"
+EFFECTIVE_LIMIT_FILE = RUNTIME_DIR / "scheduler.strategy.limit"
 
 
 def set_stop_flag() -> str:
@@ -142,13 +143,27 @@ def read_disabled_strategy_notes() -> dict[str, str]:
     return normalized
 
 
+def read_effective_strategy_limit() -> Optional[int]:
+    if not EFFECTIVE_LIMIT_FILE.exists():
+        return None
+    try:
+        value = int(EFFECTIVE_LIMIT_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def read_effective_active_strategies() -> list[str]:
     disabled_names = set(read_disabled_strategies())
     active_names = [name for name in read_active_strategies() if name not in disabled_names]
     priorities = read_strategy_priorities()
     indexed_names = list(enumerate(active_names))
     indexed_names.sort(key=lambda item: (priorities.get(item[1], item[0]), item[0]))
-    return [name for _, name in indexed_names]
+    ordered_names = [name for _, name in indexed_names]
+    effective_limit = read_effective_strategy_limit()
+    if effective_limit is not None:
+        return ordered_names[:effective_limit]
+    return ordered_names
 
 
 def set_active_strategy(strategy_name: str) -> Dict[str, str]:
@@ -277,11 +292,40 @@ def set_disabled_strategy_notes(strategy_notes: dict[str, str]) -> Dict[str, Uni
     }
 
 
+def set_effective_strategy_limit(limit: Optional[int]) -> Dict[str, Union[str, int, None]]:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_limit = int(limit) if limit is not None else None
+    if normalized_limit is not None and normalized_limit <= 0:
+        normalized_limit = None
+
+    if normalized_limit is None:
+        if EFFECTIVE_LIMIT_FILE.exists():
+            EFFECTIVE_LIMIT_FILE.unlink()
+    else:
+        EFFECTIVE_LIMIT_FILE.write_text(f"{normalized_limit}\n", encoding="utf-8")
+
+    log_event(
+        event_type="scheduler_control",
+        status="updated",
+        source="scheduler_control",
+        message="Scheduler effective strategy limit updated.",
+        payload={
+            "effective_strategy_limit": normalized_limit,
+            "effective_limit_file": str(EFFECTIVE_LIMIT_FILE),
+        },
+    )
+    return {
+        "effective_strategy_limit": normalized_limit,
+        "effective_limit_file": str(EFFECTIVE_LIMIT_FILE),
+    }
+
+
 def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
     active_strategy_names = read_active_strategies()
     disabled_strategy_names = read_disabled_strategies()
     strategy_priorities = read_strategy_priorities()
     disabled_strategy_notes = read_disabled_strategy_notes()
+    effective_strategy_limit = read_effective_strategy_limit()
     effective_strategy_names = read_effective_active_strategies()
     available_strategies = list_registered_strategies()
     return {
@@ -291,11 +335,13 @@ def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
         "effective_strategy_names": effective_strategy_names,
         "strategy_priorities": strategy_priorities,
         "disabled_strategy_notes": disabled_strategy_notes,
+        "effective_strategy_limit": effective_strategy_limit,
         "default_strategy": DEFAULT_STRATEGY_NAME,
         "strategy_file": str(STRATEGY_FILE),
         "disabled_strategy_file": str(DISABLED_STRATEGY_FILE),
         "priority_file": str(PRIORITY_FILE),
         "disabled_reason_file": str(DISABLED_REASON_FILE),
+        "effective_limit_file": str(EFFECTIVE_LIMIT_FILE),
         "available_strategies": available_strategies,
         "strategy_entries": [
             {

@@ -503,6 +503,10 @@ __STRATEGY_OPTIONS__
           <div class="inline-controls" id="scheduler-disabled-note-controls">
             <span class="chip">Disabled note: explain why a strategy is turned off.</span>
           </div>
+          <div class="inline-controls">
+            <label for="scheduler-effective-limit-input">Effective Limit</label>
+            <input id="scheduler-effective-limit-input" type="number" step="1" min="1" placeholder="all" />
+          </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
             <button class="danger" data-action="scheduler-stop">Stop</button>
@@ -756,13 +760,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const orderLabel = effectiveOrder.length ? effectiveOrder.join(" -> ") : "none";
           const disabledNotes = Object.entries(schedulerStrategy.disabled_strategy_notes || {})
             .map(([name, note]) => `${name}: ${note}`);
+          const limitLabel = schedulerStrategy.effective_strategy_limit || "all";
           const warning = effectiveOrder.length
             ? ""
             : " | warning: no enabled active strategies"
           const disabledSummary = disabledNotes.length
             ? ` | disabled notes: ${disabledNotes.join("; ")}`
             : "";
-          el("scheduler-detail").textContent = `effective order: ${orderLabel}${warning}${disabledSummary}`;
+          el("scheduler-detail").textContent = `effective order: ${orderLabel} | limit: ${limitLabel}${warning}${disabledSummary}`;
         } else {
           el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
         }
@@ -1248,6 +1253,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             option.selected = schedulerStrategy.disabled_strategy_names.includes(option.value);
           });
         }
+        const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
+        if (schedulerEffectiveLimitInput) {
+          schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
+        }
         renderSchedulerPriorityControls(schedulerStrategy);
         renderSchedulerDisabledNoteControls(schedulerStrategy);
         updateHeadline(health);
@@ -1319,6 +1328,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 .map((input) => [input.dataset.strategyDisabledNote, input.value.trim()])
                 .filter(([, value]) => value)
             );
+            const effectiveLimitRaw = el("scheduler-effective-limit-input")?.value?.trim() || "";
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify({
@@ -1328,6 +1338,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 disabled_strategy_names: selectedDisabledStrategies,
                 strategy_priorities: strategyPriorities,
                 disabled_strategy_notes: disabledStrategyNotes,
+                effective_strategy_limit: effectiveLimitRaw ? Number.parseInt(effectiveLimitRaw, 10) : null,
               }),
             });
           } else if (type === "kill-enable") {
