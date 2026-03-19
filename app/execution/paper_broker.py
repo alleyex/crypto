@@ -67,16 +67,6 @@ WHERE re.id = ?;
 """
 
 
-SELECT_PENDING_APPROVED_RISKS_SQL = """
-SELECT re.id
-FROM risk_events re
-LEFT JOIN orders o ON o.risk_event_id = re.id
-WHERE re.decision = 'APPROVED'
-  AND o.id IS NULL
-ORDER BY re.id ASC;
-"""
-
-
 INSERT_ORDER_SQL = """
 INSERT INTO orders (
     client_order_id,
@@ -105,6 +95,28 @@ INSERT INTO fills (
 
 def ensure_tables(connection: DBConnection) -> None:
     run_migrations(connection)
+
+
+def _select_pending_approved_risk_ids(
+    connection: DBConnection,
+    symbol_names: Optional[List[str]] = None,
+) -> List[int]:
+    query = """
+    SELECT re.id
+    FROM risk_events re
+    LEFT JOIN orders o ON o.risk_event_id = re.id
+    WHERE re.decision = 'APPROVED'
+      AND o.id IS NULL
+    """
+    params: list[str] = []
+    filtered_symbol_names = list(dict.fromkeys(symbol_names or []))
+    if filtered_symbol_names:
+        placeholders = ", ".join("?" for _ in filtered_symbol_names)
+        query += f" AND re.symbol IN ({placeholders})"
+        params.extend(filtered_symbol_names)
+    query += " ORDER BY re.id ASC;"
+    rows = connection.execute(query, tuple(params)).fetchall()
+    return [int(row[0]) for row in rows]
 
 
 def execute_risk_event_id(
@@ -180,11 +192,12 @@ def execute_latest_risk(
 def execute_pending_approved_risks(
     connection: DBConnection,
     order_qty: float = 0.001,
+    symbol_names: Optional[List[str]] = None,
 ) -> List[Dict[str, Union[float, str, int]]]:
-    pending_rows = connection.execute(SELECT_PENDING_APPROVED_RISKS_SQL).fetchall()
+    pending_rows = _select_pending_approved_risk_ids(connection, symbol_names=symbol_names)
     execution_results: List[Dict[str, Union[float, str, int]]] = []
-    for row in pending_rows:
-        execution_result = execute_risk_event_id(connection, int(row[0]), order_qty=order_qty)
+    for risk_event_id in pending_rows:
+        execution_result = execute_risk_event_id(connection, risk_event_id, order_qty=order_qty)
         if execution_result is not None:
             execution_results.append(execution_result)
     return execution_results

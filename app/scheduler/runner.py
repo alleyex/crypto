@@ -112,7 +112,7 @@ def _run_scheduled_job(
         if mode == "strategy-only":
             return run_strategy_jobs(connection, strategy_names or [strategy_name], symbol_names=symbol_names)
         if mode == "execution-only":
-            return {"steps": list(run_execution_job(connection)["steps"])}
+            return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
     finally:
         connection.close()
 
@@ -135,7 +135,7 @@ def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[s
 
 
 def _resolve_active_symbols(mode: str) -> list[str]:
-    if mode not in ("pipeline", "market-data-only", "strategy-only"):
+    if mode not in ("pipeline", "market-data-only", "strategy-only", "execution-only"):
         return []
     try:
         from app.scheduler.control import read_active_symbols

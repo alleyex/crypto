@@ -10,7 +10,11 @@ from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import update_positions
 
 
-def run_execution_job(connection: DBConnection, risk_event_ids: Optional[list[int]] = None) -> Dict[str, Any]:
+def run_execution_job(
+    connection: DBConnection,
+    risk_event_ids: Optional[list[int]] = None,
+    symbol_names: Optional[list[str]] = None,
+) -> Dict[str, Any]:
     ensure_execution_tables(connection)
     if risk_event_ids is not None:
         execution_results = execute_risk_event_ids(connection, risk_event_ids)
@@ -19,7 +23,7 @@ def run_execution_job(connection: DBConnection, risk_event_ids: Optional[list[in
         else:
             paper_execute_steps = [{"step": "paper_execute", "status": "skipped", "reason": "No risk events selected"}]
     else:
-        execution_results = execute_pending_approved_risks(connection)
+        execution_results = execute_pending_approved_risks(connection, symbol_names=symbol_names)
         if execution_results:
             paper_execute_steps = [{"step": "paper_execute", **execution_result} for execution_result in execution_results]
         else:

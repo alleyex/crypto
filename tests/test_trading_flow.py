@@ -3542,6 +3542,49 @@ def test_run_execution_job_with_selected_risk_events_only_executes_current_run()
         connection.close()
 
 
+def test_run_execution_job_with_selected_symbols_only_executes_matching_pending_risks() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([20, 21, 22, 23, 24])],
+            symbol="ETHUSDT",
+        )
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([30, 31, 32, 33, 34])],
+            symbol="SOLUSDT",
+        )
+
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        eth_signal = insert_signal(connection, "BUY", symbol="ETHUSDT", strategy_name="manual_test")
+        sol_signal = insert_signal(connection, "BUY", symbol="SOLUSDT", strategy_name="manual_test")
+        evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        evaluate_signal_id(connection, int(eth_signal["id"]), cooldown_seconds=0)
+        evaluate_signal_id(connection, int(sol_signal["id"]), cooldown_seconds=0)
+
+        execution_result = run_execution_job(connection, symbol_names=["BTCUSDT", "ETHUSDT"])
+
+        assert [step["step"] for step in execution_result["steps"]] == [
+            "paper_execute",
+            "paper_execute",
+            "update_positions",
+            "update_pnl",
+        ]
+        assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
+        order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
+        assert order_symbols == ["ETHUSDT", "BTCUSDT"]
+    finally:
+        connection.close()
+
+
 def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:
@@ -3808,6 +3851,48 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     finally:
         connection.close()
     assert any(item["component"] == "strategy_worker" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_run_scheduler_supports_execution_only_mode_with_symbols(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "execution-worker.log"
+    db_path = tmp_path / "scheduler-execution-heartbeat.db"
+    recorded = []
+
+    monkeypatch.setattr("app.scheduler.runner.EXECUTION_WORKER_LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "app.scheduler.runner.run_execution_job",
+        lambda connection, symbol_names=None: {
+            "status": "ok",
+            "steps": [
+                {"step": "paper_execute", "symbol": "BTCUSDT", "status": "FILLED", "side": "BUY"},
+                {"step": "paper_execute", "symbol": "ETHUSDT", "status": "FILLED", "side": "SELL"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="execution-only")
+
+    assert recorded == [{"status": "ok"}]
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mode=execution-only" in log_text
+    assert "symbols=BTCUSDT,ETHUSDT" in log_text
+    assert "execution=BTCUSDT=FILLED BUY;ETHUSDT=FILLED SELL" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(item["component"] == "execution_worker" and item["status"] == "ok" for item in heartbeats)
 
 
 def test_read_effective_active_strategies_respects_priority_and_disabled(monkeypatch, tmp_path) -> None:
