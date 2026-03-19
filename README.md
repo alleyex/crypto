@@ -545,6 +545,7 @@ Current Telegram alert triggers:
 - scheduler stop flag set
 - kill switch enabled
 - health becomes degraded or error
+- queue contains failed jobs
 
 Manual test endpoint:
 
@@ -553,6 +554,7 @@ Manual test endpoint:
 Deduplication:
 
 - health alerts are sent once per unique degraded/error state
+- queue failed-job alerts are sent once per unique failed queue state
 - when health returns to `ok`, the alert state is cleared
 
 Required environment variables:

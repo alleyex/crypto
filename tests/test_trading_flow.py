@@ -2336,6 +2336,10 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     called = []
     monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: called.append(report) or {"sent": False})
     monkeypatch.setattr(
+        "app.api.main.maybe_send_queue_alert",
+        lambda report: called.append(("queue", report)) or {"sent": False},
+    )
+    monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
     )
@@ -2356,7 +2360,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["scheduler"]["status"] == "ok"
     assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0
-    assert len(called) == 1
+    assert len(called) == 2
 
 
 def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(monkeypatch, tmp_path) -> None:
@@ -2382,6 +2386,10 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     called = []
     monkeypatch.setattr("app.api.main.maybe_send_health_alert", lambda report: called.append(report) or {"sent": False})
     monkeypatch.setattr(
+        "app.api.main.maybe_send_queue_alert",
+        lambda report: called.append(("queue", report)) or {"sent": False},
+    )
+    monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": True, "kill_switch_file": str(tmp_path / "kill.switch")},
     )
@@ -2396,7 +2404,7 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
-    assert len(called) == 1
+    assert len(called) == 2
 
 
 def test_maybe_send_health_alert_deduplicates_same_degraded_state(monkeypatch, tmp_path) -> None:
@@ -2493,6 +2501,55 @@ def test_maybe_send_health_alert_ignores_volatile_heartbeat_fields(monkeypatch, 
     assert first["sent"] is True
     assert second == {"sent": False, "reason": "Health alert already sent for current state."}
     assert len(sent_messages) == 1
+
+
+def test_maybe_send_queue_alert_deduplicates_same_failed_job(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "queue_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.queue.QUEUE_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.queue.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.queue import maybe_send_queue_alert
+
+    report = {
+        "status": "degraded",
+        "checks": {
+            "queue": {
+                "status": "degraded",
+                "counts": {"failed": 1, "queued": 0, "leased": 0, "completed": 2, "total": 3},
+                "latest_failed_job": {
+                    "id": 9,
+                    "job_type": "strategy",
+                    "attempt_count": 3,
+                    "error_message": "strategy failed",
+                },
+            }
+        },
+    }
+
+    first = maybe_send_queue_alert(report)
+    second = maybe_send_queue_alert(report)
+
+    assert first["sent"] is True
+    assert second == {"sent": False, "reason": "Queue alert already sent for current failed state."}
+    assert len(sent_messages) == 1
+
+
+def test_maybe_send_queue_alert_clears_state_when_queue_recovers(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "queue_alert_state.json"
+    monkeypatch.setattr("app.alerting.queue.QUEUE_ALERT_STATE_FILE", state_file)
+
+    from app.alerting.queue import maybe_send_queue_alert
+
+    state_file.write_text('{"fingerprint":"x","failed_count":1}', encoding="utf-8")
+    result = maybe_send_queue_alert({"status": "ok", "checks": {"queue": {"status": "ok", "counts": {"failed": 0}}}})
+
+    assert result == {"sent": False, "reason": "Queue has no failed jobs."}
+    assert not state_file.exists()
 
 
 def test_admin_page_is_served() -> None:

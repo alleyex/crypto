@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.admin.page import render_admin_page
 from app.alerting.health import maybe_send_health_alert
+from app.alerting.queue import maybe_send_queue_alert
 from app.alerting.telegram import send_telegram_message
 from app.alerting.telegram import telegram_configured
 from app.core.db import DB_FILE, get_connection
@@ -265,6 +266,8 @@ def _queue_check(connection: DBConnection) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": status,
         "counts": counts,
+        "latest_failed_job": summary.get("latest_failed_job"),
+        "latest_retry_job": summary.get("latest_retry_job"),
         "latest_jobs": summary["latest_jobs"],
     }
     if counts["failed"] > 0:
@@ -415,6 +418,7 @@ def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
     background_tasks.add_task(maybe_send_health_alert, report)
+    background_tasks.add_task(maybe_send_queue_alert, report)
     return report
 
 
