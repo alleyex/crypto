@@ -120,6 +120,12 @@ curl -s http://127.0.0.1:8000/scheduler/strategy
 curl -s -X POST http://127.0.0.1:8000/scheduler/strategy \
   -H "Content-Type: application/json" \
   -d '{"strategy_names":["ma_cross","momentum_3bar"]}'
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/preset \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"active_first"}'
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"top_2"}'
 ```
 
 Run the API locally:
@@ -341,6 +347,8 @@ Control endpoints:
 - `POST /scheduler/stop`
 - `POST /scheduler/start`
 - `POST /scheduler/strategy`
+- `POST /scheduler/strategy/preset`
+- `POST /scheduler/strategy/limit-preset`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -362,6 +370,12 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/start
 curl -s -X POST http://127.0.0.1:8000/scheduler/strategy \
   -H "Content-Type: application/json" \
   -d '{"strategy_names":["ma_cross","momentum_3bar"]}'
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/preset \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"reverse"}'
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"all_enabled"}'
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status
