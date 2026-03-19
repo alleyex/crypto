@@ -2064,6 +2064,72 @@ def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> N
     assert result["steps"][1]["strategy_name"] == "momentum_3bar"
 
 
+def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "market_data_symbols.db"
+    captured: dict[str, object] = {}
+
+    def fake_connection() -> sqlite3.Connection:
+        return sqlite3.connect(db_path)
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_migrations", lambda connection: None)
+
+    def fake_market_data_job(connection, symbol_names=None):
+        captured["market_data_symbols"] = list(symbol_names or [])
+        return {
+            "step": "save_klines",
+            "saved_klines": 10,
+            "symbol_names": symbol_names or [],
+            "symbol_results": [{"symbol": symbol, "saved_klines": 5} for symbol in (symbol_names or [])],
+        }
+
+    def fake_strategy_job(connection, strategy_name="ma_cross", symbol_names=None):
+        captured["strategy_symbols"] = list(symbol_names or [])
+        return {
+            "status": "ok",
+            "steps": [
+                {
+                    "step": "generate_signal",
+                    "strategy_name": strategy_name,
+                    "symbol": symbol_names[0],
+                    "signal_type": "BUY",
+                    "short_ma": 2.0,
+                    "long_ma": 1.0,
+                },
+                {
+                    "step": "evaluate_risk",
+                    "id": 11,
+                    "signal_id": 7,
+                    "strategy_name": strategy_name,
+                    "symbol": symbol_names[0],
+                    "decision": "APPROVED",
+                    "reason": "Passed basic risk checks.",
+                },
+            ],
+            "risk_event_ids": [11],
+        }
+
+    def fake_execution_job(connection, risk_event_ids=None):
+        captured["execution_risk_event_ids"] = list(risk_event_ids or [])
+        return {
+            "status": "ok",
+            "steps": [{"step": "paper_execute", "risk_event_id": 11, "symbol": "ETHUSDT", "status": "FILLED", "side": "BUY"}],
+        }
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_market_data_job", fake_market_data_job)
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_strategy_job", fake_strategy_job)
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_execution_job", fake_execution_job)
+
+    result = run_pipeline_collect(strategy_name="momentum_3bar", symbol_names=["ETHUSDT"])
+
+    assert result["requested_symbol_names"] == ["ETHUSDT"]
+    assert captured["market_data_symbols"] == ["ETHUSDT"]
+    assert captured["strategy_symbols"] == ["ETHUSDT"]
+    assert captured["execution_risk_event_ids"] == [11]
+
+
 def test_print_pipeline_result_includes_symbol_and_strategy_scope() -> None:
     buffer = StringIO()
     result = {
@@ -2443,6 +2509,7 @@ def test_admin_page_is_served() -> None:
     assert "Auto refresh every 10 seconds." in response.text
     assert 'id="heartbeats-json"' in response.text
     assert 'id="market-data-status"' in response.text
+    assert 'id="pipeline-symbol-select"' in response.text
     assert 'id="data-worker-status"' in response.text
     assert 'id="strategy-worker-status"' in response.text
     assert 'id="execution-worker-status"' in response.text
@@ -2559,22 +2626,29 @@ def test_root_redirects_to_admin() -> None:
 
 def test_pipeline_run_endpoint_accepts_strategy_name(monkeypatch) -> None:
     client = TestClient(app)
-    called: list[str] = []
+    called: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         "app.api.main.run_pipeline_collect",
-        lambda strategy_name="ma_cross": called.append(strategy_name) or {
+        lambda strategy_name="ma_cross", symbol_names=None: called.append(
+            {"strategy_name": strategy_name, "symbol_names": symbol_names}
+        ) or {
             "status": "completed",
             "strategy_name": strategy_name,
+            "requested_symbol_names": symbol_names,
             "steps": [],
         },
     )
 
-    response = client.post("/pipeline/run", json={"strategy_name": "momentum_3bar"})
+    response = client.post(
+        "/pipeline/run",
+        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"]},
+    )
 
     assert response.status_code == 200
     assert response.json()["strategy_name"] == "momentum_3bar"
-    assert called == ["momentum_3bar"]
+    assert response.json()["requested_symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert called == [{"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"]}]
 
 
 def test_strategies_endpoint_lists_registered_strategies() -> None:
@@ -3416,6 +3490,53 @@ def test_run_execution_job_executes_multiple_pending_risk_events() -> None:
             "update_pnl",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
+    finally:
+        connection.close()
+
+
+def test_run_execution_job_with_selected_risk_events_only_executes_current_run() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([20, 21, 22, 23, 24])],
+            symbol="ETHUSDT",
+        )
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([30, 31, 32, 33, 34])],
+            symbol="SOLUSDT",
+        )
+
+        existing_signal = insert_signal(connection, "BUY", symbol="SOLUSDT", strategy_name="manual_test")
+        existing_risk = evaluate_signal_id(connection, int(existing_signal["id"]), cooldown_seconds=0)
+        assert existing_risk is not None
+
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        eth_signal = insert_signal(connection, "BUY", symbol="ETHUSDT", strategy_name="manual_test")
+        btc_risk = evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        eth_risk = evaluate_signal_id(connection, int(eth_signal["id"]), cooldown_seconds=0)
+        assert btc_risk is not None
+        assert eth_risk is not None
+
+        execution_result = run_execution_job(connection, risk_event_ids=[btc_risk["id"], eth_risk["id"]])
+
+        assert [step["step"] for step in execution_result["steps"]] == [
+            "paper_execute",
+            "paper_execute",
+            "update_positions",
+            "update_pnl",
+        ]
+        assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
+        order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
+        assert order_symbols == ["ETHUSDT", "BTCUSDT"]
     finally:
         connection.close()
 

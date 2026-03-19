@@ -66,6 +66,8 @@ def run_strategy_job(
 
     return {
         "status": "ok",
+        "symbol_names": active_symbol_names,
+        "risk_event_ids": [int(result["id"]) for result in generated_risk_results],
         "steps": signal_steps + risk_steps,
     }
 

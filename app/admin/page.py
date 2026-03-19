@@ -479,6 +479,10 @@ def render_admin_page() -> str:
 __STRATEGY_OPTIONS__
             </select>
           </div>
+          <div class="inline-controls">
+            <label for="pipeline-symbol-select">Symbols</label>
+            <select id="pipeline-symbol-select" multiple size="3"></select>
+          </div>
           <div class="button-row">
             <button data-action="pipeline">Run Pipeline</button>
             <button class="secondary" data-refresh="all">Refresh Data</button>
@@ -1526,7 +1530,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
+        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -1540,6 +1544,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/validation/soak/history?limit=10"),
           api("/strategies"),
           api("/scheduler/strategy"),
+          api("/scheduler/symbols"),
         ]);
 
         window.__latestHealth = health;
@@ -1565,6 +1570,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
         if (schedulerEffectiveLimitInput) {
           schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
+        }
+        const pipelineSymbolSelect = el("pipeline-symbol-select");
+        if (pipelineSymbolSelect && schedulerSymbols?.available_symbols) {
+          pipelineSymbolSelect.innerHTML = schedulerSymbols.available_symbols
+            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
+            .join("");
+          const selectedSymbols = schedulerSymbols.symbol_names || [];
+          Array.from(pipelineSymbolSelect.options).forEach((option) => {
+            option.selected = selectedSymbols.includes(option.value);
+          });
         }
         renderSchedulerPriorityControls(schedulerStrategy);
         renderSchedulerDisabledNoteControls(schedulerStrategy);
@@ -1609,10 +1624,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               interval_seconds: AUTO_REFRESH_INTERVAL_MS / 1000,
             };
           } else if (type === "pipeline") {
+            const selectedSymbols = Array.from(el("pipeline-symbol-select")?.selectedOptions || []).map((option) => option.value);
             result = await api("/pipeline/run", {
               method: "POST",
               body: JSON.stringify({
                 strategy_name: el("pipeline-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
+                symbol_names: selectedSymbols,
               }),
             });
             el("pipeline-json").textContent = formatJson(result);

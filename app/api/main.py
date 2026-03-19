@@ -339,6 +339,7 @@ class AlertTestRequest(BaseModel):
 
 class PipelineRunRequest(BaseModel):
     strategy_name: str = DEFAULT_STRATEGY_NAME
+    symbol_names: Optional[List[str]] = None
 
 
 class SchedulerStrategyRequest(BaseModel):
@@ -501,7 +502,8 @@ def pnl(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
 @app.post("/pipeline/run")
 def run_pipeline_endpoint(payload: Optional[PipelineRunRequest] = None) -> dict:
     strategy_name = payload.strategy_name if payload is not None else DEFAULT_STRATEGY_NAME
-    return run_pipeline_collect(strategy_name=strategy_name)
+    symbol_names = payload.symbol_names if payload is not None else None
+    return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
 
 
 @app.post("/signals/test")

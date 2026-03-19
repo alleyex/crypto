@@ -150,7 +150,10 @@ def _initial_pipeline_failure_result(
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
 
-def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str, Any]:
+def run_pipeline_collect(
+    strategy_name: str = DEFAULT_STRATEGY_NAME,
+    symbol_names: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     database_label = get_database_label()
     try:
         connection = get_connection()
@@ -161,6 +164,8 @@ def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str
     except Exception as exc:
         return _initial_pipeline_failure_result(database_label, "run_migrations", exc, strategy_name)
     result: Dict[str, Any] = {"database": database_label, "strategy_name": strategy_name, "steps": []}
+    if symbol_names is not None:
+        result["requested_symbol_names"] = list(dict.fromkeys(symbol_names))
     _safe_record_heartbeat(
         component="pipeline",
         status="started",
@@ -199,10 +204,10 @@ def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str
         current_step = "save_klines"
         try:
             run_migrations(connection)
-            result["steps"].append(run_market_data_job(connection))
+            result["steps"].append(run_market_data_job(connection, symbol_names=symbol_names))
 
             current_step = "generate_signal"
-            strategy_job_result = run_strategy_job(connection, strategy_name=strategy_name)
+            strategy_job_result = run_strategy_job(connection, strategy_name=strategy_name, symbol_names=symbol_names)
             result["steps"].extend(strategy_job_result["steps"])
             if strategy_job_result.get("status") == "completed":
                 return _finalize_result(
@@ -212,7 +217,7 @@ def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str
                 )
 
             current_step = "paper_execute"
-            execution_job_result = run_execution_job(connection)
+            execution_job_result = run_execution_job(connection, risk_event_ids=strategy_job_result.get("risk_event_ids"))
             result["steps"].extend(execution_job_result["steps"])
         except Exception as exc:
             return _pipeline_failure_result(result, current_step, exc)

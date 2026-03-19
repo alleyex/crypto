@@ -188,3 +188,16 @@ def execute_pending_approved_risks(
         if execution_result is not None:
             execution_results.append(execution_result)
     return execution_results
+
+
+def execute_risk_event_ids(
+    connection: DBConnection,
+    risk_event_ids: List[int],
+    order_qty: float = 0.001,
+) -> List[Dict[str, Union[float, str, int]]]:
+    execution_results: List[Dict[str, Union[float, str, int]]] = []
+    for risk_event_id in list(dict.fromkeys(risk_event_ids)):
+        execution_result = execute_risk_event_id(connection, int(risk_event_id), order_qty=order_qty)
+        if execution_result is not None:
+            execution_results.append(execution_result)
+    return execution_results
