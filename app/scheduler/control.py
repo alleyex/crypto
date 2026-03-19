@@ -3,6 +3,8 @@ from typing import Dict, List, Tuple, Union
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
 from app.scheduler.runner import LOG_FILE
+from app.scheduler.runner import get_scheduler_log_file
+from app.scheduler.runner import get_scheduler_log_files
 from app.scheduler.runner import RUNTIME_DIR
 from app.scheduler.runner import STOP_FILE
 
@@ -49,8 +51,17 @@ def get_stop_status() -> Dict[str, Union[str, bool]]:
     }
 
 
-def read_scheduler_log(lines: int = 50) -> List[str]:
-    if not LOG_FILE.exists():
-        return []
-    content = LOG_FILE.read_text(encoding="utf-8").splitlines()
-    return content[-lines:]
+def read_scheduler_log(lines: int = 50, mode: str = "all") -> List[str]:
+    if mode != "all":
+        log_file = get_scheduler_log_file(mode)
+        if not log_file.exists():
+            return []
+        content = log_file.read_text(encoding="utf-8").splitlines()
+        return content[-lines:]
+
+    combined: list[str] = []
+    for log_file in get_scheduler_log_files().values():
+        if log_file.exists():
+            combined.extend(log_file.read_text(encoding="utf-8").splitlines())
+    combined.sort()
+    return combined[-lines:]

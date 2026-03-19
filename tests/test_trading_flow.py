@@ -2483,11 +2483,11 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
 
 
 def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> None:
-    log_path = tmp_path / "scheduler-strategy.log"
+    log_path = tmp_path / "strategy-worker.log"
     db_path = tmp_path / "scheduler-strategy-heartbeat.db"
     recorded = []
 
-    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
@@ -2521,6 +2521,35 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     finally:
         connection.close()
     assert any(item["component"] == "strategy_worker" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_read_scheduler_log_aggregates_split_worker_logs(monkeypatch, tmp_path) -> None:
+    pipeline_log = tmp_path / "scheduler.log"
+    data_log = tmp_path / "data-worker.log"
+    strategy_log = tmp_path / "strategy-worker.log"
+
+    pipeline_log.write_text("[2026-03-19T10:00:01] run=1 mode=pipeline signal=BUY\n", encoding="utf-8")
+    data_log.write_text("[2026-03-19T10:00:02] run=1 mode=market-data-only signal=n/a\n", encoding="utf-8")
+    strategy_log.write_text("[2026-03-19T10:00:03] run=1 mode=strategy-only signal=BUY\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "app.scheduler.control.get_scheduler_log_files",
+        lambda: {
+            "pipeline": pipeline_log,
+            "market-data-only": data_log,
+            "strategy-only": strategy_log,
+            "execution-only": tmp_path / "execution-worker.log",
+        },
+    )
+
+    from app.scheduler.control import read_scheduler_log
+
+    lines = read_scheduler_log(lines=2, mode="all")
+
+    assert lines == [
+        "[2026-03-19T10:00:02] run=1 mode=market-data-only signal=n/a",
+        "[2026-03-19T10:00:03] run=1 mode=strategy-only signal=BUY",
+    ]
 
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:

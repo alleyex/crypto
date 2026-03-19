@@ -230,6 +230,14 @@ Read scheduler log:
 python scripts/read_scheduler_log.py
 ```
 
+Read scheduler logs by mode through the API:
+
+```bash
+curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=all"
+curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=pipeline"
+curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=strategy-only"
+```
+
 Read soak validation summary:
 
 ```bash
@@ -314,6 +322,7 @@ Control endpoints:
 - `POST /scheduler/stop`
 - `POST /scheduler/start`
 - `GET /scheduler/logs?lines=20`
+- `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
 - `POST /kill-switch/enable`
 - `POST /kill-switch/disable`
@@ -330,6 +339,7 @@ curl -s http://127.0.0.1:8000/scheduler/status
 curl -s -X POST http://127.0.0.1:8000/scheduler/stop
 curl -s -X POST http://127.0.0.1:8000/scheduler/start
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
+curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status
 curl -s -X POST http://127.0.0.1:8000/kill-switch/enable
 curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
@@ -404,6 +414,10 @@ Logs:
 - Scheduler stop flag: `runtime/scheduler.stop`
 - Kill switch flag: `runtime/kill.switch`
 - Scheduler log: `logs/scheduler.log`
+- Split worker logs:
+  - `logs/data-worker.log`
+  - `logs/strategy-worker.log`
+  - `logs/execution-worker.log`
 
 ## Current Limitations
 

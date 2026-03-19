@@ -43,6 +43,7 @@ from app.scheduler.control import clear_stop_flag
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
 from app.scheduler.control import set_stop_flag
+from app.scheduler.runner import LOG_DIR
 from app.scheduler.runner import LOG_FILE
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
@@ -120,8 +121,8 @@ def _scheduler_check() -> dict[str, Any]:
         "status": status,
         "stopped": stop_status["stopped"],
         "stop_file": stop_status["stop_file"],
-        "log_file": str(LOG_FILE),
-        "log_exists": LOG_FILE.exists(),
+        "log_file": str(LOG_DIR),
+        "log_exists": bool(log_lines) or LOG_FILE.exists(),
         "last_log_line": log_lines[0] if log_lines else None,
     }
     if stop_status["stopped"]:
@@ -476,8 +477,11 @@ def scheduler_start() -> Dict[str, Union[str, bool]]:
 
 
 @app.get("/scheduler/logs")
-def scheduler_logs(lines: int = Query(default=20, ge=1, le=500)) -> Dict[str, List[str]]:
-    return {"lines": read_scheduler_log(lines=lines)}
+def scheduler_logs(
+    lines: int = Query(default=20, ge=1, le=500),
+    mode: str = Query(default="all"),
+) -> Dict[str, Any]:
+    return {"mode": mode, "lines": read_scheduler_log(lines=lines, mode=mode)}
 
 
 @app.get("/kill-switch/status")

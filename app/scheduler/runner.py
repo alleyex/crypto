@@ -14,6 +14,9 @@ from app.system.heartbeat import record_heartbeat
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "scheduler.log"
+DATA_WORKER_LOG_FILE = LOG_DIR / "data-worker.log"
+STRATEGY_WORKER_LOG_FILE = LOG_DIR / "strategy-worker.log"
+EXECUTION_WORKER_LOG_FILE = LOG_DIR / "execution-worker.log"
 RUNTIME_DIR = Path("runtime")
 STOP_FILE = RUNTIME_DIR / "scheduler.stop"
 SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-only")
@@ -40,9 +43,30 @@ def _summarize_result(result: dict) -> str:
     return f"signal={signal} risk={decision} execution={execution}"
 
 
-def _write_log(line: str) -> None:
+def get_scheduler_log_file(mode: str = "pipeline") -> Path:
+    if mode == "pipeline":
+        return LOG_FILE
+    if mode == "market-data-only":
+        return DATA_WORKER_LOG_FILE
+    if mode == "strategy-only":
+        return STRATEGY_WORKER_LOG_FILE
+    if mode == "execution-only":
+        return EXECUTION_WORKER_LOG_FILE
+    raise ValueError(f"Unsupported scheduler mode: {mode}")
+
+
+def get_scheduler_log_files() -> dict[str, Path]:
+    return {
+        "pipeline": LOG_FILE,
+        "market-data-only": DATA_WORKER_LOG_FILE,
+        "strategy-only": STRATEGY_WORKER_LOG_FILE,
+        "execution-only": EXECUTION_WORKER_LOG_FILE,
+    }
+
+
+def _write_log(line: str, mode: str = "pipeline") -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    with LOG_FILE.open("a", encoding="utf-8") as file:
+    with get_scheduler_log_file(mode).open("a", encoding="utf-8") as file:
         file.write(line + "\n")
 
 
@@ -91,14 +115,14 @@ def _record_soak_snapshot() -> None:
             f"soak_snapshot status={report.get('status', 'unknown')}"
         )
         print(snapshot_line)
-        _write_log(snapshot_line)
+        _write_log(snapshot_line, mode="pipeline")
     except Exception as exc:
         error_line = (
             f"[{datetime.now().isoformat(timespec='seconds')}] "
             f"soak_snapshot failed: {exc}"
         )
         print(error_line)
-        _write_log(error_line)
+        _write_log(error_line, mode="pipeline")
 
 
 def run_scheduler(
@@ -124,7 +148,7 @@ def run_scheduler(
             stopped_at = datetime.now().isoformat(timespec="seconds")
             log_line = f"[{stopped_at}] scheduler stopped by flag: {STOP_FILE}"
             print(log_line)
-            _write_log(log_line)
+            _write_log(log_line, mode)
             record_heartbeat(
                 component=component,
                 status="stopped",
@@ -145,7 +169,7 @@ def run_scheduler(
         summary = _summarize_result(result)
         log_line = f"[{started_at}] run={run_count} mode={mode} {summary}"
         print(log_line)
-        _write_log(log_line)
+        _write_log(log_line, mode)
         record_heartbeat(
             component=component,
             status="ok",
