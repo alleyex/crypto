@@ -2266,6 +2266,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'data-promote-strategy="' in response.text
+    assert 'data-disable-strategy="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text
     assert 'id="selected-strategy-board"' in response.text
     assert 'id="strategy-sort-select"' in response.text
@@ -2299,6 +2300,7 @@ def test_admin_page_is_served() -> None:
     assert "Disabled Reason" in response.text
     assert "LIMITED" in response.text
     assert "Promote" in response.text
+    assert "Disable" in response.text
     assert "Selected Strategy Details" in response.text
     assert "Select a strategy card to inspect a single strategy." in response.text
     assert "Closed Trades" in response.text

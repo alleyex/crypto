@@ -1058,6 +1058,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <strong>${item.strategy_name}</strong>
                 <div class="strategy-card-actions">
                   ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
+                  ${strategyEntry.enabled !== false ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>` : ""}
                   <span class="${enabledClass}">${enabledLabel}</span>
                 </div>
               </div>
@@ -1238,6 +1239,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const nextPriority = currentValues.length ? Math.min(...currentValues) - 1 : 0;
         priorities[strategyName] = nextPriority;
         payload.strategy_priorities = priorities;
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
+      async function disableStrategy(strategyName) {
+        const payload = collectSchedulerStrategyPayload();
+        const disabledStrategies = Array.from(new Set([...(payload.disabled_strategy_names || []), strategyName]));
+        payload.disabled_strategy_names = disabledStrategies;
+        if (!payload.disabled_strategy_notes[strategyName]) {
+          payload.disabled_strategy_notes[strategyName] = "Disabled from strategy leaderboard.";
+        }
         const result = await api("/scheduler/strategy", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -1442,6 +1458,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const promoteButton = event.target.closest("[data-promote-strategy]");
         if (promoteButton) {
           promoteStrategyPriority(promoteButton.dataset.promoteStrategy).catch((error) => {
+            el("scheduler-message").textContent = `Error:\n${error.message}`;
+          });
+          return;
+        }
+        const disableButton = event.target.closest("[data-disable-strategy]");
+        if (disableButton) {
+          disableStrategy(disableButton.dataset.disableStrategy).catch((error) => {
             el("scheduler-message").textContent = `Error:\n${error.message}`;
           });
           return;
