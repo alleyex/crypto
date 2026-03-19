@@ -256,6 +256,50 @@ def render_admin_page() -> str:
         margin-bottom: 16px;
       }
 
+      .strategy-board {
+        display: grid;
+        gap: 12px;
+      }
+
+      .strategy-card {
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: #0b1219;
+        border-radius: 16px;
+        padding: 16px;
+      }
+
+      .strategy-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .strategy-card-header strong {
+        font-size: 16px;
+      }
+
+      .strategy-card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 12px;
+        font-size: 12px;
+      }
+
+      .strategy-metric {
+        color: var(--muted);
+      }
+
+      .strategy-metric strong {
+        color: var(--text);
+        display: block;
+        margin-bottom: 2px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
       pre {
         margin: 0;
         padding: 16px;
@@ -443,8 +487,10 @@ __STRATEGY_OPTIONS__
         </article>
         <article class="panel data-card">
           <h2>Strategy Activity</h2>
-          <p>Latest signal, risk, and order snapshot grouped by strategy.</p>
-          <pre id="strategy-summary-json">Loading...</pre>
+          <p>Latest signal, risk, fills, and trade outcomes grouped by strategy.</p>
+          <div class="strategy-board" id="strategy-summary-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
         </article>
         <article class="panel data-card">
           <h2>PnL Snapshots</h2>
@@ -711,6 +757,48 @@ __STRATEGY_OPTIONS__
         });
       }
 
+      function updateStrategySummary(strategySummary) {
+        const board = el("strategy-summary-board");
+        if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No strategy activity recorded yet.</div>';
+          return;
+        }
+
+        board.innerHTML = strategySummary.map((item) => {
+          const latestSignal = item.latest_signal?.signal_type || "none";
+          const latestRisk = item.latest_risk?.decision || "none";
+          const latestOrder = item.latest_order?.status || "none";
+          const latestFill = item.latest_fill?.side || "none";
+          const pnl = Number(item.gross_realized_pnl || 0).toFixed(6);
+          const pnlClass = Number(item.gross_realized_pnl || 0) > 0
+            ? "ok"
+            : Number(item.gross_realized_pnl || 0) < 0
+              ? "bad"
+              : "warn";
+
+          return `
+            <div class="strategy-card">
+              <div class="strategy-card-header">
+                <strong>${item.strategy_name}</strong>
+                <span class="${item.has_activity ? "ok" : "warn"}">${item.has_activity ? "ACTIVE" : "IDLE"}</span>
+              </div>
+              <div class="strategy-card-grid">
+                <div class="strategy-metric"><strong>Signal</strong>${latestSignal}</div>
+                <div class="strategy-metric"><strong>Risk</strong>${latestRisk}</div>
+                <div class="strategy-metric"><strong>Order</strong>${latestOrder}</div>
+                <div class="strategy-metric"><strong>Fill</strong>${latestFill}</div>
+                <div class="strategy-metric"><strong>Filled Orders</strong>${item.filled_order_count}</div>
+                <div class="strategy-metric"><strong>Filled Qty</strong>${item.filled_qty_total}</div>
+                <div class="strategy-metric"><strong>Net Qty</strong>${item.net_position_qty}</div>
+                <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${pnl}</span></div>
+                <div class="strategy-metric"><strong>Wins</strong>${item.winning_trade_count}</div>
+                <div class="strategy-metric"><strong>Losses</strong>${item.losing_trade_count}</div>
+              </div>
+            </div>
+          `;
+        }).join("");
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -778,11 +866,11 @@ __STRATEGY_OPTIONS__
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
         updateSoakValidation(soakReport, soakHistory);
+        updateStrategySummary(strategySummary);
         updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
-        el("strategy-summary-json").textContent = formatJson(strategySummary);
         el("pnl-json").textContent = formatJson(pnl);
         el("logs-json").textContent = formatJson(logs);
         el("audit-json").textContent = formatJson(auditEvents);
