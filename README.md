@@ -353,6 +353,7 @@ Control endpoints:
 - `POST /scheduler/strategy/preset`
 - `POST /scheduler/strategy/limit-preset`
 - `GET /queue/jobs`
+- `GET /queue/summary`
 - `POST /queue/jobs`
 - `POST /queue/jobs/run-next`
 - `GET /scheduler/logs?lines=20`
@@ -390,6 +391,7 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
   -H "Content-Type: application/json" \
   -d '{"preset":"all_enabled"}'
 curl -s http://127.0.0.1:8000/queue/jobs
+curl -s http://127.0.0.1:8000/queue/summary
 curl -s -X POST http://127.0.0.1:8000/queue/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'

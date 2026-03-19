@@ -466,6 +466,11 @@ def render_admin_page() -> str:
             <div class="value" id="alerting-runtime-status">Loading</div>
             <div class="inline-note" id="alerting-runtime-detail">Checking alerting heartbeat...</div>
           </div>
+          <div class="side-stat">
+            <label>Queue</label>
+            <div class="value" id="queue-status">Loading</div>
+            <div class="inline-note" id="queue-detail">Checking queued worker jobs...</div>
+          </div>
         </div>
       </section>
 
@@ -690,6 +695,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           </div>
         </article>
         <article class="panel data-card">
+          <h2>Queue Summary</h2>
+          <p>Queued worker job counts and the latest queue entries.</p>
+          <pre id="queue-json">Loading...</pre>
+        </article>
+        <article class="panel data-card">
           <h2>Audit Events</h2>
           <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
           <pre id="audit-json">Loading...</pre>
@@ -838,6 +848,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const killSwitch = health.checks.kill_switch;
         el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";
         el("kill-switch-status").className = `value ${statusClass(killSwitch.status)}`;
+        const queue = health.checks.queue || { status: "degraded", counts: {} };
+        el("queue-status").textContent = String(queue.status || "unknown").toUpperCase();
+        el("queue-status").className = `value ${statusClass(queue.status)}`;
+        const queueCounts = queue.counts || {};
+        el("queue-detail").textContent = `queued=${queueCounts.queued ?? 0} leased=${queueCounts.leased ?? 0} failed=${queueCounts.failed ?? 0}`;
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 
@@ -1542,7 +1557,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols] = await Promise.all([
+        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols, queueSummary] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -1557,6 +1572,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/strategies"),
           api("/scheduler/strategy"),
           api("/scheduler/symbols"),
+          api("/queue/summary"),
         ]);
 
         window.__latestHealth = health;
@@ -1620,6 +1636,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("pnl-json").textContent = formatJson(pnl);
         el("logs-json").textContent = formatJson(logs);
         el("audit-json").textContent = formatJson(auditEvents);
+        el("queue-json").textContent = formatJson(queueSummary);
       }
 
       async function runAction(type) {

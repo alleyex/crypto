@@ -2522,6 +2522,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-worker-status"' in response.text
     assert 'id="execution-worker-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
+    assert 'id="queue-status"' in response.text
+    assert 'id="queue-json"' in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
@@ -2623,6 +2625,62 @@ def test_admin_page_is_served() -> None:
     assert "FRESH" in response.text
     assert "STALE" in response.text
     assert "IDLE" in response.text
+
+
+def test_queue_summary_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.api.main.get_job_queue_summary",
+        lambda connection: {
+            "counts": {"queued": 2, "leased": 1, "completed": 4, "failed": 1, "total": 8},
+            "latest_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
+        },
+    )
+
+    response = client.get("/queue/summary")
+
+    assert response.status_code == 200
+    assert response.json()["counts"]["queued"] == 2
+    assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
+
+
+def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.api.main.get_connection",
+        lambda: sqlite3.connect(":memory:"),
+    )
+    monkeypatch.setattr(
+        "app.api.main.get_database_info",
+        lambda: {"backend": "sqlite", "sqlite_path": ":memory:"},
+    )
+    monkeypatch.setattr("app.api.main._database_check", lambda connection: {"status": "ok"})
+    monkeypatch.setattr("app.api.main._candle_check", lambda connection: {"status": "ok"})
+    monkeypatch.setattr("app.api.main._pipeline_check", lambda connection: {"status": "ok"})
+    monkeypatch.setattr(
+        "app.api.main._queue_check",
+        lambda connection: {
+            "status": "degraded",
+            "counts": {"queued": 1, "leased": 0, "completed": 3, "failed": 1, "total": 5},
+            "latest_jobs": [{"id": 4, "job_type": "execution", "status": "failed"}],
+            "reason": "Queue contains failed jobs.",
+        },
+    )
+    monkeypatch.setattr("app.api.main._heartbeat_check", lambda connection: {"status": "ok", "components": []})
+    monkeypatch.setattr(
+        "app.api.main.get_stop_status",
+        lambda: {"stopped": False, "stop_file": "runtime/scheduler.stop"},
+    )
+    monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
+    monkeypatch.setattr(
+        "app.api.main.get_kill_switch_status",
+        lambda: {"enabled": False, "kill_switch_file": "runtime/kill.switch"},
+    )
+
+    report = __import__("app.api.main", fromlist=["build_health_report"]).build_health_report()
+
+    assert report["status"] == "degraded"
+    assert report["checks"]["queue"]["status"] == "degraded"
+    assert report["checks"]["queue"]["counts"]["failed"] == 1
 
 
 def test_root_redirects_to_admin() -> None:

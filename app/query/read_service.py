@@ -201,6 +201,32 @@ def get_job_queue_jobs(connection: DBConnection, limit: int = 20) -> list[dict[s
     return normalized
 
 
+def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
+    rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT
+            status,
+            COUNT(*) AS job_count
+        FROM job_queue
+        GROUP BY status
+        ORDER BY status ASC;
+        """,
+    )
+    counts = {str(row["status"]): int(row["job_count"]) for row in rows}
+    latest_jobs = get_job_queue_jobs(connection, limit=5)
+    return {
+        "counts": {
+            "queued": counts.get("queued", 0),
+            "leased": counts.get("leased", 0),
+            "completed": counts.get("completed", 0),
+            "failed": counts.get("failed", 0),
+            "total": sum(counts.values()),
+        },
+        "latest_jobs": latest_jobs,
+    }
+
+
 def get_strategy_activity_summary(
     connection: DBConnection,
     per_table_limit: int = 100,

@@ -42,6 +42,7 @@ from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_candles
 from app.query.read_service import get_audit_events
 from app.query.read_service import get_fills
+from app.query.read_service import get_job_queue_summary
 from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
@@ -256,6 +257,20 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     return result
 
 
+def _queue_check(connection: DBConnection) -> dict[str, Any]:
+    summary = get_job_queue_summary(connection)
+    counts = summary["counts"]
+    status = "degraded" if counts["failed"] > 0 else "ok"
+    result: dict[str, Any] = {
+        "status": status,
+        "counts": counts,
+        "latest_jobs": summary["latest_jobs"],
+    }
+    if counts["failed"] > 0:
+        result["reason"] = "Queue contains failed jobs."
+    return result
+
+
 def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
     heartbeats = get_heartbeats(connection)
     if not heartbeats:
@@ -295,6 +310,7 @@ def build_health_report() -> dict[str, Any]:
         checks["database"] = _database_check(connection)
         checks["candles"] = _candle_check(connection)
         checks["pipeline"] = _pipeline_check(connection)
+        checks["queue"] = _queue_check(connection)
         checks["heartbeats"] = _heartbeat_check(connection)
     except DBError as exc:
         checks["database"] = {
@@ -453,6 +469,15 @@ def queue_jobs(
     connection = get_connection()
     try:
         return list_queue_jobs(connection, limit=limit, status=status, job_type=job_type)
+    finally:
+        connection.close()
+
+
+@app.get("/queue/summary")
+def queue_summary() -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        return get_job_queue_summary(connection)
     finally:
         connection.close()
 
