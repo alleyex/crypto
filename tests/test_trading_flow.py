@@ -2278,6 +2278,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="closed-trades-reset-button"' in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "effective order:" in response.text
+    assert "disabled notes:" in response.text
     assert "warning: no enabled active strategies" in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
@@ -2291,6 +2292,7 @@ def test_admin_page_is_served() -> None:
     assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
     assert "Latest Closed PnL" in response.text
+    assert "Disabled Reason" in response.text
     assert "Selected Strategy Details" in response.text
     assert "Select a strategy card to inspect a single strategy." in response.text
     assert "Closed Trades" in response.text

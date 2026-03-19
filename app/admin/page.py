@@ -754,10 +754,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (schedulerStrategy) {
           const effectiveOrder = schedulerStrategy.effective_strategy_names || schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name];
           const orderLabel = effectiveOrder.length ? effectiveOrder.join(" -> ") : "none";
+          const disabledNotes = Object.entries(schedulerStrategy.disabled_strategy_notes || {})
+            .map(([name, note]) => `${name}: ${note}`);
           const warning = effectiveOrder.length
             ? ""
             : " | warning: no enabled active strategies"
-          el("scheduler-detail").textContent = `effective order: ${orderLabel}${warning}`;
+          const disabledSummary = disabledNotes.length
+            ? ` | disabled notes: ${disabledNotes.join("; ")}`
+            : "";
+          el("scheduler-detail").textContent = `effective order: ${orderLabel}${warning}${disabledSummary}`;
         } else {
           el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
         }
@@ -970,6 +975,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
+        const strategyEntries = window.__schedulerStrategyStatus?.strategy_entries || [];
+        const strategyEntryMap = Object.fromEntries(strategyEntries.map((item) => [item.strategy_name, item]));
         const filteredStrategies = strategySummary.filter((item) => matchesStrategyFilter(item, classifyStrategyActivity(item)));
 
         const sortedStrategies = [...filteredStrategies].sort((left, right) => {
@@ -987,6 +994,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         board.innerHTML = sortedStrategies.map((item) => {
           const activityState = classifyStrategyActivity(item);
+          const strategyEntry = strategyEntryMap[item.strategy_name] || {};
           const latestSignal = item.latest_signal?.signal_type || "none";
           const latestRisk = item.latest_risk?.decision || "none";
           const latestOrder = item.latest_order?.status || "none";
@@ -1014,18 +1022,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : Number(item.gross_realized_pnl || 0) < 0
               ? "bad"
               : "warn";
+          const enabledLabel = strategyEntry.enabled === false ? "DISABLED" : activityState.label;
+          const enabledClass = strategyEntry.enabled === false ? "bad" : activityState.className;
+          const disabledReason = strategyEntry.disabled_reason || "none";
 
           return `
             <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
               <div class="strategy-card-header">
                 <strong>${item.strategy_name}</strong>
-                <span class="${activityState.className}">${activityState.label}</span>
+                <span class="${enabledClass}">${enabledLabel}</span>
               </div>
               <div class="strategy-card-grid">
                 <div class="strategy-metric"><strong>Signal</strong>${latestSignal}</div>
                 <div class="strategy-metric"><strong>Risk</strong>${latestRisk}</div>
                 <div class="strategy-metric"><strong>Order</strong>${latestOrder}</div>
                 <div class="strategy-metric"><strong>Fill</strong>${latestFill}</div>
+                <div class="strategy-metric"><strong>Disabled Reason</strong>${disabledReason}</div>
                 <div class="strategy-metric"><strong>Filled Orders</strong>${item.filled_order_count}</div>
                 <div class="strategy-metric"><strong>Filled Qty</strong>${item.filled_qty_total}</div>
                 <div class="strategy-metric"><strong>Net Qty</strong>${item.net_position_qty}</div>
