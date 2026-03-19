@@ -327,13 +327,22 @@ def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
     try:
         monkeypatch.setattr(
             "app.strategy.registry.STRATEGY_REGISTRY",
-            {"ma_cross": lambda conn: {"strategy_name": "ma_cross", "signal_type": "BUY", "short_ma": 3.0, "long_ma": 2.0}},
+            {
+                "ma_cross": lambda conn, symbol="BTCUSDT": {
+                    "strategy_name": "ma_cross",
+                    "symbol": symbol,
+                    "signal_type": "BUY",
+                    "short_ma": 3.0,
+                    "long_ma": 2.0,
+                }
+            },
         )
 
         result = generate_registered_signal(connection, strategy_name="ma_cross")
 
         assert result == {
             "strategy_name": "ma_cross",
+            "symbol": "BTCUSDT",
             "signal_type": "BUY",
             "short_ma": 3.0,
             "long_ma": 2.0,
@@ -3158,9 +3167,9 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         )
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross": {
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
                 "id": 1,
-                "symbol": "BTCUSDT",
+                "symbol": symbol,
                 "timeframe": "1m",
                 "strategy_name": strategy_name,
                 "signal_type": "BUY",
@@ -3206,9 +3215,9 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
         monkeypatch.setattr("app.pipeline.strategy_job.ensure_risk_table", lambda conn: None)
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross": {
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
                 "id": 11,
-                "symbol": "BTCUSDT",
+                "symbol": symbol,
                 "timeframe": "1m",
                 "strategy_name": strategy_name,
                 "signal_type": "BUY",
@@ -3234,6 +3243,7 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
 
         assert result["status"] == "ok"
         assert result["steps"][0]["strategy_name"] == "ma_cross"
+        assert result["steps"][0]["symbol"] == "BTCUSDT"
         assert result["steps"][1]["strategy_name"] == "ma_cross"
     finally:
         connection.close()
@@ -3244,7 +3254,7 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
     try:
         monkeypatch.setattr(
             "app.pipeline.strategy_job.run_strategy_job",
-            lambda conn, strategy_name="ma_cross": {
+            lambda conn, strategy_name="ma_cross", symbol_names=None: {
                 "status": "ok",
                 "steps": [
                     {"step": "generate_signal", "strategy_name": strategy_name, "signal_type": "BUY"},
@@ -3261,6 +3271,47 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
             "ma_cross",
             "momentum_3bar",
         ]
+    finally:
+        connection.close()
+
+
+def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        monkeypatch.setattr("app.pipeline.strategy_job.ensure_signals_table", lambda conn: None)
+        monkeypatch.setattr("app.pipeline.strategy_job.ensure_positions_table", lambda conn: None)
+        monkeypatch.setattr("app.pipeline.strategy_job.ensure_risk_table", lambda conn: None)
+        monkeypatch.setattr(
+            "app.pipeline.strategy_job.generate_registered_signal",
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
+                "id": 11 if symbol == "BTCUSDT" else 12,
+                "symbol": symbol,
+                "timeframe": "1m",
+                "strategy_name": strategy_name,
+                "signal_type": "BUY",
+                "short_ma": 4.0,
+                "long_ma": 3.0,
+            },
+        )
+        monkeypatch.setattr(
+            "app.pipeline.strategy_job.evaluate_latest_signal",
+            lambda conn: {
+                "id": 22,
+                "signal_id": 12,
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+                "strategy_name": "ma_cross",
+                "signal_type": "BUY",
+                "decision": "APPROVED",
+                "reason": "Passed basic risk checks.",
+            },
+        )
+
+        result = run_strategy_job(connection, strategy_name="ma_cross", symbol_names=["BTCUSDT", "ETHUSDT"])
+
+        assert result["status"] == "ok"
+        assert [step["step"] for step in result["steps"]] == ["generate_signal", "generate_signal", "evaluate_risk"]
+        assert [step["symbol"] for step in result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
     finally:
         connection.close()
 

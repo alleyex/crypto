@@ -6,15 +6,15 @@ from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar
 
 
 StrategyResult = Optional[Dict[str, Union[float, str]]]
-StrategyGenerator = Callable[[DBConnection], StrategyResult]
+StrategyGenerator = Callable[[DBConnection, str], StrategyResult]
 
 
-def _run_ma_cross(connection: DBConnection) -> StrategyResult:
-    return generate_ma_cross_signal(connection)
+def _run_ma_cross(connection: DBConnection, symbol: str) -> StrategyResult:
+    return generate_ma_cross_signal(connection, symbol=symbol)
 
 
-def _run_momentum_3bar(connection: DBConnection) -> StrategyResult:
-    return generate_momentum_3bar_signal(connection)
+def _run_momentum_3bar(connection: DBConnection, symbol: str) -> StrategyResult:
+    return generate_momentum_3bar_signal(connection, symbol=symbol)
 
 
 STRATEGY_REGISTRY: dict[str, StrategyGenerator] = {
@@ -36,6 +36,7 @@ def get_strategy(name: str) -> StrategyGenerator:
 def generate_registered_signal(
     connection: DBConnection,
     strategy_name: str = "ma_cross",
+    symbol: str = "BTCUSDT",
 ) -> StrategyResult:
     strategy = get_strategy(strategy_name)
-    return strategy(connection)
+    return strategy(connection, symbol)
