@@ -6,17 +6,22 @@ from app.portfolio.positions_service import ensure_table as ensure_positions_tab
 from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
-from app.strategy.ma_cross import generate_signal
+from app.strategy.registry import generate_registered_signal
 
 
-def run_strategy_job(connection: DBConnection) -> Dict[str, Any]:
+def run_strategy_job(connection: DBConnection, strategy_name: str = "ma_cross") -> Dict[str, Any]:
     ensure_signals_table(connection)
-    signal_result = generate_signal(connection)
+    signal_result = generate_registered_signal(connection, strategy_name=strategy_name)
     if signal_result is None:
         return {
             "status": "completed",
             "steps": [
-                {"step": "generate_signal", "status": "skipped", "reason": "Not enough candle data"},
+                {
+                    "step": "generate_signal",
+                    "status": "skipped",
+                    "reason": "Not enough candle data",
+                    "strategy_name": strategy_name,
+                },
             ],
             "terminal_message": "Pipeline run completed with skipped signal generation.",
         }
