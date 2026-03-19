@@ -2287,6 +2287,9 @@ def test_admin_page_is_served() -> None:
     assert "Latest Closed PnL" in response.text
     assert "Selected Strategy Details" in response.text
     assert "Select a strategy card to inspect a single strategy." in response.text
+    assert "Closed Trades" in response.text
+    assert "Win Rate" in response.text
+    assert "Last Closed Result" in response.text
     assert "Latest Activity" in response.text
     assert "Latest Order At" in response.text
     assert "Latest Fill At" in response.text

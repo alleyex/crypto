@@ -997,6 +997,18 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           : Number(selected.gross_realized_pnl || 0) < 0
             ? "bad"
             : "warn";
+        const closedTradeCount = Number(selected.realized_trade_count || 0);
+        const winRate = closedTradeCount > 0
+          ? `${((Number(selected.winning_trade_count || 0) / closedTradeCount) * 100).toFixed(1)}%`
+          : "n/a";
+        const lastClosedStatus = latestClosedTrade?.status || "none";
+        const lastClosedStatusClass = latestClosedTrade
+          ? Number(latestClosedTrade.realized_pnl || 0) > 0
+            ? "ok"
+            : Number(latestClosedTrade.realized_pnl || 0) < 0
+              ? "bad"
+              : "warn"
+          : "warn";
         board.innerHTML = `
           <div class="strategy-card selected">
             <div class="strategy-card-header">
@@ -1009,6 +1021,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <div class="strategy-metric"><strong>Latest Order</strong>${selected.latest_order?.status || "none"}</div>
               <div class="strategy-metric"><strong>Latest Fill</strong>${selected.latest_fill?.side || "none"}</div>
               <div class="strategy-metric"><strong>Realized Trades</strong>${selected.realized_trade_count}</div>
+              <div class="strategy-metric"><strong>Closed Trades</strong>${closedTradeCount}</div>
+              <div class="strategy-metric"><strong>Win Rate</strong>${winRate}</div>
+              <div class="strategy-metric"><strong>Last Closed Result</strong><span class="${lastClosedStatusClass}">${lastClosedStatus}</span></div>
               <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${Number(selected.gross_realized_pnl || 0).toFixed(6)}</span></div>
               <div class="strategy-metric"><strong>Latest Activity</strong>${selected.latest_activity_at || "none"}</div>
               <div class="strategy-metric"><strong>Latest Fill At</strong>${selected.latest_fill_at || "none"}</div>
