@@ -758,6 +758,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (schedulerStrategy) {
           const effectiveOrder = schedulerStrategy.effective_strategy_names || schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name];
           const orderLabel = effectiveOrder.length ? effectiveOrder.join(" -> ") : "none";
+          const limitedStrategies = (schedulerStrategy.strategy_entries || [])
+            .filter((item) => item.active && item.enabled && !item.effective)
+            .map((item) => item.strategy_name);
           const disabledNotes = Object.entries(schedulerStrategy.disabled_strategy_notes || {})
             .map(([name, note]) => `${name}: ${note}`);
           const limitLabel = schedulerStrategy.effective_strategy_limit || "all";
@@ -767,7 +770,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const disabledSummary = disabledNotes.length
             ? ` | disabled notes: ${disabledNotes.join("; ")}`
             : "";
-          el("scheduler-detail").textContent = `effective order: ${orderLabel} | limit: ${limitLabel}${warning}${disabledSummary}`;
+          const limitedSummary = limitedStrategies.length
+            ? ` | excluded by limit: ${limitedStrategies.join(", ")}`
+            : "";
+          el("scheduler-detail").textContent = `effective order: ${orderLabel} | limit: ${limitLabel}${limitedSummary}${warning}${disabledSummary}`;
         } else {
           el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
         }
@@ -1027,8 +1033,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : Number(item.gross_realized_pnl || 0) < 0
               ? "bad"
               : "warn";
-          const enabledLabel = strategyEntry.enabled === false ? "DISABLED" : activityState.label;
-          const enabledClass = strategyEntry.enabled === false ? "bad" : activityState.className;
+          const enabledLabel = strategyEntry.enabled === false
+            ? "DISABLED"
+            : strategyEntry.effective === false && strategyEntry.active
+              ? "LIMITED"
+              : activityState.label;
+          const enabledClass = strategyEntry.enabled === false
+            ? "bad"
+            : strategyEntry.effective === false && strategyEntry.active
+              ? "warn"
+              : activityState.className;
           const disabledReason = strategyEntry.disabled_reason || "none";
 
           return `
