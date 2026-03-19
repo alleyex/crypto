@@ -80,6 +80,7 @@ export CRYPTO_POSTGRES_CONNECT_RETRIES=15
 export CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS=1
 export CRYPTO_USE_FAKE_KLINES=
 export CRYPTO_FAKE_KLINE_CLOSES=
+export CRYPTO_EXECUTION_BACKEND=paper
 export TELEGRAM_BOT_TOKEN=
 export TELEGRAM_CHAT_ID=8703043602
 ```
@@ -127,6 +128,30 @@ Run a specific strategy job:
 python scripts/run_strategy_job.py --strategy ma_cross
 python scripts/run_strategy_job.py --strategy momentum_3bar
 python scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
+```
+
+Execution backend modes:
+
+- `paper`
+  - default paper-trading broker
+  - writes orders and fills
+- `noop`
+  - dry-run execution backend
+  - never writes orders or fills
+- `simulated_live`
+  - placeholder live-style backend
+  - currently still uses simulated paper fills, but keeps a separate runtime/backend identity for future broker integration
+
+Read or update the active execution backend used by runtime jobs:
+
+```bash
+curl -s http://127.0.0.1:8000/execution/backend
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"noop"}'
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"simulated_live"}'
 ```
 
 Set the active runtime strategy set used by pipeline and strategy-only scheduler loops:
@@ -371,11 +396,13 @@ Control endpoints:
 - `POST /scheduler/strategy/limit-preset`
 - `GET /queue/jobs`
 - `GET /queue/summary`
+- `GET /execution/backend`
 - `POST /queue/jobs`
 - `POST /queue/jobs/enqueue-pipeline`
 - `POST /queue/jobs/run-next`
 - `POST /queue/jobs/run-next-pipeline`
 - `POST /queue/jobs/{job_id}/retry`
+- `POST /execution/backend`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -412,6 +439,10 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
   -d '{"preset":"all_enabled"}'
 curl -s http://127.0.0.1:8000/queue/jobs
 curl -s http://127.0.0.1:8000/queue/summary
+curl -s http://127.0.0.1:8000/execution/backend
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"simulated_live"}'
 curl -s -X POST http://127.0.0.1:8000/queue/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
@@ -452,6 +483,7 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
 - positions, orders, pnl, and scheduler log panels
 - buttons for targeted pipeline runs, scheduler control, and kill switch control
 - runtime strategy and symbol controls for split workers
+- runtime execution backend control for `paper`, `noop`, and `simulated_live`
 
 `GET /audit-events` provides:
 
@@ -514,6 +546,7 @@ Logs:
 - Single timeframe: `1m`
 - Multi-strategy runtime currently validated for `ma_cross` and `momentum_3bar`
 - Paper trading only
+- Execution backend runtime control now supports `paper`, `noop`, and `simulated_live`, but only `paper` and `simulated_live` currently produce fills, and `simulated_live` is still a placeholder adapter backed by simulated paper execution
 - A persistent `job_queue` abstraction now exists, and split worker scheduler modes can now dispatch to or drain from it, but the full runtime is not yet queue-native end to end
 
 ## Next Recommended Work
