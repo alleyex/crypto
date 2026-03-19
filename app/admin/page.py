@@ -1,5 +1,16 @@
 def render_admin_page() -> str:
-    return """<!DOCTYPE html>
+    from app.core.settings import DEFAULT_STRATEGY_NAME
+    from app.strategy.registry import list_registered_strategies
+
+    strategy_options = "\n".join(
+        (
+            f'              <option value="{name}"'
+            + (' selected' if name == DEFAULT_STRATEGY_NAME else '')
+            + f">{name}</option>"
+        )
+        for name in list_registered_strategies()
+    )
+    html = """<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -348,6 +359,12 @@ def render_admin_page() -> str:
         <div class="panel control-card">
           <h2>Pipeline</h2>
           <p>Run one full trading cycle and inspect the returned execution summary.</p>
+          <div class="inline-controls">
+            <label for="pipeline-strategy-select">Strategy</label>
+            <select id="pipeline-strategy-select">
+__STRATEGY_OPTIONS__
+            </select>
+          </div>
           <div class="button-row">
             <button data-action="pipeline">Run Pipeline</button>
             <button class="secondary" data-refresh="all">Refresh Data</button>
@@ -713,7 +730,7 @@ def render_admin_page() -> str:
 
       async function refreshAll() {
         schedulerLogsMode = el("logs-mode-select")?.value || "all";
-        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory] = await Promise.all([
+        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -723,8 +740,14 @@ def render_admin_page() -> str:
           api("/alerts/status"),
           api("/validation/soak"),
           api("/validation/soak/history?limit=10"),
+          api("/strategies"),
         ]);
 
+        const strategySelect = el("pipeline-strategy-select");
+        if (strategySelect && strategies?.default_strategy && !strategySelect.dataset.initialized) {
+          strategySelect.value = strategies.default_strategy;
+          strategySelect.dataset.initialized = "true";
+        }
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
@@ -762,7 +785,12 @@ def render_admin_page() -> str:
               interval_seconds: AUTO_REFRESH_INTERVAL_MS / 1000,
             };
           } else if (type === "pipeline") {
-            result = await api("/pipeline/run", { method: "POST" });
+            result = await api("/pipeline/run", {
+              method: "POST",
+              body: JSON.stringify({
+                strategy_name: el("pipeline-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
+              }),
+            });
             el("pipeline-json").textContent = formatJson(result);
           } else if (type === "scheduler-start") {
             result = await api("/scheduler/start", { method: "POST" });
@@ -810,3 +838,7 @@ def render_admin_page() -> str:
   </body>
 </html>
 """
+    return (
+        html.replace("__STRATEGY_OPTIONS__", strategy_options)
+        .replace("__DEFAULT_STRATEGY_NAME__", DEFAULT_STRATEGY_NAME)
+    )

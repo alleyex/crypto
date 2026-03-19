@@ -43,7 +43,10 @@ def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[
         component="pipeline",
         status=status,
         message=message,
-        payload={"step_count": len(result.get("steps", []))},
+        payload={
+            "step_count": len(result.get("steps", [])),
+            "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
+        },
     )
     _safe_log_event(
         event_type="pipeline_run",
@@ -67,9 +70,15 @@ def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) 
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
 
-def _initial_pipeline_failure_result(database_label: str, step: str, exc: Exception) -> Dict[str, Any]:
+def _initial_pipeline_failure_result(
+    database_label: str,
+    step: str,
+    exc: Exception,
+    strategy_name: str,
+) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "database": database_label,
+        "strategy_name": strategy_name,
         "steps": [
             {
                 "step": step,
@@ -82,7 +91,7 @@ def _initial_pipeline_failure_result(database_label: str, step: str, exc: Except
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
 
-def run_pipeline_collect() -> Dict[str, Any]:
+def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str, Any]:
     database_label = get_database_label()
     try:
         connection = get_connection()
@@ -91,20 +100,20 @@ def run_pipeline_collect() -> Dict[str, Any]:
         finally:
             connection.close()
     except Exception as exc:
-        return _initial_pipeline_failure_result(database_label, "run_migrations", exc)
-    result: Dict[str, Any] = {"database": database_label, "steps": []}
+        return _initial_pipeline_failure_result(database_label, "run_migrations", exc, strategy_name)
+    result: Dict[str, Any] = {"database": database_label, "strategy_name": strategy_name, "steps": []}
     _safe_record_heartbeat(
         component="pipeline",
         status="started",
         message="Pipeline run started.",
-        payload={"database": database_label},
+        payload={"database": database_label, "strategy_name": strategy_name},
     )
     _safe_log_event(
         event_type="pipeline_run",
         status="started",
         source="pipeline",
         message="Pipeline run started.",
-        payload={"database": database_label},
+        payload={"database": database_label, "strategy_name": strategy_name},
     )
 
     if kill_switch_enabled():
@@ -126,7 +135,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
             result["steps"].append(run_market_data_job(connection))
 
             current_step = "generate_signal"
-            strategy_job_result = run_strategy_job(connection, strategy_name=DEFAULT_STRATEGY_NAME)
+            strategy_job_result = run_strategy_job(connection, strategy_name=strategy_name)
             result["steps"].extend(strategy_job_result["steps"])
             if strategy_job_result.get("status") == "completed":
                 return _finalize_result(

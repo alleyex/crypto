@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, List, Union
+from typing import Any, Dict, Literal, List, Optional, Union
 
 from fastapi import BackgroundTasks
 from fastapi import FastAPI, Query
@@ -23,6 +23,7 @@ from app.core.db import table_exists
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
+from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
@@ -47,6 +48,7 @@ from app.scheduler.runner import LOG_DIR
 from app.scheduler.runner import LOG_FILE
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
+from app.strategy.registry import list_registered_strategies
 from app.system.kill_switch import disable_kill_switch
 from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
@@ -297,6 +299,10 @@ class AlertTestRequest(BaseModel):
     message: str = "Crypto alert test message."
 
 
+class PipelineRunRequest(BaseModel):
+    strategy_name: str = DEFAULT_STRATEGY_NAME
+
+
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
@@ -356,6 +362,14 @@ def signals(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
         connection.close()
 
 
+@app.get("/strategies")
+def strategies() -> dict[str, Any]:
+    return {
+        "default_strategy": DEFAULT_STRATEGY_NAME,
+        "strategies": list_registered_strategies(),
+    }
+
+
 @app.get("/risk-events")
 def risk_events(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
@@ -402,8 +416,9 @@ def pnl(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
 
 
 @app.post("/pipeline/run")
-def run_pipeline_endpoint() -> dict:
-    return run_pipeline_collect()
+def run_pipeline_endpoint(payload: Optional[PipelineRunRequest] = None) -> dict:
+    strategy_name = payload.strategy_name if payload is not None else DEFAULT_STRATEGY_NAME
+    return run_pipeline_collect(strategy_name=strategy_name)
 
 
 @app.post("/signals/test")

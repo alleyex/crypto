@@ -1757,6 +1757,26 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         connection.close()
 
 
+def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "market_data_strategy.db"
+
+    def fake_connection() -> sqlite3.Connection:
+        return sqlite3.connect(db_path)
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+    monkeypatch.setattr(
+        "app.pipeline.market_data_job.fetch_klines",
+        lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+    )
+
+    result = run_pipeline_collect(strategy_name="momentum_3bar")
+
+    assert result["strategy_name"] == "momentum_3bar"
+    assert result["steps"][1]["strategy_name"] == "momentum_3bar"
+
+
 def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch, tmp_path) -> None:
     kill_switch_path = tmp_path / "kill.switch"
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: True)
@@ -2051,6 +2071,7 @@ def test_admin_page_is_served() -> None:
     assert "text/html" in response.headers["content-type"]
     assert "Admin Console" in response.text
     assert "/pipeline/run" in response.text
+    assert "/strategies" in response.text
     assert "/audit-events?limit=20" in response.text
     assert "/alerts/status" in response.text
     assert "/alerts/test" in response.text
@@ -2068,8 +2089,10 @@ def test_admin_page_is_served() -> None:
     assert 'id="execution-worker-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
     assert 'id="logs-mode-select"' in response.text
+    assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
+    assert "momentum_3bar" in response.text
     assert "Last Pipeline" in response.text
     assert "Send Test Alert" in response.text
     assert "Soak Validation" in response.text
@@ -2083,6 +2106,38 @@ def test_root_redirects_to_admin() -> None:
 
     assert response.status_code == 307
     assert response.headers["location"] == "/admin"
+
+
+def test_pipeline_run_endpoint_accepts_strategy_name(monkeypatch) -> None:
+    client = TestClient(app)
+    called: list[str] = []
+
+    monkeypatch.setattr(
+        "app.api.main.run_pipeline_collect",
+        lambda strategy_name="ma_cross": called.append(strategy_name) or {
+            "status": "completed",
+            "strategy_name": strategy_name,
+            "steps": [],
+        },
+    )
+
+    response = client.post("/pipeline/run", json={"strategy_name": "momentum_3bar"})
+
+    assert response.status_code == 200
+    assert response.json()["strategy_name"] == "momentum_3bar"
+    assert called == ["momentum_3bar"]
+
+
+def test_strategies_endpoint_lists_registered_strategies() -> None:
+    client = TestClient(app)
+
+    response = client.get("/strategies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default_strategy"] == "ma_cross"
+    assert "ma_cross" in payload["strategies"]
+    assert "momentum_3bar" in payload["strategies"]
 
 
 def test_favicon_returns_no_content() -> None:
