@@ -2537,6 +2537,9 @@ def test_admin_page_is_served() -> None:
     assert "avg attempts=" in response.text
     assert "fail%=" in response.text
     assert "retries=" in response.text
+    assert "Queue Debug" in response.text
+    assert "Latest failed:" in response.text
+    assert "Latest retry:" in response.text
     assert "Enqueue Strategy Job" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
@@ -2700,6 +2703,19 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
             },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
             "retry_jobs": [{"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2}],
+            "latest_failed_job": {
+                "id": 9,
+                "job_type": "strategy",
+                "status": "failed",
+                "attempt_count": 3,
+                "error_message": "strategy failed",
+            },
+            "latest_retry_job": {
+                "id": 8,
+                "job_type": "strategy",
+                "status": "completed",
+                "attempt_count": 2,
+            },
             "latest_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
         },
     )
@@ -2714,6 +2730,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["job_type_counts"]["strategy"]["failure_ratio"] == 0.1667
     assert response.json()["failed_jobs"][0]["id"] == 9
     assert response.json()["retry_jobs"][0]["attempt_count"] == 2
+    assert response.json()["latest_failed_job"]["error_message"] == "strategy failed"
+    assert response.json()["latest_retry_job"]["id"] == 8
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
 
 
@@ -2763,6 +2781,10 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         assert summary["retry_jobs"][0]["id"] == strategy_job_id
         assert summary["retry_jobs"][0]["attempt_count"] == 2
         assert summary["failed_jobs"][0]["id"] == strategy_job_id
+        assert summary["latest_failed_job"]["id"] == strategy_job_id
+        assert summary["latest_failed_job"]["error_message"] == "strategy failed again"
+        assert summary["latest_retry_job"]["id"] == strategy_job_id
+        assert summary["latest_retry_job"]["attempt_count"] == 2
         assert execution_job_id in [job["id"] for job in summary["latest_jobs"]]
     finally:
         connection.close()

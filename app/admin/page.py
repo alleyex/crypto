@@ -1554,6 +1554,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const counts = queueSummary?.counts || {};
         const metrics = queueSummary?.metrics || {};
         const byType = queueSummary?.job_type_counts || {};
+        const latestFailedJob = queueSummary?.latest_failed_job || null;
+        const latestRetryJob = queueSummary?.latest_retry_job || null;
         const jobs = Array.isArray(queueSummary?.latest_jobs) ? queueSummary.latest_jobs : [];
         const filteredJobs = jobs.filter((job) => {
           if (queueFilterMode === "all") return true;
@@ -1574,8 +1576,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const item = byType[jobType] || {};
           return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0} fail%=${Number(item.failure_ratio || 0) * 100}% avg=${item.avg_attempt_count ?? 0}`;
         });
+        const latestFailedBit = latestFailedJob
+          ? `Latest failed: #${latestFailedJob.id} ${latestFailedJob.job_type} attempts=${latestFailedJob.attempt_count}${latestFailedJob.error_message ? ` error=${latestFailedJob.error_message}` : ""}`
+          : "Latest failed: none";
+        const latestRetryBit = latestRetryJob
+          ? `Latest retry: #${latestRetryJob.id} ${latestRetryJob.job_type} attempts=${latestRetryJob.attempt_count}`
+          : "Latest retry: none";
         if (filteredJobs.length === 0) {
-          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>No queue jobs match the current filter.</div>`;
+          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>No queue jobs match the current filter.</div>`;
           return;
         }
         board.innerHTML = filteredJobs.map((job) => {
@@ -1589,7 +1597,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <div><strong>Payload</strong> ${payloadText}${errorText}</div>
             </div>
           `;
-        }).join("");
+        }).join("") + `
+          <div class="strategy-card">
+            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}
+          </div>
+        `;
       }
 
       function updateAutoRefreshStatus() {
