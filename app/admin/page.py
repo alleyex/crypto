@@ -1560,6 +1560,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const latestRetryJob = queueSummary?.latest_retry_job || null;
         const recentBatches = Array.isArray(queueSummary?.recent_batches) ? queueSummary.recent_batches : [];
         const latestIncompleteBatch = queueSummary?.latest_incomplete_batch || null;
+        const latestCompletedBatch = queueSummary?.latest_completed_batch || null;
         const jobs = Array.isArray(queueSummary?.latest_jobs) ? queueSummary.latest_jobs : [];
         const filteredJobs = jobs.filter((job) => {
           if (queueFilterMode === "all") return true;
@@ -1605,8 +1606,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const incompleteBatchBit = latestIncompleteBatch
           ? `Incomplete batch: ${String(latestIncompleteBatch.batch_id).slice(0, 8)} statuses=${Object.entries(latestIncompleteBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
           : "Incomplete batch: none";
+        const completedBatchBit = latestCompletedBatch
+          ? `Completed batch: ${String(latestCompletedBatch.batch_id).slice(0, 8)} statuses=${Object.entries(latestCompletedBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
+          : "Completed batch: none";
         if (filteredJobs.length === 0) {
-          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${batchBits}<br>No queue jobs match the current filter.</div>`;
+          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${completedBatchBit}<br>${batchBits}<br>No queue jobs match the current filter.</div>`;
           return;
         }
         board.innerHTML = filteredJobs.map((job) => {
@@ -1622,7 +1626,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `;
         }).join("") + `
           <div class="strategy-card">
-            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${batchBits}
+            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${completedBatchBit}<br>${batchBits}
           </div>
         `;
       }
