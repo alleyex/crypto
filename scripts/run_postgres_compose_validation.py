@@ -175,6 +175,22 @@ def request_json_with_retry(method: str, url: str, attempts: int = 5, delay_seco
     raise last_error
 
 
+def assert_pipeline_validation_success(pipeline: Any) -> None:
+    if not isinstance(pipeline, dict):
+        raise RuntimeError(f"Pipeline validation returned an unexpected payload: {pipeline!r}")
+
+    steps = pipeline.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise RuntimeError(f"Pipeline validation did not return executable steps: {pipeline!r}")
+
+    failed_steps = [
+        step for step in steps
+        if isinstance(step, dict) and step.get("status") in ("failed", "blocked")
+    ]
+    if failed_steps:
+        raise RuntimeError(f"Pipeline validation failed: {json.dumps(failed_steps, sort_keys=True)}")
+
+
 def wait_for_api(base_url: str, timeout_seconds: float) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
@@ -251,6 +267,7 @@ def validate_compose_runtime(
         run_command(compose_args + ["up", "--build", "-d"], env)
         health = wait_for_api(base_url, startup_timeout)
         pipeline = request_json_with_retry("POST", f"{base_url}/pipeline/run")
+        assert_pipeline_validation_success(pipeline)
         orders = request_json_with_retry("GET", f"{base_url}/orders?limit=5")
         audit_events = request_json_with_retry("GET", f"{base_url}/audit-events?limit=5")
         scheduler_logs = run_command(compose_args + ["logs", "--tail=80", "scheduler"], env).stdout

@@ -26,6 +26,7 @@ from app.core.postgres_smoke import run_postgres_smoke
 from app.query.read_service import get_orders as query_get_orders
 from scripts.run_postgres_compose_validation import build_override_compose
 from scripts.run_postgres_compose_validation import attach_metadata
+from scripts.run_postgres_compose_validation import assert_pipeline_validation_success
 from scripts.run_postgres_compose_validation import make_env
 from scripts.run_postgres_compose_validation import request_json_with_retry
 from scripts.run_postgres_compose_validation import run_validation_mode
@@ -427,6 +428,21 @@ def test_request_json_with_retry_retries_transient_http_500(monkeypatch) -> None
     assert sleep_calls == [0.5, 0.5]
 
 
+def test_assert_pipeline_validation_success_rejects_failed_pipeline() -> None:
+    try:
+        assert_pipeline_validation_success(
+            {
+                "steps": [
+                    {"step": "save_klines", "status": "failed", "error": "Binance API unavailable"},
+                ]
+            }
+        )
+    except RuntimeError as exc:
+        assert "Pipeline validation failed" in str(exc)
+    else:
+        raise AssertionError("Expected pipeline validation failure to raise.")
+
+
 def test_run_migrations_uses_postgres_advisory_lock(monkeypatch) -> None:
     executed: list[tuple[str, tuple]] = []
 
@@ -447,6 +463,9 @@ def test_run_migrations_uses_postgres_advisory_lock(monkeypatch) -> None:
         def commit(self) -> None:
             executed.append(("COMMIT", ()))
 
+        def rollback(self) -> None:
+            executed.append(("ROLLBACK", ()))
+
     connection = FakeConnection()
     monkeypatch.setattr("app.core.migrations.get_backend_name", lambda _connection: "postgres")
     monkeypatch.setattr(
@@ -463,6 +482,49 @@ def test_run_migrations_uses_postgres_advisory_lock(monkeypatch) -> None:
         ("001_test_migration",),
     ) in executed
     assert executed[-1] == ("SELECT pg_advisory_unlock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
+
+
+def test_run_migrations_preserves_original_error_when_unlock_fails(monkeypatch) -> None:
+    class FakeCursor:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class FakeConnection:
+        def __init__(self):
+            self.rolled_back = False
+
+        def execute(self, query: str, params: tuple = ()):
+            normalized = " ".join(query.split())
+            if normalized == "SELECT pg_advisory_unlock(?);":
+                raise RuntimeError("unlock failed")
+            if "SELECT version FROM schema_migrations" in normalized:
+                return FakeCursor([])
+            return FakeCursor([])
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr("app.core.migrations.get_backend_name", lambda _connection: "postgres")
+    monkeypatch.setattr(
+        "app.core.migrations.MIGRATIONS",
+        [("001_broken", lambda _connection: (_ for _ in ()).throw(RuntimeError("migration failed")))],
+    )
+
+    try:
+        run_migrations(connection)
+    except RuntimeError as exc:
+        assert str(exc) == "migration failed"
+    else:
+        raise AssertionError("Expected migration failure to raise.")
+
+    assert connection.rolled_back is True
 
 
 def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
@@ -1660,6 +1722,31 @@ def test_run_pipeline_collect_returns_failed_result_when_fetch_klines_errors(mon
         item["event_type"] == "pipeline_run" and item["status"] == "failed" and "Binance API unavailable" in item["message"]
         for item in events
     )
+
+
+def test_run_pipeline_collect_returns_failed_result_when_initial_migration_errors(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "pipeline-initial-failure.db"
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_database_label", lambda: "sqlite:///pipeline-initial-failure.db")
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.run_migrations",
+        lambda _connection: (_ for _ in ()).throw(RuntimeError("migration bootstrap failed")),
+    )
+
+    result = run_pipeline_collect()
+
+    assert result["database"] == "sqlite:///pipeline-initial-failure.db"
+    assert result["steps"] == [
+        {
+            "step": "run_migrations",
+            "status": "failed",
+            "error": "migration bootstrap failed",
+            "error_type": "RuntimeError",
+        }
+    ]
 
 
 def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, tmp_path) -> None:

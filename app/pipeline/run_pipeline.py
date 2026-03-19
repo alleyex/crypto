@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
@@ -22,14 +22,39 @@ from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
 
 
+def _safe_record_heartbeat(
+    component: str,
+    status: str,
+    message: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        record_heartbeat(component=component, status=status, message=message, payload=payload)
+    except Exception:
+        pass
+
+
+def _safe_log_event(
+    event_type: str,
+    status: str,
+    source: str,
+    message: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        log_event(event_type=event_type, status=status, source=source, message=message, payload=payload)
+    except Exception:
+        pass
+
+
 def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[str, Any]:
-    record_heartbeat(
+    _safe_record_heartbeat(
         component="pipeline",
         status=status,
         message=message,
         payload={"step_count": len(result.get("steps", []))},
     )
-    log_event(
+    _safe_log_event(
         event_type="pipeline_run",
         status=status,
         source="pipeline",
@@ -51,21 +76,39 @@ def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) 
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
 
+def _initial_pipeline_failure_result(database_label: str, step: str, exc: Exception) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "database": database_label,
+        "steps": [
+            {
+                "step": step,
+                "status": "failed",
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+        ],
+    }
+    return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
+
+
 def run_pipeline_collect() -> Dict[str, Any]:
     database_label = get_database_label()
-    result: Dict[str, Any] = {"database": database_label, "steps": []}
-    connection = get_connection()
     try:
-        run_migrations(connection)
-    finally:
-        connection.close()
-    record_heartbeat(
+        connection = get_connection()
+        try:
+            run_migrations(connection)
+        finally:
+            connection.close()
+    except Exception as exc:
+        return _initial_pipeline_failure_result(database_label, "run_migrations", exc)
+    result: Dict[str, Any] = {"database": database_label, "steps": []}
+    _safe_record_heartbeat(
         component="pipeline",
         status="started",
         message="Pipeline run started.",
         payload={"database": database_label},
     )
-    log_event(
+    _safe_log_event(
         event_type="pipeline_run",
         status="started",
         source="pipeline",

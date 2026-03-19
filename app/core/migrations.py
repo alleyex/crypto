@@ -291,6 +291,7 @@ def _record_applied_version(connection: DBConnection, version: str) -> None:
 
 
 def run_migrations(connection: DBConnection) -> list[str]:
+    active_error: Exception | None = None
     _acquire_migration_lock(connection)
     try:
         _ensure_migration_table(connection)
@@ -307,5 +308,15 @@ def run_migrations(connection: DBConnection) -> list[str]:
             applied_versions.add(version)
 
         return newly_applied
+    except Exception as exc:
+        active_error = exc
+        rollback = getattr(connection, "rollback", None)
+        if callable(rollback):
+            rollback()
+        raise
     finally:
-        _release_migration_lock(connection)
+        try:
+            _release_migration_lock(connection)
+        except Exception:
+            if active_error is None:
+                raise
