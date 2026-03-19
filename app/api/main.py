@@ -40,6 +40,7 @@ from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
 from app.query.read_service import get_signals
+from app.query.read_service import get_strategy_activity_summary
 from app.scheduler.control import clear_stop_flag
 from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
@@ -376,6 +377,15 @@ def strategies() -> dict[str, Any]:
         "default_strategy": DEFAULT_STRATEGY_NAME,
         "strategies": list_registered_strategies(),
     }
+
+
+@app.get("/strategies/summary")
+def strategy_summary() -> list[dict[str, Any]]:
+    connection = get_connection()
+    try:
+        return get_strategy_activity_summary(connection)
+    finally:
+        connection.close()
 
 
 @app.get("/risk-events")

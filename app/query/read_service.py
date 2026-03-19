@@ -2,6 +2,7 @@ from typing import Any
 
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
+from app.strategy.registry import list_registered_strategies
 
 
 def _fetch_all(connection: DBConnection, query: str, limit: int = 5) -> list[dict[str, Any]]:
@@ -167,3 +168,30 @@ def get_pnl_snapshots(connection: DBConnection, limit: int = 5) -> list[dict[str
 
 def get_audit_events(connection: DBConnection, limit: int = 20) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_AUDIT_EVENTS_SQL, limit)
+
+
+def get_strategy_activity_summary(
+    connection: DBConnection,
+    per_table_limit: int = 100,
+) -> list[dict[str, Any]]:
+    signals = get_signals(connection, limit=per_table_limit)
+    risk_events = get_risk_events(connection, limit=per_table_limit)
+    orders = get_orders(connection, limit=per_table_limit)
+
+    summaries: list[dict[str, Any]] = []
+    for strategy_name in list_registered_strategies():
+        latest_signal = next((item for item in signals if item["strategy_name"] == strategy_name), None)
+        latest_risk = next((item for item in risk_events if item["strategy_name"] == strategy_name), None)
+        latest_order = next((item for item in orders if item["strategy_name"] == strategy_name), None)
+
+        summaries.append(
+            {
+                "strategy_name": strategy_name,
+                "latest_signal": latest_signal,
+                "latest_risk": latest_risk,
+                "latest_order": latest_order,
+                "has_activity": any(item is not None for item in (latest_signal, latest_risk, latest_order)),
+            }
+        )
+
+    return summaries

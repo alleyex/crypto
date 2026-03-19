@@ -69,6 +69,7 @@ from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
 from app.query.read_service import get_signals
+from app.query.read_service import get_strategy_activity_summary
 from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
@@ -144,6 +145,35 @@ def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
         assert result["signal_type"] == "BUY"
         signals = get_signals(connection, limit=1)
         assert signals[0]["strategy_name"] == "ma_cross"
+    finally:
+        connection.close()
+
+
+def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        generate_signal(connection, strategy_name="ma_cross")
+        evaluate_latest_signal(connection)
+        execute_latest_risk(connection)
+
+        save_klines(connection, [make_kline((index + 10) * 60_000, close) for index, close in enumerate([20, 21, 22, 24])])
+        generate_momentum_3bar_signal(connection)
+        evaluate_latest_signal(connection, cooldown_seconds=0)
+
+        summary = get_strategy_activity_summary(connection)
+
+        by_name = {item["strategy_name"]: item for item in summary}
+        assert by_name["ma_cross"]["latest_signal"] is not None
+        assert by_name["ma_cross"]["latest_risk"] is not None
+        assert by_name["ma_cross"]["latest_order"] is not None
+        assert by_name["momentum_3bar"]["latest_signal"] is not None
+        assert by_name["momentum_3bar"]["latest_risk"] is not None
     finally:
         connection.close()
 
@@ -2073,6 +2103,7 @@ def test_admin_page_is_served() -> None:
     assert "Admin Console" in response.text
     assert "/pipeline/run" in response.text
     assert "/strategies" in response.text
+    assert "/strategies/summary" in response.text
     assert "/audit-events?limit=20" in response.text
     assert "/alerts/status" in response.text
     assert "/alerts/test" in response.text
@@ -2092,6 +2123,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
+    assert 'id="strategy-summary-json"' in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
@@ -2142,6 +2174,45 @@ def test_strategies_endpoint_lists_registered_strategies() -> None:
     assert payload["default_strategy"] == "ma_cross"
     assert "ma_cross" in payload["strategies"]
     assert "momentum_3bar" in payload["strategies"]
+
+
+def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None:
+    client = TestClient(app)
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: object())
+    monkeypatch.setattr(
+        "app.api.main.get_strategy_activity_summary",
+        lambda connection: [
+            {
+                "strategy_name": "ma_cross",
+                "latest_signal": {"signal_type": "BUY"},
+                "latest_risk": {"decision": "APPROVED"},
+                "latest_order": {"status": "FILLED"},
+                "has_activity": True,
+            },
+            {
+                "strategy_name": "momentum_3bar",
+                "latest_signal": None,
+                "latest_risk": None,
+                "latest_order": None,
+                "has_activity": False,
+            },
+        ],
+    )
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+
+    response = client.get("/strategies/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["strategy_name"] == "ma_cross"
+    assert payload[0]["latest_risk"]["decision"] == "APPROVED"
+    assert payload[1]["strategy_name"] == "momentum_3bar"
 
 
 def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:

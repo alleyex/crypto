@@ -442,6 +442,11 @@ __STRATEGY_OPTIONS__
           <pre id="orders-json">Loading...</pre>
         </article>
         <article class="panel data-card">
+          <h2>Strategy Activity</h2>
+          <p>Latest signal, risk, and order snapshot grouped by strategy.</p>
+          <pre id="strategy-summary-json">Loading...</pre>
+        </article>
+        <article class="panel data-card">
           <h2>PnL Snapshots</h2>
           <p>Latest mark-to-market snapshots.</p>
           <pre id="pnl-json">Loading...</pre>
@@ -742,10 +747,11 @@ __STRATEGY_OPTIONS__
 
       async function refreshAll() {
         schedulerLogsMode = el("logs-mode-select")?.value || "all";
-        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
+        const [health, positions, orders, strategySummary, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
+          api("/strategies/summary"),
           api("/pnl?limit=10"),
           api(`/scheduler/logs?lines=20&mode=${encodeURIComponent(schedulerLogsMode)}`),
           api("/audit-events?limit=20"),
@@ -776,6 +782,7 @@ __STRATEGY_OPTIONS__
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
+        el("strategy-summary-json").textContent = formatJson(strategySummary);
         el("pnl-json").textContent = formatJson(pnl);
         el("logs-json").textContent = formatJson(logs);
         el("audit-json").textContent = formatJson(auditEvents);
