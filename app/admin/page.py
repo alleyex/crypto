@@ -526,6 +526,9 @@ __STRATEGY_OPTIONS__
             <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
             <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset priorities</button>
           </div>
+          <div class="inline-note" id="scheduler-preset-detail">
+            Limit presets change how many enabled strategies run. Priority presets reorder the scheduler execution sequence.
+          </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
             <button class="danger" data-action="scheduler-stop">Stop</button>

@@ -2276,6 +2276,9 @@ def test_admin_page_is_served() -> None:
     assert 'Reset priorities' in response.text
     assert 'data-action="scheduler-clear-notes"' in response.text
     assert 'Clear notes' in response.text
+    assert 'id="scheduler-preset-detail"' in response.text
+    assert "Limit presets change how many enabled strategies run." in response.text
+    assert "Priority presets reorder the scheduler execution sequence." in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'data-promote-strategy="' in response.text
