@@ -738,9 +738,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("scheduler-status").textContent = scheduler.stopped ? "STOPPED" : scheduler.status.toUpperCase();
         el("scheduler-status").className = `value ${statusClass(scheduler.status)}`;
         const schedulerStrategy = window.__schedulerStrategyStatus || null;
-        el("scheduler-detail").textContent = schedulerStrategy
-          ? `effective strategies: ${(schedulerStrategy.effective_strategy_names || schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name]).join(", ") || "none"}`
-          : "Scheduler strategy not loaded yet.";
+        if (schedulerStrategy) {
+          const effectiveOrder = schedulerStrategy.effective_strategy_names || schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name];
+          const orderLabel = effectiveOrder.length ? effectiveOrder.join(" -> ") : "none";
+          const warning = effectiveOrder.length
+            ? ""
+            : " | warning: no enabled active strategies"
+          el("scheduler-detail").textContent = `effective order: ${orderLabel}${warning}`;
+        } else {
+          el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
+        }
 
         const killSwitch = health.checks.kill_switch;
         el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";

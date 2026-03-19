@@ -2276,6 +2276,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="closed-trades-strategy-select"' in response.text
     assert 'id="closed-trades-reset-button"' in response.text
     assert 'id="scheduler-detail"' in response.text
+    assert "effective order:" in response.text
+    assert "warning: no enabled active strategies" in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
