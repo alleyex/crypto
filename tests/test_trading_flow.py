@@ -2340,6 +2340,10 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
         lambda report: called.append(("queue", report)) or {"sent": False},
     )
     monkeypatch.setattr(
+        "app.api.main.maybe_send_worker_alert",
+        lambda report: called.append(("worker", report)) or {"sent": False},
+    )
+    monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": False, "kill_switch_file": str(tmp_path / "kill.switch")},
     )
@@ -2360,7 +2364,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["scheduler"]["status"] == "ok"
     assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0
-    assert len(called) == 2
+    assert len(called) == 3
 
 
 def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(monkeypatch, tmp_path) -> None:
@@ -2390,6 +2394,10 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
         lambda report: called.append(("queue", report)) or {"sent": False},
     )
     monkeypatch.setattr(
+        "app.api.main.maybe_send_worker_alert",
+        lambda report: called.append(("worker", report)) or {"sent": False},
+    )
+    monkeypatch.setattr(
         "app.api.main.get_kill_switch_status",
         lambda: {"enabled": True, "kill_switch_file": str(tmp_path / "kill.switch")},
     )
@@ -2404,7 +2412,7 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
-    assert len(called) == 2
+    assert len(called) == 3
 
 
 def test_maybe_send_health_alert_deduplicates_same_degraded_state(monkeypatch, tmp_path) -> None:
@@ -2549,6 +2557,56 @@ def test_maybe_send_queue_alert_clears_state_when_queue_recovers(monkeypatch, tm
     result = maybe_send_queue_alert({"status": "ok", "checks": {"queue": {"status": "ok", "counts": {"failed": 0}}}})
 
     assert result == {"sent": False, "reason": "Queue has no failed jobs."}
+    assert not state_file.exists()
+
+
+def test_maybe_send_worker_alert_deduplicates_same_stale_worker_state(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "worker_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.worker.WORKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.worker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.worker import maybe_send_worker_alert
+
+    report = {
+        "status": "degraded",
+        "checks": {
+            "heartbeats": {
+                "status": "degraded",
+                "components": [
+                    {
+                        "component": "strategy_worker",
+                        "status": "ok",
+                        "stale": True,
+                        "age_seconds": 400,
+                    }
+                ],
+            }
+        },
+    }
+
+    first = maybe_send_worker_alert(report)
+    second = maybe_send_worker_alert(report)
+
+    assert first["sent"] is True
+    assert second == {"sent": False, "reason": "Worker alert already sent for current stale state."}
+    assert len(sent_messages) == 1
+
+
+def test_maybe_send_worker_alert_clears_state_when_workers_recover(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "worker_alert_state.json"
+    monkeypatch.setattr("app.alerting.worker.WORKER_ALERT_STATE_FILE", state_file)
+
+    from app.alerting.worker import maybe_send_worker_alert
+
+    state_file.write_text('{"fingerprint":"x","worker_count":1}', encoding="utf-8")
+    result = maybe_send_worker_alert({"status": "ok", "checks": {"heartbeats": {"status": "ok", "components": []}}})
+
+    assert result == {"sent": False, "reason": "No stale worker heartbeats."}
     assert not state_file.exists()
 
 
@@ -2921,6 +2979,33 @@ def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
     assert report["status"] == "degraded"
     assert report["checks"]["queue"]["status"] == "degraded"
     assert report["checks"]["queue"]["counts"]["failed"] == 1
+
+
+def test_heartbeat_check_marks_stale_workers_as_degraded(monkeypatch) -> None:
+    fixed_now = datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.api.main._utc_now", lambda: fixed_now)
+    monkeypatch.setattr("app.api.main.WORKER_HEARTBEAT_STALENESS_SECONDS", 60)
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        upsert_heartbeat(connection, "strategy_worker", "ok", "Strategy loop completed.")
+        connection.execute(
+            "UPDATE runtime_heartbeats SET last_seen_at = ? WHERE component = ?",
+            ("2026-03-19 11:58:00", "strategy_worker"),
+        )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_heartbeat_check"])._heartbeat_check(connection)
+
+        assert result["status"] == "degraded"
+        assert result["reason"] == "Runtime heartbeat contains stale worker components."
+        worker_entry = result["components"][0]
+        assert worker_entry["component"] == "strategy_worker"
+        assert worker_entry["stale"] is True
+        assert worker_entry["age_seconds"] == 120
+    finally:
+        connection.close()
 
 
 def test_root_redirects_to_admin() -> None:

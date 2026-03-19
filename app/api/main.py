@@ -15,6 +15,7 @@ from app.alerting.health import maybe_send_health_alert
 from app.alerting.queue import maybe_send_queue_alert
 from app.alerting.telegram import send_telegram_message
 from app.alerting.telegram import telegram_configured
+from app.alerting.worker import maybe_send_worker_alert
 from app.core.db import DB_FILE, get_connection
 from app.core.db import DBConnection
 from app.core.db import DBError
@@ -35,6 +36,7 @@ from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
+from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -284,11 +286,34 @@ def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
             "components": [],
         }
 
-    degraded = [item for item in heartbeats if item["status"] in ("failed", "stopped")]
+    worker_components = {"data_worker", "strategy_worker", "execution_worker"}
+    enriched_heartbeats: list[dict[str, Any]] = []
+    stale_workers: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
+    for item in heartbeats:
+        heartbeat = dict(item)
+        age_seconds = int((_utc_now() - parse_db_timestamp(item["last_seen_at"])).total_seconds())
+        heartbeat["age_seconds"] = age_seconds
+        heartbeat["staleness_threshold_seconds"] = WORKER_HEARTBEAT_STALENESS_SECONDS
+        heartbeat["stale"] = bool(
+            heartbeat["component"] in worker_components and age_seconds > WORKER_HEARTBEAT_STALENESS_SECONDS
+        )
+        enriched_heartbeats.append(heartbeat)
+        if heartbeat["status"] in ("failed", "stopped"):
+            degraded.append(heartbeat)
+        if heartbeat["stale"]:
+            stale_workers.append(heartbeat)
+
+    if stale_workers and not degraded:
+        reason = "Runtime heartbeat contains stale worker components."
+    elif degraded:
+        reason = "Runtime heartbeat contains degraded components."
+    else:
+        reason = None
     return {
-        "status": "degraded" if degraded else "ok",
-        "components": heartbeats,
-        "reason": "Runtime heartbeat contains degraded components." if degraded else None,
+        "status": "degraded" if degraded or stale_workers else "ok",
+        "components": enriched_heartbeats,
+        "reason": reason,
     }
 
 
@@ -419,6 +444,7 @@ def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
     background_tasks.add_task(maybe_send_health_alert, report)
     background_tasks.add_task(maybe_send_queue_alert, report)
+    background_tasks.add_task(maybe_send_worker_alert, report)
     return report
 
 
