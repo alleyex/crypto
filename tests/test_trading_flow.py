@@ -251,6 +251,61 @@ def test_get_strategy_closed_trades_returns_recent_realized_trades() -> None:
         connection.close()
 
 
+def test_get_strategy_closed_trades_filters_by_strategy() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("buy-ma", 1, "BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 100.0, "FILLED", "2026-03-19 10:00:00"),
+        )
+        buy_ma_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'buy-ma';").fetchone()[0])
+        insert_fill(connection, buy_ma_order_id, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-19 10:00:00")
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("sell-ma", 2, "BTCUSDT", "1m", "ma_cross", "SELL", 1.0, 110.0, "FILLED", "2026-03-19 10:05:00"),
+        )
+        sell_ma_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'sell-ma';").fetchone()[0])
+        insert_fill(connection, sell_ma_order_id, "BTCUSDT", "SELL", 1.0, 110.0, "2026-03-19 10:05:00")
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("buy-mom", 3, "ETHUSDT", "1m", "momentum_3bar", "BUY", 1.0, 200.0, "FILLED", "2026-03-19 10:10:00"),
+        )
+        buy_mom_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'buy-mom';").fetchone()[0])
+        insert_fill(connection, buy_mom_order_id, "ETHUSDT", "BUY", 1.0, 200.0, "2026-03-19 10:10:00")
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("sell-mom", 4, "ETHUSDT", "1m", "momentum_3bar", "SELL", 1.0, 190.0, "FILLED", "2026-03-19 10:15:00"),
+        )
+        sell_mom_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'sell-mom';").fetchone()[0])
+        insert_fill(connection, sell_mom_order_id, "ETHUSDT", "SELL", 1.0, 190.0, "2026-03-19 10:15:00")
+
+        closed_trades = get_strategy_closed_trades(connection, strategy_name="momentum_3bar")
+
+        assert len(closed_trades) == 1
+        assert closed_trades[0]["strategy_name"] == "momentum_3bar"
+        assert closed_trades[0]["symbol"] == "ETHUSDT"
+        assert closed_trades[0]["status"] == "loss"
+    finally:
+        connection.close()
+
+
 def test_strategy_registry_exposes_ma_cross() -> None:
     names = list_registered_strategies()
 
@@ -2201,6 +2256,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-closed-trades-board"' in response.text
     assert 'id="strategy-sort-select"' in response.text
     assert 'id="strategy-filter-select"' in response.text
+    assert 'id="closed-trades-strategy-select"' in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
@@ -2324,15 +2380,17 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
 
 def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> None:
     client = TestClient(app)
+    captured: dict[str, object] = {}
 
     class DummyConnection:
         def close(self) -> None:
             pass
 
     monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
-    monkeypatch.setattr(
-        "app.api.main.get_strategy_closed_trades",
-        lambda connection, limit=20: [
+    def fake_get_strategy_closed_trades(connection, limit=20, strategy_name=None):
+        captured["limit"] = limit
+        captured["strategy_name"] = strategy_name
+        return [
             {
                 "strategy_name": "ma_cross",
                 "symbol": "BTCUSDT",
@@ -2344,12 +2402,13 @@ def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> N
                 "order_id": 2,
                 "status": "win",
             }
-        ],
-    )
+        ]
+    monkeypatch.setattr("app.api.main.get_strategy_closed_trades", fake_get_strategy_closed_trades)
 
-    response = client.get("/strategies/closed-trades?limit=10")
+    response = client.get("/strategies/closed-trades?limit=10&strategy_name=ma_cross")
 
     assert response.status_code == 200
+    assert captured == {"limit": 10, "strategy_name": "ma_cross"}
     payload = response.json()
     assert payload[0]["strategy_name"] == "ma_cross"
     assert payload[0]["realized_pnl"] == 10.0

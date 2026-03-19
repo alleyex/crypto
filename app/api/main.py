@@ -390,10 +390,13 @@ def strategy_summary() -> list[dict[str, Any]]:
 
 
 @app.get("/strategies/closed-trades")
-def strategy_closed_trades(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, Any]]:
+def strategy_closed_trades(
+    limit: int = Query(default=20, ge=1, le=200),
+    strategy_name: Optional[str] = Query(default=None),
+) -> list[dict[str, Any]]:
     connection = get_connection()
     try:
-        return get_strategy_closed_trades(connection, limit=limit)
+        return get_strategy_closed_trades(connection, limit=limit, strategy_name=strategy_name)
     finally:
         connection.close()
 

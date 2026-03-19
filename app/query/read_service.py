@@ -1,4 +1,5 @@
 from typing import Any
+from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
@@ -268,18 +269,22 @@ def get_strategy_closed_trades(
     connection: DBConnection,
     limit: int = 20,
     per_table_limit: int = 200,
+    strategy_name: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     orders = get_orders(connection, limit=per_table_limit)
     fills = get_fills(connection, limit=per_table_limit)
     fills_by_order_id = {int(item["order_id"]): item for item in fills}
+    strategy_filter = strategy_name.strip() if strategy_name else None
     filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
     positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
 
     for order in filled_orders:
-        strategy_name = str(order["strategy_name"])
+        current_strategy_name = str(order["strategy_name"])
+        if strategy_filter and current_strategy_name != strategy_filter:
+            continue
         symbol = str(order["symbol"])
-        key = (strategy_name, symbol)
+        key = (current_strategy_name, symbol)
         position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
 
         qty = float(order["qty"])
@@ -300,7 +305,7 @@ def get_strategy_closed_trades(
         position["cost"] -= close_qty * average_entry_price
         closed_trades.append(
             {
-                "strategy_name": strategy_name,
+                "strategy_name": current_strategy_name,
                 "symbol": symbol,
                 "qty": close_qty,
                 "entry_price": average_entry_price,

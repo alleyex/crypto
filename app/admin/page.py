@@ -10,6 +10,10 @@ def render_admin_page() -> str:
         )
         for name in list_registered_strategies()
     )
+    closed_trade_strategy_options = "\n".join(
+        ['              <option value="all">all</option>']
+        + [f'              <option value="{name}">{name}</option>' for name in list_registered_strategies()]
+    )
     html = """<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -533,6 +537,12 @@ __STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Recent Closed Trades</h2>
           <p>Latest realized trade outcomes grouped by strategy.</p>
+          <div class="inline-controls">
+            <label for="closed-trades-strategy-select">Strategy</label>
+            <select id="closed-trades-strategy-select">
+__CLOSED_TRADE_STRATEGY_OPTIONS__
+            </select>
+          </div>
           <div class="trade-list" id="strategy-closed-trades-board">
             <div class="strategy-card">Loading...</div>
           </div>
@@ -600,6 +610,7 @@ __STRATEGY_OPTIONS__
       let schedulerLogsMode = "all";
       let strategySortMode = "gross_realized_pnl";
       let strategyFilterMode = "all";
+      let closedTradesStrategyFilter = "all";
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
@@ -943,12 +954,17 @@ __STRATEGY_OPTIONS__
 
       async function refreshAll() {
         schedulerLogsMode = el("logs-mode-select")?.value || "all";
+        closedTradesStrategyFilter = el("closed-trades-strategy-select")?.value || "all";
+        const closedTradesQuery = new URLSearchParams({ limit: "10" });
+        if (closedTradesStrategyFilter !== "all") {
+          closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
+        }
         const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
           api("/strategies/summary"),
-          api("/strategies/closed-trades?limit=10"),
+          api(`/strategies/closed-trades?${closedTradesQuery.toString()}`),
           api("/pnl?limit=10"),
           api(`/scheduler/logs?lines=20&mode=${encodeURIComponent(schedulerLogsMode)}`),
           api("/audit-events?limit=20"),
@@ -1081,6 +1097,13 @@ __STRATEGY_OPTIONS__
         });
       });
 
+      el("closed-trades-strategy-select")?.addEventListener("change", (event) => {
+        closedTradesStrategyFilter = event.target.value;
+        refreshAll().catch((error) => {
+          el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
+        });
+      });
+
       updateAutoRefreshStatus();
       scheduleAutoRefresh();
       refreshAll().catch((error) => {
@@ -1092,5 +1115,6 @@ __STRATEGY_OPTIONS__
 """
     return (
         html.replace("__STRATEGY_OPTIONS__", strategy_options)
+        .replace("__CLOSED_TRADE_STRATEGY_OPTIONS__", closed_trade_strategy_options)
         .replace("__DEFAULT_STRATEGY_NAME__", DEFAULT_STRATEGY_NAME)
     )
