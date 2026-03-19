@@ -543,6 +543,9 @@ __STRATEGY_OPTIONS__
               <option value="active">active only</option>
               <option value="open_positions">open positions</option>
               <option value="winners">winners</option>
+              <option value="fresh">fresh</option>
+              <option value="stale">stale</option>
+              <option value="idle">idle</option>
             </select>
           </div>
           <div class="strategy-board" id="strategy-summary-board">
@@ -660,6 +663,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return { label: "FRESH", className: "ok" };
         }
         return { label: "STALE", className: "warn" };
+      }
+
+      function matchesStrategyFilter(item, activityState) {
+        if (strategyFilterMode === "active") return Boolean(item.has_activity);
+        if (strategyFilterMode === "open_positions") return Number(item.net_position_qty || 0) !== 0;
+        if (strategyFilterMode === "winners") return Number(item.gross_realized_pnl || 0) > 0;
+        if (strategyFilterMode === "fresh") return activityState.label === "FRESH";
+        if (strategyFilterMode === "stale") return activityState.label === "STALE";
+        if (strategyFilterMode === "idle") return activityState.label === "IDLE";
+        return true;
       }
 
       async function api(path, options = {}) {
@@ -861,12 +874,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
-        const filteredStrategies = strategySummary.filter((item) => {
-          if (strategyFilterMode === "active") return Boolean(item.has_activity);
-          if (strategyFilterMode === "open_positions") return Number(item.net_position_qty || 0) !== 0;
-          if (strategyFilterMode === "winners") return Number(item.gross_realized_pnl || 0) > 0;
-          return true;
-        });
+        const filteredStrategies = strategySummary.filter((item) => matchesStrategyFilter(item, classifyStrategyActivity(item)));
 
         const sortedStrategies = [...filteredStrategies].sort((left, right) => {
           if (strategySortMode === "strategy_name") {

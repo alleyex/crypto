@@ -2263,6 +2263,9 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-closed-trades-board"' in response.text
     assert 'id="strategy-sort-select"' in response.text
     assert 'id="strategy-filter-select"' in response.text
+    assert '<option value="fresh">fresh</option>' in response.text
+    assert '<option value="stale">stale</option>' in response.text
+    assert '<option value="idle">idle</option>' in response.text
     assert 'id="closed-trades-strategy-select"' in response.text
     assert 'id="closed-trades-reset-button"' in response.text
     assert 'id="scheduler-detail"' in response.text
