@@ -6,6 +6,11 @@ from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
+from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.pipeline.execution_job import run_execution_job
+from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.strategy_job import run_strategy_job
+from app.pipeline.strategy_job import run_strategy_jobs
 
 
 JOB_TYPES = ("market_data", "strategy", "execution")
@@ -208,3 +213,77 @@ def fail_job(
         (_serialize_payload(result), error_message, job_id),
     )
     connection.commit()
+
+
+def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(job.get("payload") or {})
+    job_type = str(job["job_type"])
+
+    if job_type == "market_data":
+        return run_market_data_job(
+            connection,
+            symbol_names=payload.get("symbol_names"),
+        )
+
+    if job_type == "strategy":
+        strategy_names = payload.get("strategy_names") or []
+        strategy_name = payload.get("strategy_name")
+        symbol_names = payload.get("symbol_names")
+        if strategy_names:
+            return run_strategy_jobs(
+                connection,
+                strategy_names=[str(name) for name in strategy_names],
+                symbol_names=symbol_names,
+            )
+        return run_strategy_job(
+            connection,
+            strategy_name=str(strategy_name or DEFAULT_STRATEGY_NAME),
+            symbol_names=symbol_names,
+        )
+
+    if job_type == "execution":
+        risk_event_ids = payload.get("risk_event_ids")
+        symbol_names = payload.get("symbol_names")
+        normalized_risk_event_ids = [int(item) for item in risk_event_ids] if risk_event_ids else None
+        return run_execution_job(
+            connection,
+            risk_event_ids=normalized_risk_event_ids,
+            symbol_names=symbol_names,
+        )
+
+    raise ValueError(f"Unsupported job type: {job_type}")
+
+
+def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None) -> dict[str, Any]:
+    leased_job = lease_next_job(connection, job_type=job_type)
+    if leased_job is None:
+        return {
+            "status": "empty",
+            "job_type": job_type,
+            "message": "No queued jobs available.",
+        }
+
+    job_id = int(leased_job["id"])
+    try:
+        result = _run_leased_job(connection, leased_job)
+        complete_job(connection, job_id, result=result)
+        completed_job = get_job(connection, job_id)
+        return {
+            "status": "completed",
+            "job": completed_job,
+            "result": result,
+        }
+    except Exception as exc:
+        fail_job(
+            connection,
+            job_id,
+            str(exc),
+            result={"error_type": exc.__class__.__name__},
+        )
+        failed_job = get_job(connection, job_id)
+        return {
+            "status": "failed",
+            "job": failed_job,
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }

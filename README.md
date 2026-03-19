@@ -351,6 +351,7 @@ Control endpoints:
 - `POST /scheduler/strategy/limit-preset`
 - `GET /queue/jobs`
 - `POST /queue/jobs`
+- `POST /queue/jobs/run-next`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -389,6 +390,9 @@ curl -s http://127.0.0.1:8000/queue/jobs
 curl -s -X POST http://127.0.0.1:8000/queue/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
+curl -s -X POST http://127.0.0.1:8000/queue/jobs/run-next \
+  -H "Content-Type: application/json" \
+  -d '{"job_type":"strategy"}'
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status

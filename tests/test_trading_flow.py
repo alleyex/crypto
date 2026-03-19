@@ -27,6 +27,7 @@ from app.core.job_queue import fail_job
 from app.core.job_queue import get_job
 from app.core.job_queue import lease_next_job
 from app.core.job_queue import list_jobs
+from app.core.job_queue import run_next_queued_job
 from app.core.migrations import _auto_id_column_sql
 from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
 from app.core.migrations import run_migrations
@@ -3078,6 +3079,79 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
     assert list_response.status_code == 200
     assert list_response.json()[0]["job_type"] == "strategy"
     assert list_response.json()[0]["status"] == "queued"
+
+
+def test_run_next_queued_job_completes_strategy_job(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(
+            connection,
+            "strategy",
+            payload={"strategy_names": ["ma_cross", "momentum_3bar"], "symbol_names": ["BTCUSDT"]},
+        )
+
+        def fake_run_strategy_jobs(conn, strategy_names, symbol_names=None):
+            assert strategy_names == ["ma_cross", "momentum_3bar"]
+            assert symbol_names == ["BTCUSDT"]
+            return {
+                "status": "ok",
+                "strategy_names": strategy_names,
+                "symbol_names": symbol_names,
+                "steps": [{"step": "generate_signal", "strategy_name": "ma_cross", "symbol": "BTCUSDT", "signal_type": "BUY"}],
+            }
+
+        monkeypatch.setattr("app.core.job_queue.run_strategy_jobs", fake_run_strategy_jobs)
+
+        result = run_next_queued_job(connection, job_type="strategy")
+
+        assert result["status"] == "completed"
+        assert result["job"]["id"] == job_id
+        assert result["job"]["status"] == "completed"
+        assert result["result"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert get_job(connection, job_id)["status"] == "completed"  # type: ignore[index]
+    finally:
+        connection.close()
+
+
+def test_run_next_queued_job_marks_failure(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "market_data", payload={"symbol_names": ["BTCUSDT"]})
+
+        def fake_run_market_data_job(conn, symbol_names=None):
+            raise RuntimeError("market data unavailable")
+
+        monkeypatch.setattr("app.core.job_queue.run_market_data_job", fake_run_market_data_job)
+
+        result = run_next_queued_job(connection, job_type="market_data")
+
+        assert result["status"] == "failed"
+        assert result["job"]["id"] == job_id
+        assert result["job"]["status"] == "failed"
+        assert result["job"]["error_message"] == "market data unavailable"
+        assert result["error_type"] == "RuntimeError"
+    finally:
+        connection.close()
+
+
+def test_run_next_queue_job_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    def fake_run_next_queued_job(connection, job_type=None):
+        captured["job_type"] = job_type
+        return {"status": "completed", "job": {"id": 9, "job_type": job_type or "strategy"}}
+
+    monkeypatch.setattr("app.api.main.run_next_queued_job", fake_run_next_queued_job)
+
+    response = client.post("/queue/jobs/run-next", json={"job_type": "strategy"})
+
+    assert response.status_code == 200
+    assert captured["job_type"] == "strategy"
+    assert response.json()["status"] == "completed"
+    assert response.json()["job"]["id"] == 9
 
 
 def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:

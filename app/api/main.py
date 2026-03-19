@@ -24,6 +24,7 @@ from app.core.db import table_exists
 from app.core.job_queue import JOB_TYPES
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import list_jobs as list_queue_jobs
+from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
@@ -355,6 +356,10 @@ class QueueJobRequest(BaseModel):
     payload: Optional[Dict[str, Any]] = None
 
 
+class QueueRunRequest(BaseModel):
+    job_type: Optional[Literal["market_data", "strategy", "execution"]] = None
+
+
 class SchedulerStrategyRequest(BaseModel):
     strategy_name: str = DEFAULT_STRATEGY_NAME
     strategy_names: Optional[List[str]] = None
@@ -467,6 +472,16 @@ def create_queue_job(payload: QueueJobRequest) -> dict[str, Any]:
             "payload": job_payload,
             "job": list_queue_jobs(connection, limit=1, job_type=payload.job_type)[0],
         }
+    finally:
+        connection.close()
+
+
+@app.post("/queue/jobs/run-next")
+def run_next_queue_job(payload: Optional[QueueRunRequest] = None) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        job_type = payload.job_type if payload is not None else None
+        return run_next_queued_job(connection, job_type=job_type)
     finally:
         connection.close()
 
