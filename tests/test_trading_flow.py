@@ -1,8 +1,10 @@
 import json
 import sqlite3
 import urllib.error
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import contextlib
 
 from fastapi.testclient import TestClient
 
@@ -2398,6 +2400,46 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl"]
     finally:
         connection.close()
+
+
+def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
+    outputs: list[str] = []
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("scripts.run_market_data_job.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("scripts.run_market_data_job.run_migrations", lambda connection: None)
+    monkeypatch.setattr("scripts.run_market_data_job.run_market_data_job", lambda connection: {"step": "save_klines", "saved_klines": 5})
+
+    monkeypatch.setattr("scripts.run_strategy_job.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("scripts.run_strategy_job.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "scripts.run_strategy_job.run_strategy_job",
+        lambda connection: {"status": "ok", "steps": [{"step": "generate_signal"}]},
+    )
+
+    monkeypatch.setattr("scripts.run_execution_job.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("scripts.run_execution_job.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "scripts.run_execution_job.run_execution_job",
+        lambda connection: {"status": "ok", "steps": [{"step": "paper_execute"}]},
+    )
+
+    from scripts.run_market_data_job import main as market_main
+    from scripts.run_strategy_job import main as strategy_main
+    from scripts.run_execution_job import main as execution_main
+
+    for entrypoint in (market_main, strategy_main, execution_main):
+        buffer = StringIO()
+        with contextlib.redirect_stdout(buffer):
+            entrypoint()
+        outputs.append(buffer.getvalue())
+
+    assert '"saved_klines": 5' in outputs[0]
+    assert '"generate_signal"' in outputs[1]
+    assert '"paper_execute"' in outputs[2]
 
 
 def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
