@@ -3,6 +3,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app.pipeline.execution_job import run_execution_job
+from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.migrations import run_migrations
@@ -13,6 +16,7 @@ LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "scheduler.log"
 RUNTIME_DIR = Path("runtime")
 STOP_FILE = RUNTIME_DIR / "scheduler.stop"
+SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-only")
 
 
 def _summarize_result(result: dict) -> str:
@@ -42,6 +46,25 @@ def _write_log(line: str) -> None:
         file.write(line + "\n")
 
 
+def _run_scheduled_job(mode: str) -> dict:
+    if mode == "pipeline":
+        return run_pipeline_collect()
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        if mode == "market-data-only":
+            return {"steps": [run_market_data_job(connection)]}
+        if mode == "strategy-only":
+            return {"steps": list(run_strategy_job(connection)["steps"])}
+        if mode == "execution-only":
+            return {"steps": list(run_execution_job(connection)["steps"])}
+    finally:
+        connection.close()
+
+    raise ValueError(f"Unsupported scheduler mode: {mode}")
+
+
 def stop_requested() -> bool:
     return STOP_FILE.exists()
 
@@ -66,7 +89,16 @@ def _record_soak_snapshot() -> None:
         _write_log(error_line)
 
 
-def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) -> None:
+def run_scheduler(
+    interval_seconds: int = 60,
+    iterations: Optional[int] = None,
+    mode: str = "pipeline",
+) -> None:
+    if mode not in SCHEDULER_MODES:
+        raise ValueError(
+            f"Unsupported scheduler mode: {mode}. Expected one of: {', '.join(SCHEDULER_MODES)}"
+        )
+
     run_count = 0
     connection = get_connection()
     try:
@@ -94,18 +126,18 @@ def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) 
             component="scheduler",
             status="running",
             message="Scheduler loop started.",
-            payload={"run_count": run_count},
+            payload={"run_count": run_count, "mode": mode},
         )
-        result = run_pipeline_collect()
+        result = _run_scheduled_job(mode)
         summary = _summarize_result(result)
-        log_line = f"[{started_at}] run={run_count} {summary}"
+        log_line = f"[{started_at}] run={run_count} mode={mode} {summary}"
         print(log_line)
         _write_log(log_line)
         record_heartbeat(
             component="scheduler",
             status="ok",
             message="Scheduler loop completed.",
-            payload={"run_count": run_count, "summary": summary},
+            payload={"run_count": run_count, "summary": summary, "mode": mode},
         )
         _record_soak_snapshot()
 

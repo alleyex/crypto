@@ -2468,7 +2468,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
-    assert "run=1 signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
+    assert "run=1 mode=pipeline signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
     assert "soak_snapshot status=ok" in log_text
 
     connection = sqlite3.connect(db_path)
@@ -2477,6 +2477,40 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     finally:
         connection.close()
     assert any(item["component"] == "scheduler" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler-strategy.log"
+    db_path = tmp_path / "scheduler-strategy-heartbeat.db"
+    recorded = []
+
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "app.scheduler.runner.run_strategy_job",
+        lambda connection: {
+            "status": "ok",
+            "steps": [
+                {"step": "generate_signal", "signal_type": "BUY"},
+                {"step": "evaluate_risk", "decision": "APPROVED"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only")
+
+    assert recorded == [{"status": "ok"}]
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mode=strategy-only" in log_text
+    assert "signal=BUY" in log_text
+    assert "risk=APPROVED" in log_text
 
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:
