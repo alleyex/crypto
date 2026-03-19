@@ -360,6 +360,9 @@ Example API usage:
 ```bash
 curl -s http://127.0.0.1:8000/health
 curl -s -X POST http://127.0.0.1:8000/pipeline/run
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"]}'
 curl -s -X POST http://127.0.0.1:8000/signals/test \
   -H "Content-Type: application/json" \
   -d '{"signal_type":"SELL"}'
@@ -370,6 +373,10 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/start
 curl -s -X POST http://127.0.0.1:8000/scheduler/strategy \
   -H "Content-Type: application/json" \
   -d '{"strategy_names":["ma_cross","momentum_3bar"]}'
+curl -s http://127.0.0.1:8000/scheduler/symbols
+curl -s -X POST http://127.0.0.1:8000/scheduler/symbols \
+  -H "Content-Type: application/json" \
+  -d '{"symbol_names":["BTCUSDT","ETHUSDT","SOLUSDT"]}'
 curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/preset \
   -H "Content-Type: application/json" \
   -d '{"preset":"reverse"}'
@@ -391,7 +398,7 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
 
 - database table status
 - latest candle freshness
-- latest pipeline activity
+- latest pipeline activity, including multi-symbol pipeline summary counts when available
 - scheduler stop flag and latest log line
 - active runtime config values
 - kill switch status
@@ -401,7 +408,8 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
 
 - health overview
 - positions, orders, pnl, and scheduler log panels
-- buttons for pipeline run, scheduler control, and kill switch control
+- buttons for targeted pipeline runs, scheduler control, and kill switch control
+- runtime strategy and symbol controls for split workers
 
 `GET /audit-events` provides:
 
@@ -460,10 +468,11 @@ Logs:
 ## Current Limitations
 
 - SQLite only
-- Single market: `BTCUSDT`
+- Multi-symbol runtime currently validated for `BTCUSDT`, `ETHUSDT`, and `SOLUSDT`
 - Single timeframe: `1m`
-- Basic MA cross strategy only
+- Multi-strategy runtime currently validated for `ma_cross` and `momentum_3bar`
 - Paper trading only
+- Scheduler split workers still share one SQLite runtime and are not queue-backed yet
 
 ## Next Recommended Work
 
