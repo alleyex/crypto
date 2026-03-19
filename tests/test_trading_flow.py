@@ -1991,6 +1991,9 @@ def test_admin_page_is_served() -> None:
     assert "Auto refresh every 10 seconds." in response.text
     assert 'id="heartbeats-json"' in response.text
     assert 'id="market-data-status"' in response.text
+    assert 'id="data-worker-status"' in response.text
+    assert 'id="strategy-worker-status"' in response.text
+    assert 'id="execution-worker-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text

@@ -221,6 +221,13 @@ def render_admin_page() -> str:
         min-height: 240px;
       }
 
+      .worker-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
       pre {
         margin: 0;
         padding: 16px;
@@ -252,7 +259,8 @@ def render_admin_page() -> str:
       @media (max-width: 960px) {
         .hero,
         .controls,
-        .grid {
+        .grid,
+        .worker-grid {
           grid-template-columns: 1fr;
         }
 
@@ -361,7 +369,24 @@ def render_admin_page() -> str:
         </article>
         <article class="panel data-card">
           <h2>Runtime Heartbeats</h2>
-          <p>Latest liveness records for scheduler, pipeline, market data, and alerting.</p>
+          <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
+          <div class="worker-grid">
+            <div class="side-stat">
+              <label>Data Worker</label>
+              <div class="value" id="data-worker-status">Loading</div>
+              <div class="inline-note" id="data-worker-detail">Checking data worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Strategy Worker</label>
+              <div class="value" id="strategy-worker-status">Loading</div>
+              <div class="inline-note" id="strategy-worker-detail">Checking strategy worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Execution Worker</label>
+              <div class="value" id="execution-worker-status">Loading</div>
+              <div class="inline-note" id="execution-worker-detail">Checking execution worker heartbeat...</div>
+            </div>
+          </div>
           <pre id="heartbeats-json">Loading...</pre>
         </article>
         <article class="panel data-card">
@@ -528,6 +553,33 @@ def render_admin_page() -> str:
         el("alerting-runtime-detail").textContent = alertingRuntime
           ? `${alertingRuntime.last_seen_at} | ${alertingRuntime.message}`
           : "No alerting heartbeat recorded yet.";
+
+        const dataWorker = heartbeatMap.data_worker;
+        el("data-worker-status").textContent = dataWorker
+          ? String(dataWorker.status).toUpperCase()
+          : "NONE";
+        el("data-worker-status").className = `value ${statusClass(dataWorker ? dataWorker.status : "degraded")}`;
+        el("data-worker-detail").textContent = dataWorker
+          ? `${dataWorker.last_seen_at} | ${dataWorker.message}`
+          : "No data worker heartbeat recorded yet.";
+
+        const strategyWorker = heartbeatMap.strategy_worker;
+        el("strategy-worker-status").textContent = strategyWorker
+          ? String(strategyWorker.status).toUpperCase()
+          : "NONE";
+        el("strategy-worker-status").className = `value ${statusClass(strategyWorker ? strategyWorker.status : "degraded")}`;
+        el("strategy-worker-detail").textContent = strategyWorker
+          ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}`
+          : "No strategy worker heartbeat recorded yet.";
+
+        const executionWorker = heartbeatMap.execution_worker;
+        el("execution-worker-status").textContent = executionWorker
+          ? String(executionWorker.status).toUpperCase()
+          : "NONE";
+        el("execution-worker-status").className = `value ${statusClass(executionWorker ? executionWorker.status : "degraded")}`;
+        el("execution-worker-detail").textContent = executionWorker
+          ? `${executionWorker.last_seen_at} | ${executionWorker.message}`
+          : "No execution worker heartbeat recorded yet.";
 
         const heartbeatIssues = (heartbeatCheck.components || [])
           .filter((item) => ["failed", "stopped"].includes(item.status))
