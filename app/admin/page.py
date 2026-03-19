@@ -888,7 +888,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("execution-backend-status").textContent = String(executionBackend.backend || "unknown").toUpperCase();
         el("execution-backend-status").className = `value ${statusClass(executionBackend.status)}`;
         el("execution-backend-detail").textContent =
-          `dry_run=${Boolean(executionBackend.dry_run)} | can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`;
+          `${executionBackend.description || "unknown backend"} | dry_run=${Boolean(executionBackend.dry_run)} | can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`;
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 

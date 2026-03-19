@@ -10,6 +10,7 @@ ExecutionResult = Dict[str, Union[float, str, int]]
 
 class ExecutionAdapter(Protocol):
     name: str
+    description: str
     dry_run: bool
     can_execute_orders: bool
 
@@ -38,6 +39,7 @@ class ExecutionAdapter(Protocol):
 
 class PaperExecutionAdapter:
     name = "paper"
+    description = "Paper broker execution backend."
     dry_run = False
     can_execute_orders = True
 
@@ -78,6 +80,7 @@ class PaperExecutionAdapter:
 
 class NoopExecutionAdapter:
     name = "noop"
+    description = "No-op execution backend for dry-run validation."
     dry_run = True
     can_execute_orders = False
 
@@ -129,11 +132,18 @@ class NoopExecutionAdapter:
         ]
 
 
+class SimulatedLiveExecutionAdapter(PaperExecutionAdapter):
+    name = "simulated_live"
+    description = "Placeholder live-style backend backed by simulated paper fills."
+
+
 def get_execution_adapter() -> ExecutionAdapter:
     if EXECUTION_BACKEND == "paper":
         return PaperExecutionAdapter()
     if EXECUTION_BACKEND == "noop":
         return NoopExecutionAdapter()
+    if EXECUTION_BACKEND == "simulated_live":
+        return SimulatedLiveExecutionAdapter()
     raise ValueError(f"Unsupported execution backend: {EXECUTION_BACKEND}")
 
 
@@ -145,7 +155,9 @@ def get_execution_backend_status() -> dict[str, Union[bool, str]]:
     adapter = get_execution_adapter()
     return {
         "backend": adapter.name,
+        "description": adapter.description,
         "dry_run": bool(adapter.dry_run),
         "can_execute_orders": bool(adapter.can_execute_orders),
+        "placeholder": bool(adapter.name == "simulated_live"),
         "status": "ok",
     }

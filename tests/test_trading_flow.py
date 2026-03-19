@@ -3538,8 +3538,10 @@ def test_job_queue_lifecycle_round_trip() -> None:
             "execution_backend": "paper",
             "execution_backend_status": {
                 "backend": "paper",
+                "description": "Paper broker execution backend.",
                 "dry_run": False,
                 "can_execute_orders": True,
+                "placeholder": False,
                 "status": "ok",
             },
             "symbol_names": ["ETHUSDT"],
@@ -3625,8 +3627,10 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
         "execution_backend": "paper",
         "execution_backend_status": {
             "backend": "paper",
+            "description": "Paper broker execution backend.",
             "dry_run": False,
             "can_execute_orders": True,
+            "placeholder": False,
             "status": "ok",
         },
         "source": "admin",
@@ -4515,8 +4519,22 @@ def test_get_execution_backend_status_reports_capabilities(monkeypatch) -> None:
     monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "noop")
     assert get_execution_backend_status() == {
         "backend": "noop",
+        "description": "No-op execution backend for dry-run validation.",
         "dry_run": True,
         "can_execute_orders": False,
+        "placeholder": False,
+        "status": "ok",
+    }
+
+
+def test_get_execution_backend_status_supports_simulated_live(monkeypatch) -> None:
+    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "simulated_live")
+    assert get_execution_backend_status() == {
+        "backend": "simulated_live",
+        "description": "Placeholder live-style backend backed by simulated paper fills.",
+        "dry_run": False,
+        "can_execute_orders": True,
+        "placeholder": True,
         "status": "ok",
     }
 
@@ -4849,8 +4867,10 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
         "execution_backend": "paper",
         "execution_backend_status": {
             "backend": "paper",
+            "description": "Paper broker execution backend.",
             "dry_run": False,
             "can_execute_orders": True,
+            "placeholder": False,
             "status": "ok",
         },
         "strategy_name": "ma_cross",
@@ -5287,7 +5307,9 @@ def test_execution_backend_endpoint() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "backend": "paper",
+        "description": "Paper broker execution backend.",
         "dry_run": False,
         "can_execute_orders": True,
+        "placeholder": False,
         "status": "ok",
     }
