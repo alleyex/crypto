@@ -14,6 +14,7 @@ from app.scheduler.runner import STOP_FILE
 STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy"
 DISABLED_STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy.disabled"
 PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
+DISABLED_REASON_FILE = RUNTIME_DIR / "scheduler.strategy.disabled.reason.json"
 
 
 def set_stop_flag() -> str:
@@ -115,6 +116,29 @@ def read_strategy_priorities() -> dict[str, int]:
             normalized[str(name)] = int(value)
         except (TypeError, ValueError):
             continue
+    return normalized
+
+
+def read_disabled_strategy_notes() -> dict[str, str]:
+    if not DISABLED_REASON_FILE.exists():
+        return {}
+
+    try:
+        payload = json.loads(DISABLED_REASON_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    allowed_names = set(list_registered_strategies())
+    normalized: dict[str, str] = {}
+    for name, value in payload.items():
+        if name not in allowed_names or value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            normalized[str(name)] = text
     return normalized
 
 
@@ -220,10 +244,44 @@ def set_strategy_priorities(strategy_priorities: dict[str, int]) -> Dict[str, Un
     }
 
 
+def set_disabled_strategy_notes(strategy_notes: dict[str, str]) -> Dict[str, Union[str, dict[str, str]]]:
+    allowed_names = set(list_registered_strategies())
+    invalid_names = [name for name in strategy_notes if name not in allowed_names]
+    if invalid_names:
+        raise ValueError(f"Unknown strategies: {', '.join(invalid_names)}")
+
+    normalized = {
+        str(name): str(value).strip()
+        for name, value in strategy_notes.items()
+        if str(value).strip()
+    }
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    if normalized:
+        DISABLED_REASON_FILE.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    elif DISABLED_REASON_FILE.exists():
+        DISABLED_REASON_FILE.unlink()
+
+    log_event(
+        event_type="scheduler_control",
+        status="updated",
+        source="scheduler_control",
+        message="Scheduler disabled strategy notes updated.",
+        payload={
+            "disabled_strategy_notes": normalized,
+            "disabled_reason_file": str(DISABLED_REASON_FILE),
+        },
+    )
+    return {
+        "disabled_strategy_notes": normalized,
+        "disabled_reason_file": str(DISABLED_REASON_FILE),
+    }
+
+
 def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
     active_strategy_names = read_active_strategies()
     disabled_strategy_names = read_disabled_strategies()
     strategy_priorities = read_strategy_priorities()
+    disabled_strategy_notes = read_disabled_strategy_notes()
     effective_strategy_names = read_effective_active_strategies()
     available_strategies = list_registered_strategies()
     return {
@@ -232,10 +290,12 @@ def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
         "disabled_strategy_names": disabled_strategy_names,
         "effective_strategy_names": effective_strategy_names,
         "strategy_priorities": strategy_priorities,
+        "disabled_strategy_notes": disabled_strategy_notes,
         "default_strategy": DEFAULT_STRATEGY_NAME,
         "strategy_file": str(STRATEGY_FILE),
         "disabled_strategy_file": str(DISABLED_STRATEGY_FILE),
         "priority_file": str(PRIORITY_FILE),
+        "disabled_reason_file": str(DISABLED_REASON_FILE),
         "available_strategies": available_strategies,
         "strategy_entries": [
             {
@@ -244,6 +304,7 @@ def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
                 "enabled": name not in disabled_strategy_names,
                 "effective": name in effective_strategy_names,
                 "priority": strategy_priorities.get(name),
+                "disabled_reason": disabled_strategy_notes.get(name),
             }
             for name in available_strategies
         ],

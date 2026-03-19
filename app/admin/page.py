@@ -226,6 +226,16 @@ def render_admin_page() -> str:
         background: #13202c;
       }
 
+      input[type="text"] {
+        min-width: 180px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font: inherit;
+        color: var(--text);
+        background: #13202c;
+      }
+
       button.danger {
         color: white;
         background: linear-gradient(135deg, #ff7a7a, #ff4d6d);
@@ -489,6 +499,9 @@ __STRATEGY_OPTIONS__
           </div>
           <div class="inline-controls" id="scheduler-priority-controls">
             <span class="chip">Priority: lower number runs first.</span>
+          </div>
+          <div class="inline-controls" id="scheduler-disabled-note-controls">
+            <span class="chip">Disabled note: explain why a strategy is turned off.</span>
           </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
@@ -927,6 +940,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }).join("");
       }
 
+      function renderSchedulerDisabledNoteControls(schedulerStrategy) {
+        const container = el("scheduler-disabled-note-controls");
+        if (!container) return;
+        const availableStrategies = schedulerStrategy?.available_strategies || [];
+        const disabledNotes = schedulerStrategy?.disabled_strategy_notes || {};
+        if (!availableStrategies.length) {
+          container.innerHTML = '<div class="chip">No strategies available.</div>';
+          return;
+        }
+        container.innerHTML = availableStrategies.map((strategyName) => `
+          <label for="disabled-note-${strategyName}">${strategyName}</label>
+          <input id="disabled-note-${strategyName}" data-strategy-disabled-note="${strategyName}" type="text" value="${disabledNotes[strategyName] || ""}" placeholder="optional disable note" />
+        `).join("");
+      }
+
       function updateSoakValidation(currentReport, history) {
         el("soak-json").textContent = formatJson({
           current_report: currentReport,
@@ -1209,6 +1237,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           });
         }
         renderSchedulerPriorityControls(schedulerStrategy);
+        renderSchedulerDisabledNoteControls(schedulerStrategy);
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
@@ -1273,6 +1302,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 Number.parseInt(input.value || `${index}`, 10),
               ])
             );
+            const disabledStrategyNotes = Object.fromEntries(
+              Array.from(document.querySelectorAll("[data-strategy-disabled-note]"))
+                .map((input) => [input.dataset.strategyDisabledNote, input.value.trim()])
+                .filter(([, value]) => value)
+            );
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify({
@@ -1281,6 +1315,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   : ["__DEFAULT_STRATEGY_NAME__"],
                 disabled_strategy_names: selectedDisabledStrategies,
                 strategy_priorities: strategyPriorities,
+                disabled_strategy_notes: disabledStrategyNotes,
               }),
             });
           } else if (type === "kill-enable") {

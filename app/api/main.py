@@ -49,6 +49,7 @@ from app.scheduler.control import read_scheduler_log
 from app.scheduler.control import set_active_strategy
 from app.scheduler.control import set_active_strategies
 from app.scheduler.control import set_disabled_strategies
+from app.scheduler.control import set_disabled_strategy_notes
 from app.scheduler.control import set_strategy_priorities
 from app.scheduler.control import set_stop_flag
 from app.scheduler.runner import LOG_DIR
@@ -315,6 +316,7 @@ class SchedulerStrategyRequest(BaseModel):
     strategy_names: Optional[List[str]] = None
     disabled_strategy_names: Optional[List[str]] = None
     strategy_priorities: Optional[Dict[str, int]] = None
+    disabled_strategy_notes: Optional[Dict[str, str]] = None
 
 
 @app.get("/health")
@@ -523,7 +525,12 @@ def scheduler_strategy_status() -> dict[str, Any]:
 def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, Any]:
     if any(
         value is not None
-        for value in (payload.strategy_names, payload.disabled_strategy_names, payload.strategy_priorities)
+        for value in (
+            payload.strategy_names,
+            payload.disabled_strategy_names,
+            payload.strategy_priorities,
+            payload.disabled_strategy_notes,
+        )
     ):
         if payload.strategy_names is not None:
             set_active_strategies(payload.strategy_names)
@@ -531,6 +538,8 @@ def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, An
             set_disabled_strategies(payload.disabled_strategy_names)
         if payload.strategy_priorities is not None:
             set_strategy_priorities(payload.strategy_priorities)
+        if payload.disabled_strategy_notes is not None:
+            set_disabled_strategy_notes(payload.disabled_strategy_notes)
         return get_strategy_status()
     return set_active_strategy(payload.strategy_name)
 

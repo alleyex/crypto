@@ -2261,6 +2261,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="scheduler-strategy-select"' in response.text
     assert 'id="scheduler-disabled-strategy-select"' in response.text
     assert 'id="scheduler-priority-controls"' in response.text
+    assert 'id="scheduler-disabled-note-controls"' in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text
@@ -2460,10 +2461,12 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "disabled_strategy_names": ["momentum_3bar"],
             "effective_strategy_names": ["ma_cross"],
             "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
+            "disabled_strategy_notes": {"momentum_3bar": "cooldown investigation"},
             "default_strategy": "ma_cross",
             "strategy_file": "runtime/scheduler.strategy",
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
             "priority_file": "runtime/scheduler.strategy.priority.json",
+            "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
@@ -2489,9 +2492,17 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "priority_file": "runtime/scheduler.strategy.priority.json",
         }
 
+    def fake_set_disabled_strategy_notes(strategy_notes):
+        captured["notes"] = strategy_notes
+        return {
+            "disabled_strategy_notes": strategy_notes,
+            "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
+        }
+
     monkeypatch.setattr("app.api.main.set_active_strategies", fake_set_active_strategies)
     monkeypatch.setattr("app.api.main.set_disabled_strategies", fake_set_disabled_strategies)
     monkeypatch.setattr("app.api.main.set_strategy_priorities", fake_set_strategy_priorities)
+    monkeypatch.setattr("app.api.main.set_disabled_strategy_notes", fake_set_disabled_strategy_notes)
 
     status_response = client.get("/scheduler/strategy")
     update_response = client.post(
@@ -2500,6 +2511,7 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "strategy_names": ["ma_cross", "momentum_3bar"],
             "disabled_strategy_names": ["momentum_3bar"],
             "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
+            "disabled_strategy_notes": {"momentum_3bar": "cooldown investigation"},
         },
     )
 
@@ -2512,10 +2524,12 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     assert update_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
     assert update_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
     assert update_response.json()["strategy_priorities"] == {"ma_cross": 0, "momentum_3bar": 10}
+    assert update_response.json()["disabled_strategy_notes"] == {"momentum_3bar": "cooldown investigation"}
     assert captured == {
         "active": ["ma_cross", "momentum_3bar"],
         "disabled": ["momentum_3bar"],
         "priorities": {"ma_cross": 0, "momentum_3bar": 10},
+        "notes": {"momentum_3bar": "cooldown investigation"},
     }
 
 
