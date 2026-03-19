@@ -276,6 +276,12 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
     retry_jobs = [job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1]
     latest_failed_job = next((job for job in latest_jobs if job["status"] == "failed"), None)
     latest_retry_job = next((job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1), None)
+    failure_streak = 0
+    terminal_jobs = [job for job in latest_jobs if job["status"] in {"completed", "failed"}]
+    for job in terminal_jobs:
+        if job["status"] != "failed":
+            break
+        failure_streak += 1
     total_job_count = sum(counts.values())
     completed_count = counts.get("completed", 0)
     failed_count = counts.get("failed", 0)
@@ -293,6 +299,9 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
             "avg_attempt_count": round(float(overall_attempt_row.get("avg_attempt_count") or 0.0), 2),
             "max_attempt_count": int(overall_attempt_row.get("max_attempt_count") or 0),
             "retry_job_count": len(retry_jobs),
+            "failure_streak": failure_streak,
+            "recent_failure_count": len([job for job in latest_jobs if job["status"] == "failed"]),
+            "recent_retry_count": len(retry_jobs),
         },
         "job_type_counts": job_type_counts,
         "failed_jobs": [job for job in latest_jobs if job["status"] == "failed"],

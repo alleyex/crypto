@@ -2537,6 +2537,9 @@ def test_admin_page_is_served() -> None:
     assert "avg attempts=" in response.text
     assert "fail%=" in response.text
     assert "retries=" in response.text
+    assert "failure streak=" in response.text
+    assert "recent failed=" in response.text
+    assert "recent retries=" in response.text
     assert "Queue Debug" in response.text
     assert "Latest failed:" in response.text
     assert "Latest retry:" in response.text
@@ -2665,6 +2668,9 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                 "avg_attempt_count": 1.38,
                 "max_attempt_count": 3,
                 "retry_job_count": 2,
+                "failure_streak": 1,
+                "recent_failure_count": 1,
+                "recent_retry_count": 1,
             },
             "job_type_counts": {
                 "market_data": {
@@ -2726,6 +2732,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["counts"]["queued"] == 2
     assert response.json()["metrics"]["retry_job_count"] == 2
     assert response.json()["metrics"]["max_attempt_count"] == 3
+    assert response.json()["metrics"]["failure_streak"] == 1
+    assert response.json()["metrics"]["recent_failure_count"] == 1
     assert response.json()["job_type_counts"]["strategy"]["failed"] == 1
     assert response.json()["job_type_counts"]["strategy"]["failure_ratio"] == 0.1667
     assert response.json()["failed_jobs"][0]["id"] == 9
@@ -2772,6 +2780,9 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
             "avg_attempt_count": 1.0,
             "max_attempt_count": 2,
             "retry_job_count": 1,
+            "failure_streak": 1,
+            "recent_failure_count": 1,
+            "recent_retry_count": 1,
         }
         assert summary["job_type_counts"]["market_data"]["success_ratio"] == 1.0
         assert summary["job_type_counts"]["strategy"]["failure_ratio"] == 1.0

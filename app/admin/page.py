@@ -1571,6 +1571,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `fail%=${Number(metrics.failure_ratio || 0) * 100}%`,
           `avg attempts=${metrics.avg_attempt_count ?? 0}`,
           `retries=${metrics.retry_job_count ?? 0}`,
+          `failure streak=${metrics.failure_streak ?? 0}`,
+          `recent failed=${metrics.recent_failure_count ?? 0}`,
+          `recent retries=${metrics.recent_retry_count ?? 0}`,
         ];
         const typeBits = ["market_data", "strategy", "execution"].map((jobType) => {
           const item = byType[jobType] || {};
