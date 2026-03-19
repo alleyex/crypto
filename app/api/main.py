@@ -40,6 +40,8 @@ from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
+from app.execution.runtime import get_execution_backend_runtime_status
+from app.execution.runtime import set_execution_backend
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
@@ -455,6 +457,10 @@ class QueuePipelineRequest(BaseModel):
     payload: Optional[Dict[str, Any]] = None
 
 
+class ExecutionBackendRequest(BaseModel):
+    backend: str
+
+
 def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
     return build_job_payload(
         strategy_name=payload.strategy_name,
@@ -495,8 +501,24 @@ def alerts_status() -> dict[str, bool]:
 
 
 @app.get("/execution/backend")
-def execution_backend() -> dict[str, Union[bool, str]]:
-    return get_execution_backend_status()
+def execution_backend() -> dict[str, Union[bool, str, list[str]]]:
+    return {
+        **get_execution_backend_status(),
+        **get_execution_backend_runtime_status(),
+    }
+
+
+@app.post("/execution/backend")
+def execution_backend_update(payload: ExecutionBackendRequest) -> dict[str, Union[bool, str, list[str]]]:
+    set_execution_backend(
+        payload.backend,
+        audit_action=f"set_execution_backend:{payload.backend}",
+        audit_message=f"Execution backend set to {payload.backend}.",
+    )
+    return {
+        **get_execution_backend_status(),
+        **get_execution_backend_runtime_status(),
+    }
 
 
 @app.post("/alerts/test")

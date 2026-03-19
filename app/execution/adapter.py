@@ -1,8 +1,8 @@
 from typing import Dict, List, Optional, Protocol, Union
 
 from app.core.db import DBConnection
-from app.core.settings import EXECUTION_BACKEND
 from app.execution import paper_broker
+from app.execution.runtime import read_configured_execution_backend
 
 
 ExecutionResult = Dict[str, Union[float, str, int]]
@@ -138,13 +138,14 @@ class SimulatedLiveExecutionAdapter(PaperExecutionAdapter):
 
 
 def get_execution_adapter() -> ExecutionAdapter:
-    if EXECUTION_BACKEND == "paper":
+    configured_backend = read_configured_execution_backend()
+    if configured_backend == "paper":
         return PaperExecutionAdapter()
-    if EXECUTION_BACKEND == "noop":
+    if configured_backend == "noop":
         return NoopExecutionAdapter()
-    if EXECUTION_BACKEND == "simulated_live":
+    if configured_backend == "simulated_live":
         return SimulatedLiveExecutionAdapter()
-    raise ValueError(f"Unsupported execution backend: {EXECUTION_BACKEND}")
+    raise ValueError(f"Unsupported execution backend: {configured_backend}")
 
 
 def get_execution_adapter_name() -> str:

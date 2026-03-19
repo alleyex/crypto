@@ -64,6 +64,8 @@ from app.execution.paper_broker import execute_latest_risk
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import NoopExecutionAdapter
 from app.execution.adapter import get_execution_adapter_name
+from app.execution.runtime import get_execution_backend_runtime_status
+from app.execution.runtime import set_execution_backend
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
@@ -2712,6 +2714,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="queue-status"' in response.text
     assert 'id="execution-backend-status"' in response.text
     assert 'id="execution-backend-detail"' in response.text
+    assert 'id="execution-backend-select"' in response.text
+    assert 'data-action="execution-backend-save"' in response.text
     assert 'id="queue-json"' in response.text
     assert 'id="queue-message"' in response.text
     assert 'id="queue-board"' in response.text
@@ -4511,12 +4515,12 @@ def test_noop_execution_adapter_skips_pending_risks() -> None:
 
 
 def test_get_execution_adapter_name_reads_runtime_backend(monkeypatch) -> None:
-    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "noop")
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "noop")
     assert get_execution_adapter_name() == "noop"
 
 
 def test_get_execution_backend_status_reports_capabilities(monkeypatch) -> None:
-    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "noop")
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "noop")
     assert get_execution_backend_status() == {
         "backend": "noop",
         "description": "No-op execution backend for dry-run validation.",
@@ -4528,7 +4532,7 @@ def test_get_execution_backend_status_reports_capabilities(monkeypatch) -> None:
 
 
 def test_get_execution_backend_status_supports_simulated_live(monkeypatch) -> None:
-    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "simulated_live")
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "simulated_live")
     assert get_execution_backend_status() == {
         "backend": "simulated_live",
         "description": "Placeholder live-style backend backed by simulated paper fills.",
@@ -4536,6 +4540,22 @@ def test_get_execution_backend_status_supports_simulated_live(monkeypatch) -> No
         "can_execute_orders": True,
         "placeholder": True,
         "status": "ok",
+    }
+
+
+def test_execution_backend_runtime_status_round_trip(tmp_path, monkeypatch) -> None:
+    backend_file = tmp_path / "execution.backend"
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND_FILE", backend_file)
+    monkeypatch.setattr("app.execution.runtime.RUNTIME_DIR", tmp_path)
+
+    result = set_execution_backend("noop")
+
+    assert result["backend"] == "noop"
+    assert get_execution_backend_runtime_status() == {
+        "backend": "noop",
+        "default_backend": "paper",
+        "available_backends": ["paper", "noop", "simulated_live"],
+        "execution_backend_file": str(backend_file),
     }
 
 
@@ -5306,10 +5326,50 @@ def test_execution_backend_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
+        "available_backends": ["paper", "noop", "simulated_live"],
         "backend": "paper",
         "description": "Paper broker execution backend.",
+        "default_backend": "paper",
         "dry_run": False,
         "can_execute_orders": True,
+        "execution_backend_file": "runtime/execution.backend",
         "placeholder": False,
         "status": "ok",
     }
+
+
+def test_execution_backend_update_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "app.api.main.set_execution_backend",
+        lambda backend, **kwargs: captured.update({"backend": backend}) or {"backend": backend, "execution_backend_file": "runtime/execution.backend"},
+    )
+    monkeypatch.setattr(
+        "app.api.main.get_execution_backend_status",
+        lambda: {
+            "backend": "noop",
+            "description": "No-op execution backend for dry-run validation.",
+            "dry_run": True,
+            "can_execute_orders": False,
+            "placeholder": False,
+            "status": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.main.get_execution_backend_runtime_status",
+        lambda: {
+            "backend": "noop",
+            "default_backend": "paper",
+            "available_backends": ["paper", "noop", "simulated_live"],
+            "execution_backend_file": "runtime/execution.backend",
+        },
+    )
+
+    response = client.post("/execution/backend", json={"backend": "noop"})
+
+    assert response.status_code == 200
+    assert captured["backend"] == "noop"
+    assert response.json()["backend"] == "noop"
+    assert response.json()["dry_run"] is True

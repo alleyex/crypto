@@ -523,6 +523,15 @@ __STRATEGY_OPTIONS__
             <select id="scheduler-symbol-select" multiple size="3"></select>
             <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy State</button>
           </div>
+          <div class="inline-controls">
+            <label for="execution-backend-select">Execution Backend</label>
+            <select id="execution-backend-select">
+              <option value="paper">paper</option>
+              <option value="noop">noop</option>
+              <option value="simulated_live">simulated_live</option>
+            </select>
+            <button class="secondary" data-action="execution-backend-save">Apply Execution Backend</button>
+          </div>
           <div class="inline-controls" id="scheduler-priority-controls">
             <span class="chip">Priority: lower number runs first.</span>
           </div>
@@ -1702,9 +1711,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         window.__schedulerStrategyStatus = schedulerStrategy;
         queueSummaryState = queueSummary;
         const strategySelect = el("pipeline-strategy-select");
+        const executionBackendSelect = el("execution-backend-select");
         if (strategySelect && strategies?.default_strategy && !strategySelect.dataset.initialized) {
           strategySelect.value = strategies.default_strategy;
           strategySelect.dataset.initialized = "true";
+        }
+        if (executionBackendSelect) {
+          executionBackendSelect.value = health?.checks?.execution_backend?.backend || "paper";
         }
         const schedulerStrategySelect = el("scheduler-strategy-select");
         if (schedulerStrategySelect && schedulerStrategy?.strategy_names) {
@@ -1769,6 +1782,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "scheduler-start": "scheduler-message",
           "scheduler-stop": "scheduler-message",
           "scheduler-strategy-save": "scheduler-message",
+          "execution-backend-save": "scheduler-message",
           "queue-enqueue-pipeline": "queue-message",
           "queue-drain-pipeline": "queue-message",
           "queue-enqueue-strategy": "queue-message",
@@ -1820,6 +1834,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify(payload),
+            });
+          } else if (type === "execution-backend-save") {
+            result = await api("/execution/backend", {
+              method: "POST",
+              body: JSON.stringify({
+                backend: el("execution-backend-select")?.value || "paper",
+              }),
             });
           } else if (type === "scheduler-preset-top1") {
             await applySchedulerPreset(1);
