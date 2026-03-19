@@ -2518,6 +2518,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
     assert 'id="scheduler-disabled-strategy-select"' in response.text
+    assert 'id="scheduler-symbol-select"' in response.text
     assert 'id="scheduler-priority-controls"' in response.text
     assert 'id="scheduler-disabled-note-controls"' in response.text
     assert 'id="scheduler-effective-limit-input"' in response.text
@@ -3730,9 +3731,10 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr(
         "app.scheduler.runner.run_pipeline_collect",
-        lambda strategy_name="ma_cross": {
+        lambda strategy_name="ma_cross", symbol_names=None: {
             "steps": [
                 {"step": "generate_signal", "signal_type": "BUY"},
                 {"step": "evaluate_risk", "decision": "APPROVED"},
@@ -3749,7 +3751,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
-    assert "run=1 mode=pipeline strategy=ma_cross signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
+    assert "run=1 mode=pipeline strategy=ma_cross symbols=BTCUSDT,ETHUSDT signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
     assert "soak_snapshot status=ok" in log_text
 
     connection = sqlite3.connect(db_path)
@@ -3770,10 +3772,11 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "app.scheduler.runner.run_strategy_jobs",
-        lambda connection, strategy_names=None: {
+        lambda connection, strategy_names=None, symbol_names=None: {
             "status": "ok",
             "strategy_names": strategy_names or ["ma_cross"],
             "steps": [
@@ -3795,6 +3798,7 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     log_text = log_path.read_text(encoding="utf-8")
     assert "mode=strategy-only" in log_text
     assert "strategies=ma_cross,momentum_3bar" in log_text
+    assert "symbols=BTCUSDT,ETHUSDT" in log_text
     assert "signal=ma_cross=BUY;momentum_3bar=SELL" in log_text
     assert "risk=ma_cross=APPROVED;momentum_3bar=REJECTED" in log_text
 

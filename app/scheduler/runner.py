@@ -99,17 +99,18 @@ def _run_scheduled_job(
     mode: str,
     strategy_name: str = DEFAULT_STRATEGY_NAME,
     strategy_names: Optional[list[str]] = None,
+    symbol_names: Optional[list[str]] = None,
 ) -> dict:
     if mode == "pipeline":
-        return run_pipeline_collect(strategy_name=strategy_name)
+        return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
 
     connection = get_connection()
     try:
         run_migrations(connection)
         if mode == "market-data-only":
-            return {"steps": [run_market_data_job(connection)]}
+            return {"steps": [run_market_data_job(connection, symbol_names=symbol_names)], "symbol_names": symbol_names or []}
         if mode == "strategy-only":
-            return run_strategy_jobs(connection, strategy_names or [strategy_name])
+            return run_strategy_jobs(connection, strategy_names or [strategy_name], symbol_names=symbol_names)
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection)["steps"])}
     finally:
@@ -133,16 +134,44 @@ def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[s
         return [fallback_strategy_name]
 
 
+def _resolve_active_symbols(mode: str) -> list[str]:
+    if mode not in ("pipeline", "market-data-only", "strategy-only"):
+        return []
+    try:
+        from app.scheduler.control import read_active_symbols
+
+        return read_active_symbols()
+    except Exception:
+        return []
+
+
 def _format_strategy_log_label(strategy_names: list[str]) -> str:
     if len(strategy_names) == 1:
         return f"strategy={strategy_names[0]}"
     return "strategies=" + ",".join(strategy_names)
 
 
+def _format_symbol_log_label(symbol_names: list[str]) -> str:
+    if not symbol_names:
+        return "symbols=none"
+    if len(symbol_names) == 1:
+        return f"symbol={symbol_names[0]}"
+    return "symbols=" + ",".join(symbol_names)
+
+
 def _summarize_strategy_payload(strategy_names: list[str]) -> dict:
     return {
         "strategy_name": strategy_names[0],
         "strategy_names": strategy_names,
+    }
+
+
+def _summarize_symbol_payload(symbol_names: list[str]) -> dict:
+    if not symbol_names:
+        return {"symbol_names": []}
+    return {
+        "symbol": symbol_names[0],
+        "symbol_names": symbol_names,
     }
 
 
@@ -206,6 +235,7 @@ def run_scheduler(
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
+        active_symbol_names = _resolve_active_symbols(mode)
         if not active_strategy_names:
             log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"
             print(log_line)
@@ -214,7 +244,7 @@ def run_scheduler(
                 component=component,
                 status="ok",
                 message=f"{component} loop skipped because no enabled active strategies are configured.",
-                payload={"run_count": run_count, "mode": mode, "strategy_names": [], "skipped": True},
+                payload={"run_count": run_count, "mode": mode, "strategy_names": [], "skipped": True, **_summarize_symbol_payload(active_symbol_names)},
             )
             _record_soak_snapshot()
             if iterations is not None and run_count >= iterations:
@@ -227,19 +257,31 @@ def run_scheduler(
             component=component,
             status="running",
             message=f"{component} loop started.",
-            payload={"run_count": run_count, "mode": mode, **_summarize_strategy_payload(active_strategy_names)},
+            payload={"run_count": run_count, "mode": mode, **_summarize_strategy_payload(active_strategy_names), **_summarize_symbol_payload(active_symbol_names)},
         )
-        result = _run_scheduled_job(mode, strategy_name=active_strategy_name, strategy_names=active_strategy_names)
+        result = _run_scheduled_job(
+            mode,
+            strategy_name=active_strategy_name,
+            strategy_names=active_strategy_names,
+            symbol_names=active_symbol_names,
+        )
         summary = _summarize_result(result)
         strategy_label = _format_strategy_log_label(active_strategy_names)
-        log_line = f"[{started_at}] run={run_count} mode={mode} {strategy_label} {summary}"
+        symbol_label = _format_symbol_log_label(active_symbol_names)
+        log_line = f"[{started_at}] run={run_count} mode={mode} {strategy_label} {symbol_label} {summary}"
         print(log_line)
         _write_log(log_line, mode)
         record_heartbeat(
             component=component,
             status="ok",
             message=f"{component} loop completed.",
-            payload={"run_count": run_count, "summary": summary, "mode": mode, **_summarize_strategy_payload(active_strategy_names)},
+            payload={
+                "run_count": run_count,
+                "summary": summary,
+                "mode": mode,
+                **_summarize_strategy_payload(active_strategy_names),
+                **_summarize_symbol_payload(active_symbol_names),
+            },
         )
         _record_soak_snapshot()
 

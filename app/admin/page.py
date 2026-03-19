@@ -507,6 +507,10 @@ __STRATEGY_OPTIONS__
             <select id="scheduler-disabled-strategy-select" multiple size="2">
 __STRATEGY_OPTIONS__
             </select>
+          </div>
+          <div class="inline-controls">
+            <label for="scheduler-symbol-select">Active Symbols</label>
+            <select id="scheduler-symbol-select" multiple size="3"></select>
             <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy State</button>
           </div>
           <div class="inline-controls" id="scheduler-priority-controls">
@@ -1351,6 +1355,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const selectedSchedulerStrategies = Array.from(
           el("scheduler-strategy-select")?.selectedOptions || []
         ).map((option) => option.value);
+        const selectedSchedulerSymbols = Array.from(
+          el("scheduler-symbol-select")?.selectedOptions || []
+        ).map((option) => option.value);
         const selectedDisabledStrategies = Array.from(
           el("scheduler-disabled-strategy-select")?.selectedOptions || []
         ).map((option) => option.value);
@@ -1367,6 +1374,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         );
         const effectiveLimitRaw = el("scheduler-effective-limit-input")?.value?.trim() || "";
         return {
+          symbol_names: selectedSchedulerSymbols,
           strategy_names: selectedSchedulerStrategies.length
             ? selectedSchedulerStrategies
             : ["__DEFAULT_STRATEGY_NAME__"],
@@ -1567,6 +1575,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             option.selected = schedulerStrategy.disabled_strategy_names.includes(option.value);
           });
         }
+        const schedulerSymbolSelect = el("scheduler-symbol-select");
+        if (schedulerSymbolSelect && schedulerSymbols?.available_symbols) {
+          schedulerSymbolSelect.innerHTML = schedulerSymbols.available_symbols
+            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
+            .join("");
+          const selectedSchedulerSymbols = schedulerSymbols.symbol_names || [];
+          Array.from(schedulerSymbolSelect.options).forEach((option) => {
+            option.selected = selectedSchedulerSymbols.includes(option.value);
+          });
+        }
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
         if (schedulerEffectiveLimitInput) {
           schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
@@ -1641,6 +1659,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const payload = collectSchedulerStrategyPayload();
             payload.audit_action = "save_strategy_state";
             payload.audit_message = "Applied scheduler strategy state from admin.";
+            await api("/scheduler/symbols", {
+              method: "POST",
+              body: JSON.stringify({
+                symbol_names: payload.symbol_names,
+              }),
+            });
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify(payload),
