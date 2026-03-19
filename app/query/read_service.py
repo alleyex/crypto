@@ -191,23 +191,43 @@ def get_strategy_activity_summary(
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
 
         gross_realized_pnl = 0.0
-        net_position_qty = 0.0
-        position_cost = 0.0
         filled_qty_total = 0.0
+        buy_fill_count = 0
+        sell_fill_count = 0
+        realized_trade_count = 0
+        winning_trade_count = 0
+        losing_trade_count = 0
+        breakeven_trade_count = 0
+        positions_by_symbol: dict[str, dict[str, float]] = {}
+
         for order in filled_orders:
+            symbol = order["symbol"]
             qty = float(order["qty"])
             price = float(order["price"])
             filled_qty_total += qty
+            position = positions_by_symbol.setdefault(symbol, {"qty": 0.0, "cost": 0.0})
 
             if order["side"] == "BUY":
-                net_position_qty += qty
-                position_cost += qty * price
-            elif order["side"] == "SELL" and net_position_qty > 0:
-                sell_qty = min(qty, net_position_qty)
-                average_cost = position_cost / net_position_qty
-                net_position_qty -= sell_qty
-                position_cost -= sell_qty * average_cost
-                gross_realized_pnl += (price - average_cost) * sell_qty
+                buy_fill_count += 1
+                position["qty"] += qty
+                position["cost"] += qty * price
+            elif order["side"] == "SELL" and position["qty"] > 0:
+                sell_fill_count += 1
+                sell_qty = min(qty, position["qty"])
+                average_cost = position["cost"] / position["qty"]
+                position["qty"] -= sell_qty
+                position["cost"] -= sell_qty * average_cost
+                realized_pnl = (price - average_cost) * sell_qty
+                gross_realized_pnl += realized_pnl
+                realized_trade_count += 1
+                if realized_pnl > 0:
+                    winning_trade_count += 1
+                elif realized_pnl < 0:
+                    losing_trade_count += 1
+                else:
+                    breakeven_trade_count += 1
+
+        net_position_qty = sum(item["qty"] for item in positions_by_symbol.values())
 
         summaries.append(
             {
@@ -220,6 +240,12 @@ def get_strategy_activity_summary(
                 "filled_qty_total": filled_qty_total,
                 "net_position_qty": net_position_qty,
                 "gross_realized_pnl": gross_realized_pnl,
+                "buy_fill_count": buy_fill_count,
+                "sell_fill_count": sell_fill_count,
+                "realized_trade_count": realized_trade_count,
+                "winning_trade_count": winning_trade_count,
+                "losing_trade_count": losing_trade_count,
+                "breakeven_trade_count": breakeven_trade_count,
                 "has_activity": any(
                     item is not None for item in (latest_signal, latest_risk, latest_order, latest_fill)
                 ),

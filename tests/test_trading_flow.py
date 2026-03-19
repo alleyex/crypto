@@ -160,7 +160,22 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
         generate_signal(connection, strategy_name="ma_cross")
         evaluate_latest_signal(connection)
-        execute_latest_risk(connection)
+        execution_result = execute_latest_risk(connection)
+        assert execution_result is not None
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ma-cross-sell-1", 999, "BTCUSDT", "1m", "ma_cross", "SELL", 0.001, 12.0, "FILLED"),
+        )
+        ma_cross_sell_order_id = int(
+            connection.execute(
+                "SELECT id FROM orders WHERE client_order_id = 'ma-cross-sell-1';"
+            ).fetchone()[0]
+        )
+        insert_fill(connection, ma_cross_sell_order_id, "BTCUSDT", "SELL", 0.001, 12.0, "2026-03-19 10:05:00")
 
         save_klines(connection, [make_kline((index + 10) * 60_000, close) for index, close in enumerate([20, 21, 22, 24])])
         generate_momentum_3bar_signal(connection)
@@ -173,14 +188,23 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ma_cross"]["latest_risk"] is not None
         assert by_name["ma_cross"]["latest_order"] is not None
         assert by_name["ma_cross"]["latest_fill"] is not None
-        assert by_name["ma_cross"]["filled_order_count"] == 1
-        assert by_name["ma_cross"]["filled_qty_total"] == 0.001
-        assert by_name["ma_cross"]["gross_realized_pnl"] == 0.0
+        assert by_name["ma_cross"]["filled_order_count"] == 2
+        assert by_name["ma_cross"]["filled_qty_total"] == 0.002
+        assert by_name["ma_cross"]["gross_realized_pnl"] == -0.002
+        assert by_name["ma_cross"]["buy_fill_count"] == 1
+        assert by_name["ma_cross"]["sell_fill_count"] == 1
+        assert by_name["ma_cross"]["realized_trade_count"] == 1
+        assert by_name["ma_cross"]["winning_trade_count"] == 0
+        assert by_name["ma_cross"]["losing_trade_count"] == 1
+        assert by_name["ma_cross"]["breakeven_trade_count"] == 0
+        assert by_name["ma_cross"]["net_position_qty"] == 0.0
         assert by_name["momentum_3bar"]["latest_signal"] is not None
         assert by_name["momentum_3bar"]["latest_risk"] is not None
         assert by_name["momentum_3bar"]["latest_fill"] is None
         assert by_name["momentum_3bar"]["filled_order_count"] == 0
         assert by_name["momentum_3bar"]["filled_qty_total"] == 0.0
+        assert by_name["momentum_3bar"]["buy_fill_count"] == 0
+        assert by_name["momentum_3bar"]["sell_fill_count"] == 0
     finally:
         connection.close()
 
@@ -2200,6 +2224,12 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "filled_qty_total": 0.5,
                 "net_position_qty": 0.25,
                 "gross_realized_pnl": 12.5,
+                "buy_fill_count": 2,
+                "sell_fill_count": 1,
+                "realized_trade_count": 1,
+                "winning_trade_count": 1,
+                "losing_trade_count": 0,
+                "breakeven_trade_count": 0,
                 "has_activity": True,
             },
             {
@@ -2212,6 +2242,12 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "filled_qty_total": 0.0,
                 "net_position_qty": 0.0,
                 "gross_realized_pnl": 0.0,
+                "buy_fill_count": 0,
+                "sell_fill_count": 0,
+                "realized_trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "breakeven_trade_count": 0,
                 "has_activity": False,
             },
         ],
@@ -2232,6 +2268,7 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[0]["latest_fill"]["side"] == "BUY"
     assert payload[0]["filled_order_count"] == 1
     assert payload[0]["gross_realized_pnl"] == 12.5
+    assert payload[0]["winning_trade_count"] == 1
     assert payload[1]["strategy_name"] == "momentum_3bar"
 
 
