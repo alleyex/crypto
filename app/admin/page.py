@@ -535,6 +535,9 @@ __STRATEGY_OPTIONS__
               <option value="gross_realized_pnl">gross pnl</option>
               <option value="winning_trade_count">wins</option>
               <option value="filled_order_count">filled orders</option>
+              <option value="latest_activity_at">latest activity</option>
+              <option value="latest_closed_pnl">latest closed pnl</option>
+              <option value="realized_trade_count">realized trades</option>
               <option value="strategy_name">name</option>
             </select>
             <label for="strategy-filter-select">Filter</label>
@@ -673,6 +676,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (strategyFilterMode === "stale") return activityState.label === "STALE";
         if (strategyFilterMode === "idle") return activityState.label === "IDLE";
         return true;
+      }
+
+      function sortableStrategyValue(item, sortMode) {
+        if (sortMode === "latest_activity_at") {
+          const parsed = parseDashboardTimestamp(item.latest_activity_at);
+          return parsed ? parsed.getTime() : -1;
+        }
+        if (sortMode === "latest_closed_pnl") {
+          return Number(item.latest_closed_trade?.realized_pnl || 0);
+        }
+        return Number(item[sortMode] || 0);
       }
 
       async function api(path, options = {}) {
@@ -880,7 +894,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           if (strategySortMode === "strategy_name") {
             return String(left.strategy_name).localeCompare(String(right.strategy_name));
           }
-          return Number(right[strategySortMode] || 0) - Number(left[strategySortMode] || 0);
+          return sortableStrategyValue(right, strategySortMode) - sortableStrategyValue(left, strategySortMode);
         });
 
         if (sortedStrategies.length === 0) {
