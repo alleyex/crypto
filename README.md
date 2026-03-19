@@ -96,6 +96,15 @@ Run the scheduler continuously:
 python scripts/run_scheduler.py
 ```
 
+Run the scheduler in a specific job mode:
+
+```bash
+python scripts/run_scheduler.py --mode pipeline
+python scripts/run_scheduler.py --mode market-data-only
+python scripts/run_scheduler.py --mode strategy-only
+python scripts/run_scheduler.py --mode execution-only
+```
+
 Run the API locally:
 
 ```bash
@@ -114,6 +123,12 @@ Run with Docker Compose:
 
 ```bash
 docker compose up --build
+```
+
+Run split worker services with Docker Compose:
+
+```bash
+docker compose --profile split-workers up --build
 ```
 
 Run PostgreSQL smoke test with Docker Compose:
@@ -149,6 +164,7 @@ Docker Compose runtime validation status:
 
 - verified on macOS Apple Silicon with Docker Desktop
 - `api` and `scheduler` containers both start successfully
+- split worker services now also exist behind the `split-workers` Compose profile: `data-worker`, `strategy-worker`, and `execution-worker`
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks

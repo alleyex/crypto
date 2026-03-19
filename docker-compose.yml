@@ -61,5 +61,77 @@ services:
       - ./logs:/app/logs
       - ./runtime:/app/runtime
 
+  data-worker:
+    profiles: ["split-workers"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode market-data-only"
+    depends_on:
+      - api
+    environment:
+      CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
+      CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
+      CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
+      CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
+      CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_USE_FAKE_KLINES: ${CRYPTO_USE_FAKE_KLINES:-}
+      CRYPTO_FAKE_KLINE_CLOSES: ${CRYPTO_FAKE_KLINE_CLOSES:-}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  strategy-worker:
+    profiles: ["split-workers"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode strategy-only"
+    depends_on:
+      - api
+    environment:
+      CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
+      CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
+      CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
+      CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
+      CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_USE_FAKE_KLINES: ${CRYPTO_USE_FAKE_KLINES:-}
+      CRYPTO_FAKE_KLINE_CLOSES: ${CRYPTO_FAKE_KLINE_CLOSES:-}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  execution-worker:
+    profiles: ["split-workers"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode execution-only"
+    depends_on:
+      - api
+    environment:
+      CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
+      CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
+      CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
+      CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
+      CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_USE_FAKE_KLINES: ${CRYPTO_USE_FAKE_KLINES:-}
+      CRYPTO_FAKE_KLINE_CLOSES: ${CRYPTO_FAKE_KLINE_CLOSES:-}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
 volumes:
   postgres-data:
