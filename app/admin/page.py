@@ -1322,59 +1322,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       async function resetStrategyPriorities() {
-        const payload = collectSchedulerStrategyPayload();
-        const strategyEntries = Array.isArray(window.__schedulerStrategyStatus?.strategy_entries)
-          ? window.__schedulerStrategyStatus.strategy_entries
-          : [];
-        const orderedNames = strategyEntries.length
-          ? strategyEntries.map((entry) => entry.strategy_name).filter(Boolean)
-          : Array.from(
-              new Set([
-                ...(payload.strategy_names || []),
-                ...(payload.disabled_strategy_names || []),
-                ...Object.keys(payload.strategy_priorities || {}),
-              ])
-            );
-        payload.strategy_priorities = Object.fromEntries(
-          orderedNames.map((strategyName, index) => [strategyName, index])
-        );
-        const result = await api("/scheduler/strategy", {
+        const result = await api("/scheduler/strategy/preset", {
           method: "POST",
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ preset: "reset" }),
         });
         el("scheduler-message").textContent = formatJson(result);
         await refreshAll();
       }
 
       async function applyPriorityPreset(mode) {
-        const payload = collectSchedulerStrategyPayload();
-        const strategyEntries = Array.isArray(window.__schedulerStrategyStatus?.strategy_entries)
-          ? window.__schedulerStrategyStatus.strategy_entries
-          : [];
-        const availableStrategies = strategyEntries.length
-          ? strategyEntries.map((entry) => entry.strategy_name).filter(Boolean)
-          : Array.from(
-              new Set([
-                ...(payload.strategy_names || []),
-                ...(payload.disabled_strategy_names || []),
-                ...Object.keys(payload.strategy_priorities || {}),
-              ])
-            );
-        let orderedNames = availableStrategies;
-        if (mode === "reverse") {
-          orderedNames = [...availableStrategies].reverse();
-        } else if (mode === "active-first") {
-          const activeSet = new Set(payload.strategy_names || []);
-          const active = availableStrategies.filter((strategyName) => activeSet.has(strategyName));
-          const rest = availableStrategies.filter((strategyName) => !activeSet.has(strategyName));
-          orderedNames = [...active, ...rest];
-        }
-        payload.strategy_priorities = Object.fromEntries(
-          orderedNames.map((strategyName, index) => [strategyName, index])
-        );
-        const result = await api("/scheduler/strategy", {
+        const preset = mode === "active-first" ? "active_first" : mode;
+        const result = await api("/scheduler/strategy/preset", {
           method: "POST",
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ preset }),
         });
         el("scheduler-message").textContent = formatJson(result);
         await refreshAll();
