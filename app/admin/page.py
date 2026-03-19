@@ -513,6 +513,12 @@ __STRATEGY_OPTIONS__
             <label for="scheduler-effective-limit-input">Effective Limit</label>
             <input id="scheduler-effective-limit-input" type="number" step="1" min="1" placeholder="all" />
           </div>
+          <div class="inline-controls">
+            <span class="chip">Presets</span>
+            <button class="secondary" type="button" data-action="scheduler-preset-top1">Apply top-1</button>
+            <button class="secondary" type="button" data-action="scheduler-preset-top2">Apply top-2</button>
+            <button class="secondary" type="button" data-action="scheduler-preset-all">All enabled</button>
+          </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
             <button class="danger" data-action="scheduler-stop">Stop</button>
@@ -1278,6 +1284,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         await refreshAll();
       }
 
+      async function applySchedulerPreset(limit) {
+        const input = el("scheduler-effective-limit-input");
+        if (input) {
+          input.value = limit === null ? "" : String(limit);
+        }
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(collectSchedulerStrategyPayload()),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -1416,6 +1435,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               method: "POST",
               body: JSON.stringify(collectSchedulerStrategyPayload()),
             });
+          } else if (type === "scheduler-preset-top1") {
+            await applySchedulerPreset(1);
+            return;
+          } else if (type === "scheduler-preset-top2") {
+            await applySchedulerPreset(2);
+            return;
+          } else if (type === "scheduler-preset-all") {
+            await applySchedulerPreset(null);
+            return;
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
           } else if (type === "kill-disable") {

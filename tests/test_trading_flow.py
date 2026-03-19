@@ -2263,6 +2263,9 @@ def test_admin_page_is_served() -> None:
     assert 'id="scheduler-priority-controls"' in response.text
     assert 'id="scheduler-disabled-note-controls"' in response.text
     assert 'id="scheduler-effective-limit-input"' in response.text
+    assert 'data-action="scheduler-preset-top1"' in response.text
+    assert 'data-action="scheduler-preset-top2"' in response.text
+    assert 'data-action="scheduler-preset-all"' in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'data-promote-strategy="' in response.text
@@ -2294,6 +2297,9 @@ def test_admin_page_is_served() -> None:
     assert "Send Test Alert" in response.text
     assert "Soak Validation" in response.text
     assert "Record Snapshot" in response.text
+    assert "Apply top-1" in response.text
+    assert "Apply top-2" in response.text
+    assert "All enabled" in response.text
     assert "Latest Closed Symbol" in response.text
     assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
