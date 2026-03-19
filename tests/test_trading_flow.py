@@ -4089,6 +4089,72 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
     )
 
 
+def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "strategy-worker.log"
+    db_path = tmp_path / "scheduler-strategy-drain.db"
+    recorded = []
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+
+    def fake_run_next_queued_job(connection, job_type=None):
+        captured["job_type"] = job_type
+        return {
+            "status": "completed",
+            "job": {"id": 88, "job_type": job_type},
+            "result": {
+                "status": "ok",
+                "steps": [
+                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr("app.scheduler.runner.run_next_queued_job", fake_run_next_queued_job)
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only", queue_drain=True)
+
+    assert recorded == [{"status": "ok"}]
+    assert captured["job_type"] == "strategy"
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mode=strategy-only" in log_text
+    assert "drained=strategy=drained#88" in log_text
+    assert "signal=BTCUSDT=BUY" in log_text
+    assert "risk=BTCUSDT=APPROVED" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(
+        item["component"] == "strategy_worker"
+        and item["status"] == "ok"
+        and json.loads(item["payload_json"] or "{}").get("queue_drain") is True
+        for item in heartbeats
+    )
+
+
+def test_run_scheduler_rejects_dispatch_and_drain_together() -> None:
+    try:
+        run_scheduler(iterations=1, queue_dispatch=True, queue_drain=True)
+    except ValueError as exc:
+        assert "queue_dispatch and queue_drain cannot both be enabled" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when queue_dispatch and queue_drain are both enabled.")
+
+
 def test_run_scheduler_supports_execution_only_mode_with_symbols(monkeypatch, tmp_path) -> None:
     log_path = tmp_path / "execution-worker.log"
     db_path = tmp_path / "scheduler-execution-heartbeat.db"

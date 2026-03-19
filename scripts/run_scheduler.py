@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enqueue split worker jobs instead of executing them directly.",
     )
+    parser.add_argument(
+        "--queue-drain",
+        action="store_true",
+        help="Drain queued split worker jobs instead of executing direct scheduler jobs.",
+    )
     return parser.parse_args()
 
 
@@ -50,6 +55,7 @@ def main() -> None:
         mode=args.mode,
         strategy_name=args.strategy,
         queue_dispatch=args.queue_dispatch,
+        queue_drain=args.queue_drain,
     )
 
 

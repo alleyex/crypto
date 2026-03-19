@@ -11,6 +11,7 @@ from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.job_queue import build_job_payload
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.system.heartbeat import record_heartbeat
@@ -28,6 +29,7 @@ SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-o
 
 def _summarize_result(result: dict) -> str:
     queued_items: list[str] = []
+    drained_items: list[str] = []
     signal_items: list[str] = []
     decision_items: list[str] = []
     execution_items: list[str] = []
@@ -41,6 +43,14 @@ def _summarize_result(result: dict) -> str:
         if step["step"] == "enqueue_job" and "job_id" in step:
             label = step.get("job_type")
             queued_items.append(_format_summary_item(label, f"queued#{step['job_id']}"))
+        elif step["step"] == "drain_queue":
+            label = step.get("job_type")
+            if step.get("status") == "completed" and "job_id" in step:
+                drained_items.append(_format_summary_item(label, f"drained#{step['job_id']}"))
+            elif step.get("status") == "empty":
+                drained_items.append(_format_summary_item(label, "empty"))
+            elif "error_type" in step:
+                drained_items.append(_format_summary_item(label, step["error_type"]))
         elif step["step"] == "generate_signal" and "signal_type" in step:
             label = step.get("symbol") or step.get("strategy_name")
             signal_items.append(_format_summary_item(label, str(step["signal_type"])))
@@ -62,6 +72,8 @@ def _summarize_result(result: dict) -> str:
     summary_parts: list[str] = []
     if queued_items:
         summary_parts.append(f"queued={';'.join(queued_items)}")
+    if drained_items:
+        summary_parts.append(f"drained={';'.join(drained_items)}")
     summary_parts.extend(
         [
             f"signal={signal}",
@@ -117,6 +129,7 @@ def _run_scheduled_job(
     strategy_names: Optional[list[str]] = None,
     symbol_names: Optional[list[str]] = None,
     queue_dispatch: bool = False,
+    queue_drain: bool = False,
 ) -> dict:
     if mode == "pipeline":
         return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
@@ -124,6 +137,45 @@ def _run_scheduled_job(
     connection = get_connection()
     try:
         run_migrations(connection)
+        if queue_drain:
+            if mode == "market-data-only":
+                job_type = "market_data"
+            elif mode == "strategy-only":
+                job_type = "strategy"
+            elif mode == "execution-only":
+                job_type = "execution"
+            else:
+                raise ValueError(f"Unsupported queue-drain mode: {mode}")
+            drain_result = run_next_queued_job(connection, job_type=job_type)
+            if drain_result["status"] == "completed":
+                result = dict(drain_result.get("result") or {})
+                result["steps"] = [
+                    {
+                        "step": "drain_queue",
+                        "status": "completed",
+                        "job_id": int(drain_result["job"]["id"]),
+                        "job_type": job_type,
+                    }
+                ] + list(result.get("steps", []))
+                return result
+            if drain_result["status"] == "empty":
+                return {
+                    "status": "completed",
+                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}],
+                }
+            return {
+                "status": "failed",
+                "steps": [
+                    {
+                        "step": "drain_queue",
+                        "status": "failed",
+                        "job_id": int(drain_result["job"]["id"]),
+                        "job_type": job_type,
+                        "error": drain_result["error"],
+                        "error_type": drain_result["error_type"],
+                    }
+                ],
+            }
         if queue_dispatch:
             if mode == "market-data-only":
                 job_type = "market_data"
@@ -252,11 +304,14 @@ def run_scheduler(
     mode: str = "pipeline",
     strategy_name: str = DEFAULT_STRATEGY_NAME,
     queue_dispatch: bool = False,
+    queue_drain: bool = False,
 ) -> None:
     if mode not in SCHEDULER_MODES:
         raise ValueError(
             f"Unsupported scheduler mode: {mode}. Expected one of: {', '.join(SCHEDULER_MODES)}"
         )
+    if queue_dispatch and queue_drain:
+        raise ValueError("queue_dispatch and queue_drain cannot both be enabled.")
 
     component = _scheduler_component_name(mode)
     run_count = 0
@@ -276,7 +331,12 @@ def run_scheduler(
                 component=component,
                 status="stopped",
                 message=f"{component} stopped by flag.",
-                payload={"stop_file": str(STOP_FILE), "mode": mode, "queue_dispatch": queue_dispatch},
+                payload={
+                    "stop_file": str(STOP_FILE),
+                    "mode": mode,
+                    "queue_dispatch": queue_dispatch,
+                    "queue_drain": queue_drain,
+                },
             )
             break
 
@@ -298,6 +358,7 @@ def run_scheduler(
                     "strategy_names": [],
                     "skipped": True,
                     "queue_dispatch": queue_dispatch,
+                    "queue_drain": queue_drain,
                     **_summarize_symbol_payload(active_symbol_names),
                 },
             )
@@ -316,6 +377,7 @@ def run_scheduler(
                 "run_count": run_count,
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
+                "queue_drain": queue_drain,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },
@@ -326,6 +388,7 @@ def run_scheduler(
             strategy_names=active_strategy_names,
             symbol_names=active_symbol_names,
             queue_dispatch=queue_dispatch,
+            queue_drain=queue_drain,
         )
         summary = _summarize_result(result)
         strategy_label = _format_strategy_log_label(active_strategy_names)
@@ -342,6 +405,7 @@ def run_scheduler(
                 "summary": summary,
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
+                "queue_drain": queue_drain,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },
