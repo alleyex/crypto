@@ -1,3 +1,4 @@
+import json
 from typing import Any
 from typing import Optional
 
@@ -139,6 +140,24 @@ LIMIT ?;
 """
 
 
+SELECT_JOB_QUEUE_SQL = """
+SELECT
+    id,
+    job_type,
+    status,
+    payload_json,
+    result_json,
+    error_message,
+    attempt_count,
+    created_at,
+    started_at,
+    completed_at
+FROM job_queue
+ORDER BY id DESC
+LIMIT ?;
+"""
+
+
 def get_candles(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
@@ -169,6 +188,17 @@ def get_pnl_snapshots(connection: DBConnection, limit: int = 5) -> list[dict[str
 
 def get_audit_events(connection: DBConnection, limit: int = 20) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_AUDIT_EVENTS_SQL, limit)
+
+
+def get_job_queue_jobs(connection: DBConnection, limit: int = 20) -> list[dict[str, Any]]:
+    rows = _fetch_all(connection, SELECT_JOB_QUEUE_SQL, limit)
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = item["payload_json"] and json.loads(item["payload_json"])
+        item["result"] = item["result_json"] and json.loads(item["result_json"])
+        normalized.append(item)
+    return normalized
 
 
 def get_strategy_activity_summary(

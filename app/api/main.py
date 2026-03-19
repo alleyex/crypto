@@ -21,6 +21,9 @@ from app.core.db import get_database_info
 from app.core.db import parse_db_timestamp
 from app.core.db import list_tables
 from app.core.db import table_exists
+from app.core.job_queue import JOB_TYPES
+from app.core.job_queue import enqueue_job
+from app.core.job_queue import list_jobs as list_queue_jobs
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
@@ -87,6 +90,8 @@ app = FastAPI(title="Crypto Trading MVP API", lifespan=lifespan)
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
 def _database_check(connection: DBConnection) -> dict[str, Any]:
     database_info = get_database_info()
     table_names = list_tables(connection)
@@ -342,6 +347,14 @@ class PipelineRunRequest(BaseModel):
     symbol_names: Optional[List[str]] = None
 
 
+class QueueJobRequest(BaseModel):
+    job_type: Literal["market_data", "strategy", "execution"]
+    strategy_name: Optional[str] = None
+    strategy_names: Optional[List[str]] = None
+    symbol_names: Optional[List[str]] = None
+    payload: Optional[Dict[str, Any]] = None
+
+
 class SchedulerStrategyRequest(BaseModel):
     strategy_name: str = DEFAULT_STRATEGY_NAME
     strategy_names: Optional[List[str]] = None
@@ -364,6 +377,17 @@ class SchedulerStrategyLimitPresetRequest(BaseModel):
 class SchedulerSymbolsRequest(BaseModel):
     symbol: str = DEFAULT_SYMBOL
     symbol_names: Optional[List[str]] = None
+
+
+def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
+    job_payload: dict[str, Any] = dict(payload.payload or {})
+    if payload.strategy_name:
+        job_payload["strategy_name"] = payload.strategy_name
+    if payload.strategy_names:
+        job_payload["strategy_names"] = list(dict.fromkeys(payload.strategy_names))
+    if payload.symbol_names:
+        job_payload["symbol_names"] = list(dict.fromkeys(payload.symbol_names))
+    return job_payload
 
 
 @app.get("/health")
@@ -412,6 +436,37 @@ def audit_events(limit: int = Query(default=20, ge=1, le=200)) -> list[dict]:
     connection = get_connection()
     try:
         return get_audit_events(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+@app.get("/queue/jobs")
+def queue_jobs(
+    limit: int = Query(default=20, ge=1, le=200),
+    status: Optional[str] = Query(default=None),
+    job_type: Optional[Literal["market_data", "strategy", "execution"]] = Query(default=None),
+) -> list[dict[str, Any]]:
+    connection = get_connection()
+    try:
+        return list_queue_jobs(connection, limit=limit, status=status, job_type=job_type)
+    finally:
+        connection.close()
+
+
+@app.post("/queue/jobs")
+def create_queue_job(payload: QueueJobRequest) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        job_payload = _build_queue_job_payload(payload)
+        job_id = enqueue_job(connection, payload.job_type, payload=job_payload or None)
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "job_type": payload.job_type,
+            "available_job_types": list(JOB_TYPES),
+            "payload": job_payload,
+            "job": list_queue_jobs(connection, limit=1, job_type=payload.job_type)[0],
+        }
     finally:
         connection.close()
 

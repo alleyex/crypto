@@ -223,6 +223,29 @@ def _create_runtime_heartbeats_table(connection: DBConnection) -> None:
     )
 
 
+def _create_job_queue_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS job_queue (
+            {_auto_id_column_sql(backend)},
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT,
+            result_json TEXT,
+            error_message TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TEXT,
+            completed_at TEXT
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_queue_status_created_at ON job_queue(status, created_at, id);"
+    )
+
+
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -250,6 +273,7 @@ MIGRATIONS: list[Migration] = [
     ("011_create_audit_events_table", _create_audit_events_table),
     ("012_create_runtime_heartbeats_table", _create_runtime_heartbeats_table),
     ("013_alter_candles_epoch_columns_to_bigint", _alter_candles_epoch_columns_to_bigint),
+    ("014_create_job_queue_table", _create_job_queue_table),
 ]
 
 

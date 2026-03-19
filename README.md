@@ -349,6 +349,8 @@ Control endpoints:
 - `POST /scheduler/strategy`
 - `POST /scheduler/strategy/preset`
 - `POST /scheduler/strategy/limit-preset`
+- `GET /queue/jobs`
+- `POST /queue/jobs`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -383,6 +385,10 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/preset \
 curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
   -H "Content-Type: application/json" \
   -d '{"preset":"all_enabled"}'
+curl -s http://127.0.0.1:8000/queue/jobs
+curl -s -X POST http://127.0.0.1:8000/queue/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status
@@ -472,7 +478,7 @@ Logs:
 - Single timeframe: `1m`
 - Multi-strategy runtime currently validated for `ma_cross` and `momentum_3bar`
 - Paper trading only
-- Scheduler split workers still share one SQLite runtime and are not queue-backed yet
+- A persistent `job_queue` abstraction now exists, but scheduler split workers still execute jobs directly and do not drain queued jobs yet
 
 ## Next Recommended Work
 

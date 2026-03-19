@@ -21,6 +21,12 @@ from app.core.db import list_tables
 from app.core.db import parse_db_timestamp
 from app.core.db import _rewrite_query_params
 from app.core.db import table_exists
+from app.core.job_queue import complete_job
+from app.core.job_queue import enqueue_job
+from app.core.job_queue import fail_job
+from app.core.job_queue import get_job
+from app.core.job_queue import lease_next_job
+from app.core.job_queue import list_jobs
 from app.core.migrations import _auto_id_column_sql
 from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
 from app.core.migrations import run_migrations
@@ -66,6 +72,7 @@ from app.portfolio.positions_service import ensure_table as ensure_positions_tab
 from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_fills
 from app.query.read_service import get_audit_events
+from app.query.read_service import get_job_queue_jobs
 from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
@@ -2968,6 +2975,109 @@ def test_scheduler_symbol_endpoints_round_trip(monkeypatch) -> None:
     assert update_response.json()["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert captured["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert captured["kwargs"]["audit_action"] == "set_active_symbols"
+
+
+def test_job_queue_lifecycle_round_trip() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+
+        first_job_id = enqueue_job(
+            connection,
+            "strategy",
+            payload={"strategy_names": ["ma_cross", "momentum_3bar"], "symbol_names": ["BTCUSDT", "ETHUSDT"]},
+        )
+        second_job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["ETHUSDT"]})
+
+        listed_jobs = list_jobs(connection, limit=10)
+        assert [job["id"] for job in listed_jobs] == [second_job_id, first_job_id]
+        assert listed_jobs[1]["payload"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+
+        leased_job = lease_next_job(connection, job_type="strategy")
+        assert leased_job is not None
+        assert leased_job["id"] == first_job_id
+        assert leased_job["status"] == "leased"
+        assert leased_job["attempt_count"] == 1
+        assert leased_job["started_at"] is not None
+
+        complete_job(connection, first_job_id, result={"generated_signal_count": 2})
+        completed_job = get_job(connection, first_job_id)
+        assert completed_job is not None
+        assert completed_job["status"] == "completed"
+        assert completed_job["result"] == {"generated_signal_count": 2}
+        assert completed_job["completed_at"] is not None
+
+        fail_job(connection, second_job_id, "execution worker unavailable", result={"symbol_names": ["ETHUSDT"]})
+        failed_job = get_job(connection, second_job_id)
+        assert failed_job is not None
+        assert failed_job["status"] == "failed"
+        assert failed_job["error_message"] == "execution worker unavailable"
+        assert failed_job["result"] == {"symbol_names": ["ETHUSDT"]}
+
+        queue_rows = get_job_queue_jobs(connection, limit=10)
+        assert queue_rows[0]["id"] == second_job_id
+        assert queue_rows[0]["payload"] == {"symbol_names": ["ETHUSDT"]}
+        assert "job_queue" in list_tables(connection)
+    finally:
+        connection.close()
+
+
+def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    def fake_enqueue_job(connection, job_type, payload=None):
+        captured["job_type"] = job_type
+        captured["payload"] = payload
+        return 42
+
+    monkeypatch.setattr("app.api.main.enqueue_job", fake_enqueue_job)
+    monkeypatch.setattr(
+        "app.api.main.list_queue_jobs",
+        lambda connection, limit=20, status=None, job_type=None: [
+            {
+                "id": 42,
+                "job_type": job_type or "strategy",
+                "status": status or "queued",
+                "payload_json": json.dumps(
+                    {"strategy_names": ["ma_cross"], "symbol_names": ["BTCUSDT"]},
+                    sort_keys=True,
+                ),
+                "payload": {"strategy_names": ["ma_cross"], "symbol_names": ["BTCUSDT"]},
+                "result_json": None,
+                "result": None,
+                "error_message": None,
+                "attempt_count": 0,
+                "created_at": "2026-03-19 10:00:00",
+                "started_at": None,
+                "completed_at": None,
+            }
+        ],
+    )
+
+    create_response = client.post(
+        "/queue/jobs",
+        json={
+            "job_type": "strategy",
+            "strategy_names": ["ma_cross", "ma_cross"],
+            "symbol_names": ["BTCUSDT", "ETHUSDT", "BTCUSDT"],
+            "payload": {"source": "admin"},
+        },
+    )
+    list_response = client.get("/queue/jobs", params={"job_type": "strategy", "status": "queued"})
+
+    assert create_response.status_code == 200
+    assert create_response.json()["status"] == "queued"
+    assert create_response.json()["job_id"] == 42
+    assert captured["job_type"] == "strategy"
+    assert captured["payload"] == {
+        "source": "admin",
+        "strategy_names": ["ma_cross"],
+        "symbol_names": ["BTCUSDT", "ETHUSDT"],
+    }
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["job_type"] == "strategy"
+    assert list_response.json()[0]["status"] == "queued"
 
 
 def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:
