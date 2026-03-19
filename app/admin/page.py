@@ -453,6 +453,8 @@ def render_admin_page() -> str:
             <label>Last Pipeline</label>
             <div class="value" id="pipeline-status">Loading</div>
             <div class="inline-note" id="pipeline-detail">Checking pipeline run summary...</div>
+            <div class="inline-note" id="pipeline-symbols">Symbols: loading...</div>
+            <div class="inline-note" id="pipeline-counts">Counts: loading...</div>
           </div>
           <div class="side-stat">
             <label>Market Data</label>
@@ -963,13 +965,37 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       function updatePipelineSummary(auditEvents) {
+        const latestPipelineRun = window.__latestHealth?.checks?.pipeline?.latest_run || null;
         const runs = auditEvents.filter((event) => event.event_type === "pipeline_run");
         const latestCompleted = runs.find((event) => event.status !== "started") || runs[0] || null;
 
-        if (!latestCompleted) {
+        if (!latestCompleted && !latestPipelineRun) {
           el("pipeline-status").textContent = "NONE";
           el("pipeline-status").className = "value warn";
           el("pipeline-detail").textContent = "No pipeline runs recorded yet.";
+          el("pipeline-symbols").textContent = "Symbols: none";
+          el("pipeline-counts").textContent = "Counts: none";
+          return;
+        }
+
+        if (latestPipelineRun) {
+          const displayStatus = String(latestPipelineRun.status || "unknown").toUpperCase();
+          const strategyLabel = (latestPipelineRun.strategy_names || []).length
+            ? latestPipelineRun.strategy_names.join(", ")
+            : (latestPipelineRun.strategy_name || "n/a");
+          const symbolLabel = (latestPipelineRun.symbol_names || []).length
+            ? latestPipelineRun.symbol_names.join(", ")
+            : "none";
+          el("pipeline-status").textContent = displayStatus;
+          el("pipeline-status").className = `value ${statusClass(latestPipelineRun.status)}`;
+          el("pipeline-detail").textContent =
+            `${latestPipelineRun.created_at} | ${latestPipelineRun.message} | strategies: ${strategyLabel}`;
+          el("pipeline-symbols").textContent = `Symbols: ${symbolLabel}`;
+          el("pipeline-counts").textContent =
+            `Counts: signals=${latestPipelineRun.generated_signal_count ?? 0}, ` +
+            `approved=${latestPipelineRun.approved_risk_count ?? 0}, ` +
+            `rejected=${latestPipelineRun.rejected_risk_count ?? 0}, ` +
+            `fills=${latestPipelineRun.filled_execution_count ?? 0}`;
           return;
         }
 
@@ -977,6 +1003,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("pipeline-status").textContent = displayStatus;
         el("pipeline-status").className = `value ${statusClass(latestCompleted.status)}`;
         el("pipeline-detail").textContent = `${latestCompleted.created_at} | ${latestCompleted.message}`;
+        el("pipeline-symbols").textContent = "Symbols: unavailable";
+        el("pipeline-counts").textContent = "Counts: unavailable";
       }
 
       function renderSchedulerPriorityControls(schedulerStrategy) {
@@ -1514,6 +1542,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/scheduler/strategy"),
         ]);
 
+        window.__latestHealth = health;
         window.__strategyClosedTrades = closedTrades;
         window.__schedulerStrategyStatus = schedulerStrategy;
         const strategySelect = el("pipeline-strategy-select");

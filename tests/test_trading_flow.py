@@ -2513,6 +2513,8 @@ def test_admin_page_is_served() -> None:
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
+    assert 'id="pipeline-symbols"' in response.text
+    assert 'id="pipeline-counts"' in response.text
     assert "momentum_3bar" in response.text
     assert "Last Pipeline" in response.text
     assert "Send Test Alert" in response.text
