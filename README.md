@@ -547,6 +547,7 @@ Current Telegram alert triggers:
 - health becomes degraded or error
 - queue contains failed jobs
 - split worker heartbeats become stale
+- execution queue jobs fail
 
 Manual test endpoint:
 
@@ -557,6 +558,7 @@ Deduplication:
 - health alerts are sent once per unique degraded/error state
 - queue failed-job alerts are sent once per unique failed queue state
 - stale worker alerts are sent once per unique stale worker state
+- execution failure alerts are sent once per unique failed execution job
 - when health returns to `ok`, the alert state is cleared
 
 Required environment variables:

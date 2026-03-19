@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from app.alerting.execution import maybe_send_execution_alert
 from app.admin.page import render_admin_page
 from app.alerting.health import maybe_send_health_alert
 from app.alerting.queue import maybe_send_queue_alert
@@ -442,6 +443,7 @@ def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
+    background_tasks.add_task(maybe_send_execution_alert, report)
     background_tasks.add_task(maybe_send_health_alert, report)
     background_tasks.add_task(maybe_send_queue_alert, report)
     background_tasks.add_task(maybe_send_worker_alert, report)
