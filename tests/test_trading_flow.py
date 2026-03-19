@@ -61,6 +61,7 @@ from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
 from app.execution.paper_broker import execute_pending_approved_risks
 from app.execution.paper_broker import execute_latest_risk
+from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import NoopExecutionAdapter
 from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
@@ -2364,6 +2365,9 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["status"] == "ok"
     assert payload["checks"]["database"]["status"] == "ok"
     assert payload["checks"]["candles"]["status"] == "ok"
+    assert payload["checks"]["execution_backend"]["backend"] == "paper"
+    assert payload["checks"]["execution_backend"]["can_execute_orders"] is True
+    assert payload["checks"]["execution_backend"]["dry_run"] is False
     assert payload["checks"]["pipeline"]["status"] == "ok"
     assert payload["checks"]["pipeline"]["latest_run"]["strategy_names"] == ["ma_cross"]
     assert payload["checks"]["pipeline"]["latest_run"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
@@ -2701,6 +2705,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="execution-worker-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
     assert 'id="queue-status"' in response.text
+    assert 'id="execution-backend-status"' in response.text
+    assert 'id="execution-backend-detail"' in response.text
     assert 'id="queue-json"' in response.text
     assert 'id="queue-message"' in response.text
     assert 'id="queue-board"' in response.text
@@ -4484,6 +4490,16 @@ def test_get_execution_adapter_name_reads_runtime_backend(monkeypatch) -> None:
     assert get_execution_adapter_name() == "noop"
 
 
+def test_get_execution_backend_status_reports_capabilities(monkeypatch) -> None:
+    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "noop")
+    assert get_execution_backend_status() == {
+        "backend": "noop",
+        "dry_run": True,
+        "can_execute_orders": False,
+        "status": "ok",
+    }
+
+
 def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:
@@ -5234,3 +5250,17 @@ def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_pa
     history = history_response.json()
     assert len(history) == 1
     assert history[0]["status"] == "ok"
+
+
+def test_execution_backend_endpoint() -> None:
+    client = TestClient(app)
+
+    response = client.get("/execution/backend")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "backend": "paper",
+        "dry_run": False,
+        "can_execute_orders": True,
+        "status": "ok",
+    }

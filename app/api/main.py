@@ -38,6 +38,7 @@ from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
+from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
@@ -175,6 +176,16 @@ def _kill_switch_check() -> dict[str, Any]:
     if kill_switch_status["enabled"]:
         result["reason"] = "Kill switch is enabled."
     return result
+
+
+def _execution_backend_check() -> dict[str, Any]:
+    backend_status = get_execution_backend_status()
+    return {
+        "status": "ok",
+        "backend": backend_status["backend"],
+        "dry_run": backend_status["dry_run"],
+        "can_execute_orders": backend_status["can_execute_orders"],
+    }
 
 
 def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
@@ -346,6 +357,7 @@ def build_health_report() -> dict[str, Any]:
         checks["pipeline"] = _pipeline_check(connection)
         checks["queue"] = _queue_check(connection)
         checks["heartbeats"] = _heartbeat_check(connection)
+        checks["execution_backend"] = _execution_backend_check()
     except DBError as exc:
         checks["database"] = {
             "status": "error",
@@ -479,6 +491,11 @@ def admin() -> str:
 @app.get("/alerts/status")
 def alerts_status() -> dict[str, bool]:
     return {"telegram_configured": telegram_configured()}
+
+
+@app.get("/execution/backend")
+def execution_backend() -> dict[str, Union[bool, str]]:
+    return get_execution_backend_status()
 
 
 @app.post("/alerts/test")

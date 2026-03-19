@@ -10,6 +10,8 @@ ExecutionResult = Dict[str, Union[float, str, int]]
 
 class ExecutionAdapter(Protocol):
     name: str
+    dry_run: bool
+    can_execute_orders: bool
 
     def ensure_tables(self, connection: DBConnection) -> None: ...
 
@@ -36,6 +38,8 @@ class ExecutionAdapter(Protocol):
 
 class PaperExecutionAdapter:
     name = "paper"
+    dry_run = False
+    can_execute_orders = True
 
     def ensure_tables(self, connection: DBConnection) -> None:
         paper_broker.ensure_tables(connection)
@@ -74,6 +78,8 @@ class PaperExecutionAdapter:
 
 class NoopExecutionAdapter:
     name = "noop"
+    dry_run = True
+    can_execute_orders = False
 
     def ensure_tables(self, connection: DBConnection) -> None:
         paper_broker.ensure_tables(connection)
@@ -133,3 +139,13 @@ def get_execution_adapter() -> ExecutionAdapter:
 
 def get_execution_adapter_name() -> str:
     return get_execution_adapter().name
+
+
+def get_execution_backend_status() -> dict[str, Union[bool, str]]:
+    adapter = get_execution_adapter()
+    return {
+        "backend": adapter.name,
+        "dry_run": bool(adapter.dry_run),
+        "can_execute_orders": bool(adapter.can_execute_orders),
+        "status": "ok",
+    }

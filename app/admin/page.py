@@ -471,6 +471,11 @@ def render_admin_page() -> str:
             <div class="value" id="queue-status">Loading</div>
             <div class="inline-note" id="queue-detail">Checking queued worker jobs...</div>
           </div>
+          <div class="side-stat">
+            <label>Execution Backend</label>
+            <div class="value" id="execution-backend-status">Loading</div>
+            <div class="inline-note" id="execution-backend-detail">Checking execution backend...</div>
+          </div>
         </div>
       </section>
 
@@ -879,6 +884,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("queue-status").className = `value ${statusClass(queue.status)}`;
         const queueCounts = queue.counts || {};
         el("queue-detail").textContent = `queued=${queueCounts.queued ?? 0} leased=${queueCounts.leased ?? 0} failed=${queueCounts.failed ?? 0}`;
+        const executionBackend = health.checks.execution_backend || { status: "degraded" };
+        el("execution-backend-status").textContent = String(executionBackend.backend || "unknown").toUpperCase();
+        el("execution-backend-status").className = `value ${statusClass(executionBackend.status)}`;
+        el("execution-backend-detail").textContent =
+          `dry_run=${Boolean(executionBackend.dry_run)} | can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`;
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 
@@ -890,6 +900,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           ["kill switch", killSwitch.enabled ? "enabled" : "disabled"],
           ["db", health.checks.database.status],
           ["candles", health.checks.candles.status],
+          ["execution", health.checks.execution_backend?.backend || "unknown"],
         ];
         for (const [label, value] of chips) {
           const chip = document.createElement("div");
