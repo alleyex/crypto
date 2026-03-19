@@ -2806,7 +2806,8 @@ def test_admin_page_is_served() -> None:
     assert '<option value="limit">limit</option>' in response.text
     assert '<option value="enable_disable">enable/disable</option>' in response.text
     assert "Reset" in response.text
-    assert "Scheduler Control Activity" in response.text
+    assert "Control Activity" in response.text
+    assert "Recent scheduler and execution backend operations extracted from structured audit actions." in response.text
     assert "LATEST" in response.text
     assert "Copy Action" in response.text
     assert 'data-copy-scheduler-action="' in response.text

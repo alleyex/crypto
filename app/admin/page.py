@@ -689,8 +689,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <pre id="pipeline-json">No manual pipeline run yet.</pre>
         </article>
         <article class="panel data-card">
-          <h2>Scheduler Control Activity</h2>
-          <p>Recent scheduler strategy operations extracted from structured audit actions.</p>
+          <h2>Control Activity</h2>
+          <p>Recent scheduler and execution backend operations extracted from structured audit actions.</p>
           <div class="inline-controls" id="scheduler-preset-quick-actions">
             <span class="chip">Recent presets loading...</span>
           </div>
@@ -1355,8 +1355,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : '<span class="chip">No recent preset actions.</span>';
         }
         const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
-          .filter((event) => event.event_type === "scheduler_control")
+          .filter((event) => event.event_type === "scheduler_control" || event.event_type === "execution_control")
           .filter((event) => {
+            if (event.event_type === "execution_control") {
+              return schedulerControlFilterMode === "all";
+            }
             if (schedulerControlFilterMode === "all") return true;
             const action = String(event.payload?.action || "");
             if (schedulerControlFilterMode === "priority") {
@@ -1391,11 +1394,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const strategyLabel = Array.isArray(strategyNames) && strategyNames.length
             ? strategyNames.join(", ")
             : event.payload?.strategy_name || "n/a";
+          const backendLabel = event.payload?.backend || "";
           const statusClassName = statusClass(event.status || "degraded");
           const detailBits = [
             preset ? `preset=${preset}` : "",
             event.payload?.effective_strategy_limit != null ? `limit=${event.payload.effective_strategy_limit}` : "",
             strategyLabel !== "n/a" ? `strategies=${strategyLabel}` : "",
+            backendLabel ? `backend=${backendLabel}` : "",
           ].filter(Boolean);
           return `
             <div class="trade-row">
