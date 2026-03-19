@@ -2042,6 +2042,7 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
     heartbeat_payload = json.loads(pipeline_heartbeat["payload_json"])
     assert heartbeat_payload["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert heartbeat_payload["strategy_names"] == ["ma_cross"]
+    assert heartbeat_payload["execution_backend"] == "paper"
     assert heartbeat_payload["generated_signal_count"] == 2
     assert heartbeat_payload["approved_risk_count"] == 2
     assert heartbeat_payload["filled_execution_count"] == 2
@@ -2049,6 +2050,7 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
     pipeline_event = next(item for item in events if item["event_type"] == "pipeline_run" and item["status"] == "completed")
     event_payload = json.loads(pipeline_event["payload_json"])
     assert event_payload["summary"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert event_payload["summary"]["execution_backend"] == "paper"
     assert event_payload["summary"]["generated_signal_count"] == 2
     assert event_payload["summary"]["approved_risk_count"] == 2
     assert event_payload["summary"]["filled_execution_count"] == 2
@@ -2365,6 +2367,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["pipeline"]["status"] == "ok"
     assert payload["checks"]["pipeline"]["latest_run"]["strategy_names"] == ["ma_cross"]
     assert payload["checks"]["pipeline"]["latest_run"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert payload["checks"]["pipeline"]["latest_run"]["execution_backend"] == "paper"
     assert payload["checks"]["pipeline"]["latest_run"]["generated_signal_count"] == 2
     assert payload["checks"]["pipeline"]["latest_run"]["filled_execution_count"] == 2
     assert payload["checks"]["scheduler"]["status"] == "ok"
@@ -2913,6 +2916,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     },
                     "strategy_names": ["ma_cross", "momentum_3bar"],
                     "symbol_names": ["BTCUSDT", "ETHUSDT"],
+                    "execution_backend": "paper",
                 }
             ],
             "latest_incomplete_batch": {
@@ -2925,6 +2929,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                 },
                 "strategy_names": ["ma_cross", "momentum_3bar"],
                 "symbol_names": ["BTCUSDT", "ETHUSDT"],
+                "execution_backend": "paper",
             },
             "latest_completed_batch": {
                 "batch_id": "batch-0001",
@@ -2936,6 +2941,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                 },
                 "strategy_names": ["ma_cross"],
                 "symbol_names": ["BTCUSDT"],
+                "execution_backend": "paper",
             },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
             "retry_jobs": [{"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2}],
@@ -2975,8 +2981,11 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["latest_failed_job"]["error_message"] == "strategy failed"
     assert response.json()["latest_retry_job"]["id"] == 8
     assert response.json()["recent_batches"][0]["statuses"]["market_data"] == "completed"
+    assert response.json()["recent_batches"][0]["execution_backend"] == "paper"
     assert response.json()["latest_incomplete_batch"]["statuses"]["strategy"] == "queued"
+    assert response.json()["latest_incomplete_batch"]["execution_backend"] == "paper"
     assert response.json()["latest_completed_batch"]["statuses"]["execution"] == "completed"
+    assert response.json()["latest_completed_batch"]["execution_backend"] == "paper"
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
 
 
@@ -3043,6 +3052,7 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         assert summary["recent_batches"] == []
         assert summary["latest_incomplete_batch"] is None
         assert summary["latest_completed_batch"] is None
+        assert summary["latest_jobs"][0]["payload"]["execution_backend"] == "paper"
         assert execution_job_id in [job["id"] for job in summary["latest_jobs"]]
     finally:
         connection.close()
@@ -3513,7 +3523,10 @@ def test_job_queue_lifecycle_round_trip() -> None:
 
         queue_rows = get_job_queue_jobs(connection, limit=10)
         assert queue_rows[0]["id"] == second_job_id
-        assert queue_rows[0]["payload"] == {"symbol_names": ["ETHUSDT"]}
+        assert queue_rows[0]["payload"] == {
+            "execution_backend": "paper",
+            "symbol_names": ["ETHUSDT"],
+        }
         assert "job_queue" in list_tables(connection)
     finally:
         connection.close()
@@ -3592,6 +3605,7 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
     assert create_response.json()["job_id"] == 42
     assert captured["job_type"] == "strategy"
     assert captured["payload"] == {
+        "execution_backend": "paper",
         "source": "admin",
         "strategy_names": ["ma_cross"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
@@ -4795,6 +4809,7 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
     assert recorded == [{"status": "ok"}]
     assert captured["job_type"] == "strategy"
     assert captured["payload"] == {
+        "execution_backend": "paper",
         "strategy_name": "ma_cross",
         "strategy_names": ["ma_cross", "momentum_3bar"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],

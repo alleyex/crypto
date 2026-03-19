@@ -1039,10 +1039,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const symbolLabel = (latestPipelineRun.symbol_names || []).length
             ? latestPipelineRun.symbol_names.join(", ")
             : "none";
+          const executionBackend = latestPipelineRun.execution_backend || "unknown";
           el("pipeline-status").textContent = displayStatus;
           el("pipeline-status").className = `value ${statusClass(latestPipelineRun.status)}`;
           el("pipeline-detail").textContent =
-            `${latestPipelineRun.created_at} | ${latestPipelineRun.message} | strategies: ${strategyLabel}`;
+            `${latestPipelineRun.created_at} | ${latestPipelineRun.message} | strategies: ${strategyLabel} | execution: ${executionBackend}`;
           el("pipeline-symbols").textContent = `Symbols: ${symbolLabel}`;
           el("pipeline-counts").textContent =
             `Counts: signals=${latestPipelineRun.generated_signal_count ?? 0}, ` +
@@ -1600,14 +1601,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               const statuses = Object.entries(batch.statuses || {})
                 .map(([jobType, status]) => `${jobType}=${status}`)
                 .join(",");
-              return `batch=${String(batch.batch_id).slice(0, 8)} statuses=${statuses}`;
+              return `batch=${String(batch.batch_id).slice(0, 8)} backend=${batch.execution_backend || "unknown"} statuses=${statuses}`;
             }).join(" | ")
           : "Recent batches: none";
         const incompleteBatchBit = latestIncompleteBatch
-          ? `Incomplete batch: ${String(latestIncompleteBatch.batch_id).slice(0, 8)} statuses=${Object.entries(latestIncompleteBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
+          ? `Incomplete batch: ${String(latestIncompleteBatch.batch_id).slice(0, 8)} backend=${latestIncompleteBatch.execution_backend || "unknown"} statuses=${Object.entries(latestIncompleteBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
           : "Incomplete batch: none";
         const completedBatchBit = latestCompletedBatch
-          ? `Completed batch: ${String(latestCompletedBatch.batch_id).slice(0, 8)} statuses=${Object.entries(latestCompletedBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
+          ? `Completed batch: ${String(latestCompletedBatch.batch_id).slice(0, 8)} backend=${latestCompletedBatch.execution_backend || "unknown"} statuses=${Object.entries(latestCompletedBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
           : "Completed batch: none";
         if (filteredJobs.length === 0) {
           board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${completedBatchBit}<br>${batchBits}<br>No queue jobs match the current filter.</div>`;
@@ -1621,6 +1622,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="strategy-card">
               <div class="chip"><strong>${job.job_type}</strong>: <span class="${jobStatusClass}">${String(job.status).toUpperCase()}</span></div>
               <div><strong>Job</strong> #${job.id} | attempts=${job.attempt_count} | created=${job.created_at}</div>
+              <div><strong>Execution Backend</strong> ${job.payload?.execution_backend || "unknown"}</div>
               <div><strong>Payload</strong> ${payloadText}${errorText}</div>
             </div>
           `;

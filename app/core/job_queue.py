@@ -8,6 +8,7 @@ from app.core.db import fetch_all_as_dicts
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
@@ -60,6 +61,7 @@ def build_job_payload(
     payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     job_payload: dict[str, Any] = dict(payload or {})
+    job_payload.setdefault("execution_backend", get_execution_adapter_name())
     if strategy_name:
         job_payload["strategy_name"] = strategy_name
     if strategy_names:
@@ -77,10 +79,11 @@ def enqueue_job(
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unsupported job type: {job_type}")
     ensure_table(connection)
+    normalized_payload = build_job_payload(payload=payload)
     job_id = insert_and_get_rowid(
         connection,
         INSERT_JOB_SQL,
-        (job_type, _serialize_payload(payload)),
+        (job_type, _serialize_payload(normalized_payload)),
     )
     connection.commit()
     return job_id

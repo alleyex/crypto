@@ -5,6 +5,7 @@ from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_label
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
@@ -54,6 +55,7 @@ def _build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
         "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
         "strategy_names": strategy_names,
         "symbol_names": symbol_names,
+        "execution_backend": get_execution_adapter_name(),
         "generated_signal_count": generated_signal_count,
         "approved_risk_count": approved_risk_count,
         "rejected_risk_count": rejected_risk_count,

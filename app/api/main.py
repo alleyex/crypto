@@ -38,6 +38,7 @@ from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
+from app.execution.adapter import get_execution_adapter_name
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
@@ -236,6 +237,7 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
             "strategy_name": heartbeat_payload.get("strategy_name"),
             "strategy_names": heartbeat_payload.get("strategy_names", []),
             "symbol_names": heartbeat_payload.get("symbol_names", []),
+            "execution_backend": heartbeat_payload.get("execution_backend") or get_execution_adapter_name(),
             "generated_signal_count": heartbeat_payload.get("generated_signal_count"),
             "approved_risk_count": heartbeat_payload.get("approved_risk_count"),
             "rejected_risk_count": heartbeat_payload.get("rejected_risk_count"),

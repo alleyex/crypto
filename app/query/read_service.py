@@ -309,6 +309,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
                 "statuses": {},
                 "strategy_names": payload.get("strategy_names", []),
                 "symbol_names": payload.get("symbol_names", []),
+                "execution_backend": payload.get("execution_backend"),
             }
             batch_map[batch_id] = batch_entry
             recent_batches.append(batch_entry)

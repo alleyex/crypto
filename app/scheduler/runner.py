@@ -14,6 +14,7 @@ from app.core.job_queue import enqueue_job
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.execution.adapter import get_execution_adapter_name
 from app.system.heartbeat import record_heartbeat
 
 
@@ -201,6 +202,7 @@ def _run_scheduled_job(
                         "status": "queued",
                         "job_id": job_id,
                         "job_type": job_type,
+                        "execution_backend": get_execution_adapter_name(),
                         "strategy_names": strategy_names or [strategy_name],
                         "symbol_names": symbol_names or [],
                     }
