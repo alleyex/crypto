@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 """
 
+POSTGRES_MIGRATION_LOCK_ID = 8_455_771_239
+
 
 def _auto_id_column_sql(backend: str) -> str:
     if backend == "postgres":
@@ -261,17 +263,49 @@ def _get_applied_versions(connection: DBConnection) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+def _acquire_migration_lock(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    connection.execute("SELECT pg_advisory_lock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
+
+
+def _release_migration_lock(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    connection.execute("SELECT pg_advisory_unlock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
+
+
+def _record_applied_version(connection: DBConnection, version: str) -> None:
+    if get_backend_name(connection) == "postgres":
+        connection.execute(
+            """
+            INSERT INTO schema_migrations (version)
+            VALUES (?)
+            ON CONFLICT (version) DO NOTHING;
+            """,
+            (version,),
+        )
+        return
+
+    connection.execute("INSERT INTO schema_migrations (version) VALUES (?);", (version,))
+
+
 def run_migrations(connection: DBConnection) -> list[str]:
-    _ensure_migration_table(connection)
-    applied_versions = _get_applied_versions(connection)
-    newly_applied: list[str] = []
+    _acquire_migration_lock(connection)
+    try:
+        _ensure_migration_table(connection)
+        applied_versions = _get_applied_versions(connection)
+        newly_applied: list[str] = []
 
-    for version, migration in MIGRATIONS:
-        if version in applied_versions:
-            continue
-        migration(connection)
-        connection.execute("INSERT INTO schema_migrations (version) VALUES (?);", (version,))
-        connection.commit()
-        newly_applied.append(version)
+        for version, migration in MIGRATIONS:
+            if version in applied_versions:
+                continue
+            migration(connection)
+            _record_applied_version(connection, version)
+            connection.commit()
+            newly_applied.append(version)
+            applied_versions.add(version)
 
-    return newly_applied
+        return newly_applied
+    finally:
+        _release_migration_lock(connection)

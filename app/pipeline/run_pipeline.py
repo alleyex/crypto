@@ -39,6 +39,18 @@ def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[
     return result
 
 
+def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) -> Dict[str, Any]:
+    result["steps"].append(
+        {
+            "step": step,
+            "status": "failed",
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
+    )
+    return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
+
+
 def run_pipeline_collect() -> Dict[str, Any]:
     database_label = get_database_label()
     result: Dict[str, Any] = {"database": database_label, "steps": []}
@@ -74,42 +86,51 @@ def run_pipeline_collect() -> Dict[str, Any]:
 
     connection = get_connection()
     try:
-        run_migrations(connection)
-        ensure_candles_table(connection)
-        klines = fetch_klines()
-        saved_klines = save_klines(connection, klines)
-        result["steps"].append({"step": "save_klines", "saved_klines": saved_klines})
+        current_step = "save_klines"
+        try:
+            run_migrations(connection)
+            ensure_candles_table(connection)
+            klines = fetch_klines()
+            saved_klines = save_klines(connection, klines)
+            result["steps"].append({"step": "save_klines", "saved_klines": saved_klines})
 
-        ensure_signals_table(connection)
-        signal_result = generate_signal(connection)
-        if signal_result is None:
-            result["steps"].append(
-                {"step": "generate_signal", "status": "skipped", "reason": "Not enough candle data"}
-            )
-            return _finalize_result(result, "completed", "Pipeline run completed with skipped signal generation.")
-        result["steps"].append({"step": "generate_signal", **signal_result})
+            current_step = "generate_signal"
+            ensure_signals_table(connection)
+            signal_result = generate_signal(connection)
+            if signal_result is None:
+                result["steps"].append(
+                    {"step": "generate_signal", "status": "skipped", "reason": "Not enough candle data"}
+                )
+                return _finalize_result(result, "completed", "Pipeline run completed with skipped signal generation.")
+            result["steps"].append({"step": "generate_signal", **signal_result})
 
-        ensure_positions_table(connection)
-        ensure_risk_table(connection)
-        risk_result = evaluate_latest_signal(connection)
-        if risk_result is None:
-            result["steps"].append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
-            return _finalize_result(result, "completed", "Pipeline run completed with skipped risk evaluation.")
-        result["steps"].append({"step": "evaluate_risk", **risk_result})
+            current_step = "evaluate_risk"
+            ensure_positions_table(connection)
+            ensure_risk_table(connection)
+            risk_result = evaluate_latest_signal(connection)
+            if risk_result is None:
+                result["steps"].append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
+                return _finalize_result(result, "completed", "Pipeline run completed with skipped risk evaluation.")
+            result["steps"].append({"step": "evaluate_risk", **risk_result})
 
-        ensure_execution_tables(connection)
-        execution_result = execute_latest_risk(connection)
-        if execution_result is None:
-            result["steps"].append({"step": "paper_execute", "status": "skipped", "reason": "No risk event found"})
-        else:
-            result["steps"].append({"step": "paper_execute", **execution_result})
+            current_step = "paper_execute"
+            ensure_execution_tables(connection)
+            execution_result = execute_latest_risk(connection)
+            if execution_result is None:
+                result["steps"].append({"step": "paper_execute", "status": "skipped", "reason": "No risk event found"})
+            else:
+                result["steps"].append({"step": "paper_execute", **execution_result})
 
-        updated_positions = update_positions(connection)
-        result["steps"].append({"step": "update_positions", "updated_symbols": updated_positions})
+            current_step = "update_positions"
+            updated_positions = update_positions(connection)
+            result["steps"].append({"step": "update_positions", "updated_symbols": updated_positions})
 
-        ensure_pnl_table(connection)
-        snapshot_count = update_pnl_snapshots(connection)
-        result["steps"].append({"step": "update_pnl", "snapshot_count": snapshot_count})
+            current_step = "update_pnl"
+            ensure_pnl_table(connection)
+            snapshot_count = update_pnl_snapshots(connection)
+            result["steps"].append({"step": "update_pnl", "snapshot_count": snapshot_count})
+        except Exception as exc:
+            return _pipeline_failure_result(result, current_step, exc)
     finally:
         connection.close()
 

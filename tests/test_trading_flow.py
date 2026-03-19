@@ -19,6 +19,8 @@ from app.core.db import parse_db_timestamp
 from app.core.db import _rewrite_query_params
 from app.core.db import table_exists
 from app.core.migrations import _auto_id_column_sql
+from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
+from app.core.migrations import run_migrations
 from app.core.postgres_smoke import run_postgres_migration_smoke
 from app.core.postgres_smoke import run_postgres_smoke
 from app.query.read_service import get_orders as query_get_orders
@@ -423,6 +425,44 @@ def test_request_json_with_retry_retries_transient_http_500(monkeypatch) -> None
     assert result == {"ok": True}
     assert len(calls) == 3
     assert sleep_calls == [0.5, 0.5]
+
+
+def test_run_migrations_uses_postgres_advisory_lock(monkeypatch) -> None:
+    executed: list[tuple[str, tuple]] = []
+
+    class FakeCursor:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class FakeConnection:
+        def execute(self, query: str, params: tuple = ()):
+            executed.append((" ".join(query.split()), params))
+            if "SELECT version FROM schema_migrations" in query:
+                return FakeCursor([])
+            return FakeCursor([])
+
+        def commit(self) -> None:
+            executed.append(("COMMIT", ()))
+
+    connection = FakeConnection()
+    monkeypatch.setattr("app.core.migrations.get_backend_name", lambda _connection: "postgres")
+    monkeypatch.setattr(
+        "app.core.migrations.MIGRATIONS",
+        [("001_test_migration", lambda _connection: executed.append(("MIGRATION", ())))],
+    )
+
+    run_migrations(connection)
+
+    assert executed[0] == ("SELECT pg_advisory_lock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
+    assert ("MIGRATION", ()) in executed
+    assert (
+        "INSERT INTO schema_migrations (version) VALUES (?) ON CONFLICT (version) DO NOTHING;",
+        ("001_test_migration",),
+    ) in executed
+    assert executed[-1] == ("SELECT pg_advisory_unlock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
 
 
 def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
@@ -1582,6 +1622,44 @@ def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch
             "reason": "Kill switch is enabled.",
         }
     ]
+
+
+def test_run_pipeline_collect_returns_failed_result_when_fetch_klines_errors(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "pipeline-failure.db"
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.fetch_klines",
+        lambda: (_ for _ in ()).throw(RuntimeError("Binance API unavailable")),
+    )
+
+    result = run_pipeline_collect()
+
+    assert result["steps"] == [
+        {
+            "step": "save_klines",
+            "status": "failed",
+            "error": "Binance API unavailable",
+            "error_type": "RuntimeError",
+        }
+    ]
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+        events = get_audit_events(connection, limit=5)
+    finally:
+        connection.close()
+
+    assert any(item["component"] == "pipeline" and item["status"] == "failed" for item in heartbeats)
+    assert any(
+        item["event_type"] == "pipeline_run" and item["status"] == "failed" and "Binance API unavailable" in item["message"]
+        for item in events
+    )
 
 
 def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, tmp_path) -> None:
