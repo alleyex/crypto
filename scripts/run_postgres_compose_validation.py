@@ -1,4 +1,5 @@
 import argparse
+import http.client
 import json
 import os
 import shutil
@@ -156,7 +157,14 @@ def wait_for_api(base_url: str, timeout_seconds: float) -> dict[str, Any]:
             payload = request_json("GET", f"{base_url}/health")
             if isinstance(payload, dict):
                 return payload
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            json.JSONDecodeError,
+            ConnectionResetError,
+            ConnectionAbortedError,
+            http.client.RemoteDisconnected,
+        ) as exc:
             last_error = exc
             time.sleep(1)
     raise RuntimeError(f"API did not become ready within {timeout_seconds} seconds: {last_error}")

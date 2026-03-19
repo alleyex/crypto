@@ -25,6 +25,7 @@ from scripts.run_postgres_compose_validation import build_override_compose
 from scripts.run_postgres_compose_validation import attach_metadata
 from scripts.run_postgres_compose_validation import make_env
 from scripts.run_postgres_compose_validation import run_validation_mode
+from scripts.run_postgres_compose_validation import wait_for_api
 from scripts.write_postgres_validation_artifact import build_artifact_manifest
 from scripts.write_postgres_validation_artifact import build_summary_markdown
 from scripts.write_postgres_validation_artifact import get_validation_layer
@@ -378,6 +379,28 @@ def test_build_override_compose_uses_isolated_mounts_and_api_port(tmp_path: Path
     assert f"- {tmp_path / 'storage'}:/app/storage" in rendered
     assert f"- {tmp_path / 'logs'}:/app/logs" in rendered
     assert f"- {tmp_path / 'runtime'}:/app/runtime" in rendered
+
+
+def test_wait_for_api_retries_on_connection_reset(monkeypatch) -> None:
+    calls: list[str] = []
+    sleep_calls: list[int] = []
+    time_values = iter([0, 0, 0, 0, 0, 0])
+
+    def fake_request_json(method: str, url: str):
+        calls.append(url)
+        if len(calls) < 3:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        return {"status": "ok"}
+
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.request_json", fake_request_json)
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.time.time", lambda: next(time_values))
+
+    result = wait_for_api("http://127.0.0.1:8012", timeout_seconds=5)
+
+    assert result == {"status": "ok"}
+    assert len(calls) == 3
+    assert sleep_calls == [1, 1]
 
 
 def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
