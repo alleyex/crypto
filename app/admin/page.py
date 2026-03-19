@@ -1275,7 +1275,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="trade-row">
               <div><strong>Action</strong>${action}${index === 0 ? ' <span class="ok">LATEST</span>' : ""}<br>${event.created_at}</div>
               <div><strong>Status</strong><span class="${statusClassName}">${event.status}</span><br>${event.source}</div>
-              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}</div>
+              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}<br><button type="button" class="secondary" data-copy-scheduler-action="${action}" data-copy-scheduler-preset="${preset}">Copy Action</button></div>
             </div>
           `;
         }).join("");
@@ -1649,6 +1649,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         refreshAll().catch((error) => {
           el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to reset scheduler control activity filter: ${error.message}</div>`;
         });
+      });
+
+      el("scheduler-control-board")?.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-copy-scheduler-action]");
+        if (!button) return;
+        const action = button.dataset.copySchedulerAction || "unknown";
+        const preset = button.dataset.copySchedulerPreset || "";
+        const text = preset ? `action=${action} preset=${preset}` : `action=${action}`;
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+          }
+          el("scheduler-message").textContent = `Copied scheduler control action: ${text}`;
+        } catch (error) {
+          el("scheduler-message").textContent = `Failed to copy scheduler control action: ${error.message}`;
+        }
       });
 
       el("strategy-sort-select")?.addEventListener("change", (event) => {
