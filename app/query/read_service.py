@@ -188,6 +188,26 @@ def get_strategy_activity_summary(
         order_ids = {item["id"] for item in strategy_orders}
         latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
         filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
+        filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
+
+        gross_realized_pnl = 0.0
+        net_position_qty = 0.0
+        position_cost = 0.0
+        filled_qty_total = 0.0
+        for order in filled_orders:
+            qty = float(order["qty"])
+            price = float(order["price"])
+            filled_qty_total += qty
+
+            if order["side"] == "BUY":
+                net_position_qty += qty
+                position_cost += qty * price
+            elif order["side"] == "SELL" and net_position_qty > 0:
+                sell_qty = min(qty, net_position_qty)
+                average_cost = position_cost / net_position_qty
+                net_position_qty -= sell_qty
+                position_cost -= sell_qty * average_cost
+                gross_realized_pnl += (price - average_cost) * sell_qty
 
         summaries.append(
             {
@@ -197,6 +217,9 @@ def get_strategy_activity_summary(
                 "latest_order": latest_order,
                 "latest_fill": latest_fill,
                 "filled_order_count": filled_order_count,
+                "filled_qty_total": filled_qty_total,
+                "net_position_qty": net_position_qty,
+                "gross_realized_pnl": gross_realized_pnl,
                 "has_activity": any(
                     item is not None for item in (latest_signal, latest_risk, latest_order, latest_fill)
                 ),

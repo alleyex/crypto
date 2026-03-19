@@ -174,10 +174,13 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ma_cross"]["latest_order"] is not None
         assert by_name["ma_cross"]["latest_fill"] is not None
         assert by_name["ma_cross"]["filled_order_count"] == 1
+        assert by_name["ma_cross"]["filled_qty_total"] == 0.001
+        assert by_name["ma_cross"]["gross_realized_pnl"] == 0.0
         assert by_name["momentum_3bar"]["latest_signal"] is not None
         assert by_name["momentum_3bar"]["latest_risk"] is not None
         assert by_name["momentum_3bar"]["latest_fill"] is None
         assert by_name["momentum_3bar"]["filled_order_count"] == 0
+        assert by_name["momentum_3bar"]["filled_qty_total"] == 0.0
     finally:
         connection.close()
 
@@ -2194,6 +2197,9 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "latest_order": {"status": "FILLED"},
                 "latest_fill": {"side": "BUY"},
                 "filled_order_count": 1,
+                "filled_qty_total": 0.5,
+                "net_position_qty": 0.25,
+                "gross_realized_pnl": 12.5,
                 "has_activity": True,
             },
             {
@@ -2203,6 +2209,9 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "latest_order": None,
                 "latest_fill": None,
                 "filled_order_count": 0,
+                "filled_qty_total": 0.0,
+                "net_position_qty": 0.0,
+                "gross_realized_pnl": 0.0,
                 "has_activity": False,
             },
         ],
@@ -2222,6 +2231,7 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[0]["latest_risk"]["decision"] == "APPROVED"
     assert payload[0]["latest_fill"]["side"] == "BUY"
     assert payload[0]["filled_order_count"] == 1
+    assert payload[0]["gross_realized_pnl"] == 12.5
     assert payload[1]["strategy_name"] == "momentum_3bar"
 
 
