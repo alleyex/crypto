@@ -4,6 +4,8 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.data.symbols import DEFAULT_SYMBOL
+from app.data.symbols import list_supported_symbols
 from app.strategy.registry import list_registered_strategies
 from app.scheduler.runner import LOG_FILE
 from app.scheduler.runner import get_scheduler_log_file
@@ -16,6 +18,7 @@ DISABLED_STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy.disabled"
 PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
 DISABLED_REASON_FILE = RUNTIME_DIR / "scheduler.strategy.disabled.reason.json"
 EFFECTIVE_LIMIT_FILE = RUNTIME_DIR / "scheduler.strategy.limit"
+SYMBOL_FILE = RUNTIME_DIR / "scheduler.symbols"
 StrategyPriorityPreset = Literal["sequential", "reverse", "active_first", "reset"]
 
 
@@ -77,6 +80,25 @@ def get_stop_status() -> Dict[str, Union[str, bool]]:
 
 def read_active_strategy() -> str:
     return read_active_strategies()[0]
+
+
+def read_active_symbols() -> list[str]:
+    if not SYMBOL_FILE.exists():
+        return [DEFAULT_SYMBOL]
+
+    configured_names = [
+        item.strip()
+        for item in SYMBOL_FILE.read_text(encoding="utf-8").splitlines()
+        if item.strip()
+    ]
+    if not configured_names:
+        return [DEFAULT_SYMBOL]
+
+    allowed_names = set(list_supported_symbols())
+    normalized_names = [name for name in dict.fromkeys(configured_names) if name in allowed_names]
+    if not normalized_names:
+        return [DEFAULT_SYMBOL]
+    return normalized_names
 
 
 def read_active_strategies() -> list[str]:
@@ -206,6 +228,40 @@ def build_strategy_priority_preset(
 def set_active_strategy(strategy_name: str) -> Dict[str, str]:
     result = set_active_strategies([strategy_name])
     return {"strategy_name": result["strategy_name"], "strategy_file": result["strategy_file"]}
+
+
+def set_active_symbols(
+    symbol_names: list[str],
+    *,
+    audit_action: str = "set_active_symbols",
+    audit_message: str = "Scheduler active symbols updated.",
+) -> Dict[str, Union[str, list[str]]]:
+    if not symbol_names:
+        raise ValueError("At least one symbol must be provided.")
+
+    unique_names = list(dict.fromkeys(symbol_names))
+    allowed_names = set(list_supported_symbols())
+    invalid_names = [name for name in unique_names if name not in allowed_names]
+    if invalid_names:
+        raise ValueError(f"Unknown symbols: {', '.join(invalid_names)}")
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    SYMBOL_FILE.write_text("\n".join(unique_names) + "\n", encoding="utf-8")
+    _log_scheduler_control_event(
+        status="updated",
+        action=audit_action,
+        message=audit_message,
+        payload={
+            "symbol": unique_names[0],
+            "symbol_names": unique_names,
+            "symbol_file": str(SYMBOL_FILE),
+        },
+    )
+    return {
+        "symbol": unique_names[0],
+        "symbol_names": unique_names,
+        "symbol_file": str(SYMBOL_FILE),
+    }
 
 
 def set_active_strategies(
@@ -415,6 +471,18 @@ def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
             }
             for name in available_strategies
         ],
+    }
+
+
+def get_symbol_status() -> Dict[str, Union[str, List[str]]]:
+    active_symbol_names = read_active_symbols()
+    available_symbols = list_supported_symbols()
+    return {
+        "symbol": active_symbol_names[0],
+        "symbol_names": active_symbol_names,
+        "default_symbol": DEFAULT_SYMBOL,
+        "symbol_file": str(SYMBOL_FILE),
+        "available_symbols": available_symbols,
     }
 
 

@@ -1895,7 +1895,9 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
         "app.pipeline.market_data_job.fetch_klines",
-        lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+        lambda symbol="BTCUSDT", interval="1m", limit=5: [
+            make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
+        ],
     )
 
     result = run_pipeline_collect()
@@ -1934,7 +1936,9 @@ def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> N
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
         "app.pipeline.market_data_job.fetch_klines",
-        lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+        lambda symbol="BTCUSDT", interval="1m", limit=5: [
+            make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
+        ],
     )
 
     result = run_pipeline_collect(strategy_name="momentum_3bar")
@@ -1974,7 +1978,7 @@ def test_run_pipeline_collect_returns_failed_result_when_fetch_klines_errors(mon
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
         "app.pipeline.market_data_job.fetch_klines",
-        lambda: (_ for _ in ()).throw(RuntimeError("Binance API unavailable")),
+        lambda symbol="BTCUSDT", interval="1m", limit=5: (_ for _ in ()).throw(RuntimeError("Binance API unavailable")),
     )
 
     result = run_pipeline_collect()
@@ -2664,6 +2668,70 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
     assert response.json()["strategy_names"] == ["momentum_3bar"]
 
 
+def test_scheduler_symbol_endpoints_round_trip(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "app.api.main.get_symbol_status",
+        lambda: {
+            "symbol": "BTCUSDT",
+            "symbol_names": ["BTCUSDT", "ETHUSDT"],
+            "default_symbol": "BTCUSDT",
+            "symbol_file": "runtime/scheduler.symbols",
+            "available_symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        },
+    )
+
+    def fake_set_active_symbols(symbol_names, **kwargs):
+        captured["symbols"] = symbol_names
+        captured["kwargs"] = kwargs
+        return {
+            "symbol": symbol_names[0],
+            "symbol_names": symbol_names,
+            "symbol_file": "runtime/scheduler.symbols",
+        }
+
+    monkeypatch.setattr("app.api.main.set_active_symbols", fake_set_active_symbols)
+
+    status_response = client.get("/scheduler/symbols")
+    update_response = client.post("/scheduler/symbols", json={"symbol_names": ["BTCUSDT", "ETHUSDT"]})
+
+    assert status_response.status_code == 200
+    assert status_response.json()["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert update_response.status_code == 200
+    assert update_response.json()["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert captured["symbols"] == ["BTCUSDT", "ETHUSDT"]
+    assert captured["kwargs"]["audit_action"] == "set_active_symbols"
+
+
+def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:
+    saved_calls: list[tuple[str, list[list]]] = []
+
+    monkeypatch.setattr("app.pipeline.market_data_job.ensure_candles_table", lambda connection: None)
+    monkeypatch.setattr(
+        "app.pipeline.market_data_job.fetch_klines",
+        lambda symbol="BTCUSDT", interval="1m", limit=5: [[1, "1", "2", "0", "1", "10", 2, "20", 1, "5", "10"]],
+    )
+
+    def fake_save_klines(connection, klines, symbol="BTCUSDT", timeframe="1m"):
+        saved_calls.append((symbol, klines))
+        return len(klines)
+
+    monkeypatch.setattr("app.pipeline.market_data_job.save_klines", fake_save_klines)
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+
+    result = run_market_data_job(connection=None)  # type: ignore[arg-type]
+
+    assert result["saved_klines"] == 2
+    assert result["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert result["symbol_results"] == [
+        {"symbol": "BTCUSDT", "saved_klines": 1},
+        {"symbol": "ETHUSDT", "saved_klines": 1},
+    ]
+    assert [symbol for symbol, _ in saved_calls] == ["BTCUSDT", "ETHUSDT"]
+
+
 def test_scheduler_strategy_limit_preset_endpoint(monkeypatch) -> None:
     client = TestClient(app)
     captured: dict[str, object] = {}
@@ -3053,7 +3121,9 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
         "app.pipeline.market_data_job.fetch_klines",
-        lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+        lambda symbol="BTCUSDT", interval="1m", limit=5: [
+            make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
+        ],
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
 
@@ -3082,7 +3152,9 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
     try:
         monkeypatch.setattr(
             "app.pipeline.market_data_job.fetch_klines",
-            lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+            lambda symbol="BTCUSDT", interval="1m", limit=5: [
+                make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
+            ],
         )
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
@@ -3114,7 +3186,12 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         strategy_result = run_strategy_job(connection)
         execution_result = run_execution_job(connection)
 
-        assert market_result == {"step": "save_klines", "saved_klines": 5}
+        assert market_result == {
+            "step": "save_klines",
+            "saved_klines": 5,
+            "symbol_names": ["BTCUSDT"],
+            "symbol_results": [{"symbol": "BTCUSDT", "saved_klines": 5}],
+        }
         assert [step["step"] for step in strategy_result["steps"]] == ["generate_signal", "evaluate_risk"]
         assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl"]
     finally:

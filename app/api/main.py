@@ -24,6 +24,7 @@ from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
@@ -44,9 +45,11 @@ from app.query.read_service import get_signals
 from app.query.read_service import get_strategy_activity_summary
 from app.scheduler.control import clear_stop_flag
 from app.scheduler.control import build_strategy_priority_preset
+from app.scheduler.control import get_symbol_status
 from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
+from app.scheduler.control import set_active_symbols
 from app.scheduler.control import set_active_strategy
 from app.scheduler.control import set_active_strategies
 from app.scheduler.control import set_disabled_strategies
@@ -300,7 +303,7 @@ def build_health_report() -> dict[str, Any]:
 
 class TestSignalRequest(BaseModel):
     signal_type: Literal["BUY", "SELL", "HOLD"]
-    symbol: str = "BTCUSDT"
+    symbol: str = DEFAULT_SYMBOL
     timeframe: str = "1m"
     strategy_name: str = "manual_test"
 
@@ -330,6 +333,11 @@ class SchedulerStrategyPresetRequest(BaseModel):
 
 class SchedulerStrategyLimitPresetRequest(BaseModel):
     preset: Literal["top_1", "top_2", "all_enabled"]
+
+
+class SchedulerSymbolsRequest(BaseModel):
+    symbol: str = DEFAULT_SYMBOL
+    symbol_names: Optional[List[str]] = None
 
 
 @app.get("/health")
@@ -534,6 +542,11 @@ def scheduler_strategy_status() -> dict[str, Any]:
     return get_strategy_status()
 
 
+@app.get("/scheduler/symbols")
+def scheduler_symbol_status() -> dict[str, Any]:
+    return get_symbol_status()
+
+
 @app.post("/scheduler/strategy")
 def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, Any]:
     if any(
@@ -578,6 +591,18 @@ def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, An
             )
         return get_strategy_status()
     return set_active_strategy(payload.strategy_name)
+
+
+@app.post("/scheduler/symbols")
+def scheduler_symbols_update(payload: SchedulerSymbolsRequest) -> dict[str, Any]:
+    if payload.symbol_names is not None:
+        set_active_symbols(
+            payload.symbol_names,
+            audit_action="set_active_symbols",
+            audit_message="Scheduler active symbols updated.",
+        )
+        return get_symbol_status()
+    return set_active_symbols([payload.symbol])
 
 
 @app.post("/scheduler/strategy/preset")
