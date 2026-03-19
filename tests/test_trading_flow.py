@@ -1995,6 +1995,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-worker-status"' in response.text
     assert 'id="execution-worker-status"' in response.text
     assert 'id="alerting-runtime-status"' in response.text
+    assert 'id="logs-mode-select"' in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
     assert "Last Pipeline" in response.text

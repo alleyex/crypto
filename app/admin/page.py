@@ -167,6 +167,23 @@ def render_admin_page() -> str:
         gap: 10px;
       }
 
+      .inline-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+      }
+
+      select {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font: inherit;
+        color: var(--text);
+        background: #13202c;
+      }
+
       button {
         border: 0;
         border-radius: 12px;
@@ -407,6 +424,16 @@ def render_admin_page() -> str:
         <article class="panel data-card">
           <h2>Scheduler Logs</h2>
           <p>Recent scheduler output lines.</p>
+          <div class="inline-controls">
+            <label for="logs-mode-select">Mode</label>
+            <select id="logs-mode-select">
+              <option value="all">all</option>
+              <option value="pipeline">pipeline</option>
+              <option value="market-data-only">market-data-only</option>
+              <option value="strategy-only">strategy-only</option>
+              <option value="execution-only">execution-only</option>
+            </select>
+          </div>
           <pre id="logs-json">Loading...</pre>
         </article>
         <article class="panel data-card">
@@ -449,6 +476,7 @@ def render_admin_page() -> str:
       const AUTO_REFRESH_INTERVAL_MS = 10000;
       let autoRefreshTimer = null;
       let autoRefreshEnabled = true;
+      let schedulerLogsMode = "all";
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
@@ -684,12 +712,13 @@ def render_admin_page() -> str:
       }
 
       async function refreshAll() {
+        schedulerLogsMode = el("logs-mode-select")?.value || "all";
         const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
           api("/pnl?limit=10"),
-          api("/scheduler/logs?lines=20"),
+          api(`/scheduler/logs?lines=20&mode=${encodeURIComponent(schedulerLogsMode)}`),
           api("/audit-events?limit=20"),
           api("/alerts/status"),
           api("/validation/soak"),
@@ -764,6 +793,12 @@ def render_admin_page() -> str:
 
       document.querySelectorAll("[data-refresh]").forEach((button) => {
         button.addEventListener("click", refreshAll);
+      });
+
+      el("logs-mode-select")?.addEventListener("change", () => {
+        refreshAll().catch((error) => {
+          el("logs-json").textContent = `Failed to load logs: ${error.message}`;
+        });
       });
 
       updateAutoRefreshStatus();
