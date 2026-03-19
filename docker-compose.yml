@@ -65,7 +65,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode market-data-only"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_DATA_INTERVAL:-60} --mode market-data-only"
     depends_on:
       - api
     environment:
@@ -74,7 +74,7 @@ services:
       CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
-      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_DATA_INTERVAL: ${CRYPTO_DATA_INTERVAL:-60}
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
       CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
@@ -89,7 +89,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode strategy-only"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only"
     depends_on:
       - api
     environment:
@@ -98,7 +98,7 @@ services:
       CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
-      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_STRATEGY_INTERVAL: ${CRYPTO_STRATEGY_INTERVAL:-60}
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
       CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
@@ -113,7 +113,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --mode execution-only"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_EXECUTION_INTERVAL:-60} --mode execution-only"
     depends_on:
       - api
     environment:
@@ -122,7 +122,7 @@ services:
       CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
-      CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_EXECUTION_INTERVAL: ${CRYPTO_EXECUTION_INTERVAL:-60}
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
       CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}

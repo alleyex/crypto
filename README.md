@@ -131,6 +131,14 @@ Run split worker services with Docker Compose:
 docker compose --profile split-workers up --build
 ```
 
+Optional split worker intervals:
+
+```bash
+export CRYPTO_DATA_INTERVAL=60
+export CRYPTO_STRATEGY_INTERVAL=60
+export CRYPTO_EXECUTION_INTERVAL=60
+```
+
 Run PostgreSQL smoke test with Docker Compose:
 
 ```bash
@@ -165,6 +173,7 @@ Docker Compose runtime validation status:
 - verified on macOS Apple Silicon with Docker Desktop
 - `api` and `scheduler` containers both start successfully
 - split worker services now also exist behind the `split-workers` Compose profile: `data-worker`, `strategy-worker`, and `execution-worker`
+- split worker services can now run at different intervals via `CRYPTO_DATA_INTERVAL`, `CRYPTO_STRATEGY_INTERVAL`, and `CRYPTO_EXECUTION_INTERVAL`
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks
