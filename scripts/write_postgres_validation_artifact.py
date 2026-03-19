@@ -142,6 +142,7 @@ def write_validation_artifacts(
             "summary.md": "Human-readable validation summary.",
             "result.json": "Full structured validation result.",
             "raw.log": "Raw stdout payload from the validation script.",
+            "runner.log": "Runner-level combined stdout and stderr for the validation command.",
         }
         if docker_logs_output and result.get("mode") != "smoke":
             file_purposes["docker.log"] = "Combined Docker Compose logs for postgres, api, and scheduler."

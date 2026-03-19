@@ -84,11 +84,13 @@ jobs:
           database-url: ${{ inputs.database_url }}
 
       - name: Upload PostgreSQL validation artifact
+        if: always()
         uses: ./.github/actions/upload-artifact
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.artifact_dir }}/
           retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: warn
 
       - name: Stop PostgreSQL
         if: always() && inputs.start_postgres
