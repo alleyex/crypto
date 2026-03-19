@@ -2,6 +2,7 @@ from typing import Any, Dict
 from typing import Optional
 
 from app.core.db import DBConnection
+from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
 from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_latest_signal
@@ -9,7 +10,10 @@ from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.registry import generate_registered_signal
 
 
-def run_strategy_job(connection: DBConnection, strategy_name: str = "ma_cross") -> Dict[str, Any]:
+def run_strategy_job(
+    connection: DBConnection,
+    strategy_name: str = DEFAULT_STRATEGY_NAME,
+) -> Dict[str, Any]:
     ensure_signals_table(connection)
     signal_result = generate_registered_signal(connection, strategy_name=strategy_name)
     if signal_result is None:

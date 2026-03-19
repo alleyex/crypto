@@ -4,6 +4,7 @@ import urllib.error
 from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 import contextlib
 
 from fastapi.testclient import TestClient
@@ -72,6 +73,7 @@ from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
+from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
 from app.strategy.registry import generate_registered_signal
 from app.strategy.registry import get_strategy
 from app.strategy.registry import list_registered_strategies
@@ -149,7 +151,9 @@ def test_strategy_registry_exposes_ma_cross() -> None:
     names = list_registered_strategies()
 
     assert "ma_cross" in names
+    assert "momentum_3bar" in names
     assert get_strategy("ma_cross") is not None
+    assert get_strategy("momentum_3bar") is not None
 
 
 def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
@@ -168,6 +172,44 @@ def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
             "short_ma": 3.0,
             "long_ma": 2.0,
         }
+    finally:
+        connection.close()
+
+
+def test_momentum_3bar_generates_buy_signal() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        base_open_time = 1_710_000_000_000
+        klines = []
+        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
+            open_time = base_open_time + (index * 60_000)
+            klines.append(
+                [
+                    open_time,
+                    str(close - 1.0),
+                    str(close + 1.0),
+                    str(close - 2.0),
+                    str(close),
+                    "100",
+                    open_time + 59_000,
+                    "1000",
+                    10,
+                    "50",
+                    "500",
+                    "0",
+                ]
+            )
+
+        save_klines(connection, klines)
+
+        result = generate_momentum_3bar_signal(connection)
+
+        assert result is not None
+        assert result["strategy_name"] == "momentum_3bar"
+        assert result["signal_type"] == "BUY"
+        assert result["short_ma"] == 104.0
+        assert result["long_ma"] == 100.0
     finally:
         connection.close()
 
@@ -2516,8 +2558,15 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
     monkeypatch.setattr("scripts.run_strategy_job.get_connection", lambda: DummyConnection())
     monkeypatch.setattr("scripts.run_strategy_job.run_migrations", lambda connection: None)
     monkeypatch.setattr(
+        "scripts.run_strategy_job.parse_args",
+        lambda: SimpleNamespace(strategy="momentum_3bar"),
+    )
+    monkeypatch.setattr(
         "scripts.run_strategy_job.run_strategy_job",
-        lambda connection: {"status": "ok", "steps": [{"step": "generate_signal"}]},
+        lambda connection, strategy_name="ma_cross": {
+            "status": "ok",
+            "steps": [{"step": "generate_signal", "strategy_name": strategy_name}],
+        },
     )
 
     monkeypatch.setattr("scripts.run_execution_job.get_connection", lambda: DummyConnection())
@@ -2538,7 +2587,7 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
         outputs.append(buffer.getvalue())
 
     assert '"saved_klines": 5' in outputs[0]
-    assert '"generate_signal"' in outputs[1]
+    assert '"strategy_name": "momentum_3bar"' in outputs[1]
     assert '"paper_execute"' in outputs[2]
 
 
@@ -2568,7 +2617,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
-    assert "run=1 mode=pipeline signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
+    assert "run=1 mode=pipeline strategy=ma_cross signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
     assert "soak_snapshot status=ok" in log_text
 
     connection = sqlite3.connect(db_path)
@@ -2591,11 +2640,11 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "app.scheduler.runner.run_strategy_job",
-        lambda connection: {
+        lambda connection, strategy_name="ma_cross": {
             "status": "ok",
             "steps": [
-                {"step": "generate_signal", "signal_type": "BUY"},
-                {"step": "evaluate_risk", "decision": "APPROVED"},
+                {"step": "generate_signal", "signal_type": "BUY", "strategy_name": strategy_name},
+                {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": strategy_name},
             ],
         },
     )
@@ -2604,11 +2653,12 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
         lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
     )
 
-    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only")
+    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only", strategy_name="momentum_3bar")
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
     assert "mode=strategy-only" in log_text
+    assert "strategy=momentum_3bar" in log_text
     assert "signal=BUY" in log_text
     assert "risk=APPROVED" in log_text
 

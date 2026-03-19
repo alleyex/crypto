@@ -41,7 +41,7 @@ services:
   scheduler:
     build:
       context: .
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60}"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
     depends_on:
       - api
     environment:
@@ -51,6 +51,7 @@ services:
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
       CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ma_cross}
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
       CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
@@ -89,7 +90,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
     depends_on:
       - api
     environment:
@@ -99,6 +100,7 @@ services:
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
       CRYPTO_STRATEGY_INTERVAL: ${CRYPTO_STRATEGY_INTERVAL:-60}
+      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ma_cross}
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
       CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}

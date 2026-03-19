@@ -4,6 +4,7 @@ from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_label
 from app.core.migrations import run_migrations
+from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
@@ -125,7 +126,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
             result["steps"].append(run_market_data_job(connection))
 
             current_step = "generate_signal"
-            strategy_job_result = run_strategy_job(connection)
+            strategy_job_result = run_strategy_job(connection, strategy_name=DEFAULT_STRATEGY_NAME)
             result["steps"].extend(strategy_job_result["steps"])
             if strategy_job_result.get("status") == "completed":
                 return _finalize_result(

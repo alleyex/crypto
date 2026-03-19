@@ -9,6 +9,7 @@ from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.migrations import run_migrations
+from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.system.heartbeat import record_heartbeat
 
 
@@ -82,7 +83,7 @@ def _scheduler_component_name(mode: str) -> str:
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
 
-def _run_scheduled_job(mode: str) -> dict:
+def _run_scheduled_job(mode: str, strategy_name: str = DEFAULT_STRATEGY_NAME) -> dict:
     if mode == "pipeline":
         return run_pipeline_collect()
 
@@ -92,7 +93,7 @@ def _run_scheduled_job(mode: str) -> dict:
         if mode == "market-data-only":
             return {"steps": [run_market_data_job(connection)]}
         if mode == "strategy-only":
-            return {"steps": list(run_strategy_job(connection)["steps"])}
+            return {"steps": list(run_strategy_job(connection, strategy_name=strategy_name)["steps"])}
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection)["steps"])}
     finally:
@@ -129,6 +130,7 @@ def run_scheduler(
     interval_seconds: int = 60,
     iterations: Optional[int] = None,
     mode: str = "pipeline",
+    strategy_name: str = DEFAULT_STRATEGY_NAME,
 ) -> None:
     if mode not in SCHEDULER_MODES:
         raise ValueError(
@@ -163,18 +165,18 @@ def run_scheduler(
             component=component,
             status="running",
             message=f"{component} loop started.",
-            payload={"run_count": run_count, "mode": mode},
+            payload={"run_count": run_count, "mode": mode, "strategy_name": strategy_name},
         )
-        result = _run_scheduled_job(mode)
+        result = _run_scheduled_job(mode, strategy_name=strategy_name)
         summary = _summarize_result(result)
-        log_line = f"[{started_at}] run={run_count} mode={mode} {summary}"
+        log_line = f"[{started_at}] run={run_count} mode={mode} strategy={strategy_name} {summary}"
         print(log_line)
         _write_log(log_line, mode)
         record_heartbeat(
             component=component,
             status="ok",
             message=f"{component} loop completed.",
-            payload={"run_count": run_count, "summary": summary, "mode": mode},
+            payload={"run_count": run_count, "summary": summary, "mode": mode, "strategy_name": strategy_name},
         )
         _record_soak_snapshot()
 

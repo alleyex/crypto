@@ -2,6 +2,7 @@ from typing import Callable, Dict, Optional, Union
 
 from app.core.db import DBConnection
 from app.strategy.ma_cross import generate_signal as generate_ma_cross_signal
+from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
 
 
 StrategyResult = Optional[Dict[str, Union[float, str]]]
@@ -12,8 +13,13 @@ def _run_ma_cross(connection: DBConnection) -> StrategyResult:
     return generate_ma_cross_signal(connection)
 
 
+def _run_momentum_3bar(connection: DBConnection) -> StrategyResult:
+    return generate_momentum_3bar_signal(connection)
+
+
 STRATEGY_REGISTRY: dict[str, StrategyGenerator] = {
     "ma_cross": _run_ma_cross,
+    "momentum_3bar": _run_momentum_3bar,
 }
 
 

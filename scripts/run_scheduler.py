@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.scheduler.runner import run_scheduler
 from app.scheduler.runner import SCHEDULER_MODES
 
@@ -28,12 +29,22 @@ def parse_args() -> argparse.Namespace:
         default="pipeline",
         help="Scheduled job mode. Default: pipeline",
     )
+    parser.add_argument(
+        "--strategy",
+        default=DEFAULT_STRATEGY_NAME,
+        help=f"Strategy name for pipeline/strategy-only runs. Default: {DEFAULT_STRATEGY_NAME}",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    run_scheduler(interval_seconds=args.interval, iterations=args.iterations, mode=args.mode)
+    run_scheduler(
+        interval_seconds=args.interval,
+        iterations=args.iterations,
+        mode=args.mode,
+        strategy_name=args.strategy,
+    )
 
 
 if __name__ == "__main__":
