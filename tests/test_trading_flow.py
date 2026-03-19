@@ -190,6 +190,8 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ma_cross"]["latest_order"] is not None
         assert by_name["ma_cross"]["latest_fill"] is not None
         assert by_name["ma_cross"]["latest_closed_trade"] is not None
+        assert by_name["ma_cross"]["latest_closed_trade"]["symbol"] == "BTCUSDT"
+        assert by_name["ma_cross"]["latest_closed_trade"]["status"] == "loss"
         assert by_name["ma_cross"]["latest_closed_trade"]["closed_at"] == "2026-03-19 10:05:00"
         assert by_name["ma_cross"]["latest_closed_trade"]["realized_pnl"] == -0.002
         assert by_name["ma_cross"]["filled_order_count"] == 2
@@ -2208,6 +2210,8 @@ def test_admin_page_is_served() -> None:
     assert "Send Test Alert" in response.text
     assert "Soak Validation" in response.text
     assert "Record Snapshot" in response.text
+    assert "Latest Closed Symbol" in response.text
+    assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
     assert "Latest Closed PnL" in response.text
 
