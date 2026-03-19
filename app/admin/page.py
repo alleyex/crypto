@@ -570,6 +570,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           </div>
         </article>
         <article class="panel data-card">
+          <h2>Selected Strategy Details</h2>
+          <p>Focused detail view for the strategy currently selected from the leaderboard or closed-trades filter.</p>
+          <div class="strategy-board" id="selected-strategy-board">
+            <div class="strategy-card">Select a strategy card to inspect a single strategy.</div>
+          </div>
+        </article>
+        <article class="panel data-card">
           <h2>PnL Snapshots</h2>
           <p>Latest mark-to-market snapshots.</p>
           <pre id="pnl-json">Loading...</pre>
@@ -885,6 +892,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const board = el("strategy-summary-board");
         if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategy activity recorded yet.</div>';
+          updateSelectedStrategyDetails([]);
           return;
         }
 
@@ -899,6 +907,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (sortedStrategies.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategies match the current filter.</div>';
+          updateSelectedStrategyDetails(strategySummary);
           return;
         }
 
@@ -960,6 +969,54 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             </div>
           `;
         }).join("");
+
+        updateSelectedStrategyDetails(strategySummary);
+      }
+
+      function updateSelectedStrategyDetails(strategySummary) {
+        const board = el("selected-strategy-board");
+        if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No strategy details available yet.</div>';
+          return;
+        }
+        if (closedTradesStrategyFilter === "all") {
+          board.innerHTML = '<div class="strategy-card">Select a strategy card to inspect a single strategy.</div>';
+          return;
+        }
+
+        const selected = strategySummary.find((item) => item.strategy_name === closedTradesStrategyFilter);
+        if (!selected) {
+          board.innerHTML = `<div class="strategy-card">No strategy details found for ${closedTradesStrategyFilter}.</div>`;
+          return;
+        }
+
+        const activityState = classifyStrategyActivity(selected);
+        const latestClosedTrade = selected.latest_closed_trade || null;
+        const pnlClass = Number(selected.gross_realized_pnl || 0) > 0
+          ? "ok"
+          : Number(selected.gross_realized_pnl || 0) < 0
+            ? "bad"
+            : "warn";
+        board.innerHTML = `
+          <div class="strategy-card selected">
+            <div class="strategy-card-header">
+              <strong>${selected.strategy_name}</strong>
+              <span class="${activityState.className}">${activityState.label}</span>
+            </div>
+            <div class="strategy-card-grid">
+              <div class="strategy-metric"><strong>Latest Signal</strong>${selected.latest_signal?.signal_type || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Risk</strong>${selected.latest_risk?.decision || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Order</strong>${selected.latest_order?.status || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Fill</strong>${selected.latest_fill?.side || "none"}</div>
+              <div class="strategy-metric"><strong>Realized Trades</strong>${selected.realized_trade_count}</div>
+              <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${Number(selected.gross_realized_pnl || 0).toFixed(6)}</span></div>
+              <div class="strategy-metric"><strong>Latest Activity</strong>${selected.latest_activity_at || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Fill At</strong>${selected.latest_fill_at || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Closed Symbol</strong>${latestClosedTrade?.symbol || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Closed PnL</strong>${latestClosedTrade ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6) : "n/a"}</div>
+            </div>
+          </div>
+        `;
       }
 
       function updateClosedTrades(closedTrades) {
