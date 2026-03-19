@@ -202,6 +202,7 @@ Docker Compose runtime validation status:
 - pipeline and strategy workers can now select a registered strategy via `CRYPTO_STRATEGY_NAME` (currently `ma_cross` or `momentum_3bar`)
 - split worker scheduler modes can also run in queue-dispatch or queue-drain mode via `python scripts/run_scheduler.py --queue-dispatch|--queue-drain`
 - admin now exposes queue controls for enqueueing strategy jobs and draining strategy/execution jobs
+- admin queue controls also support retrying the latest failed strategy or execution job
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks
@@ -357,6 +358,7 @@ Control endpoints:
 - `GET /queue/summary`
 - `POST /queue/jobs`
 - `POST /queue/jobs/run-next`
+- `POST /queue/jobs/{job_id}/retry`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -399,6 +401,7 @@ curl -s -X POST http://127.0.0.1:8000/queue/jobs \
 curl -s -X POST http://127.0.0.1:8000/queue/jobs/run-next \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy"}'
+curl -s -X POST http://127.0.0.1:8000/queue/jobs/42/retry
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status

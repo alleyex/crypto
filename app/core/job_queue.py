@@ -232,6 +232,34 @@ def fail_job(
     connection.commit()
 
 
+def retry_job(connection: DBConnection, job_id: int) -> dict[str, Any]:
+    ensure_table(connection)
+    job = get_job(connection, job_id)
+    if job is None:
+        raise ValueError(f"Unknown job id: {job_id}")
+    if job["status"] != "failed":
+        raise ValueError(f"Only failed jobs can be retried. Current status: {job['status']}")
+
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET
+            status = 'queued',
+            result_json = NULL,
+            error_message = NULL,
+            started_at = NULL,
+            completed_at = NULL
+        WHERE id = ?;
+        """,
+        (job_id,),
+    )
+    connection.commit()
+    retried_job = get_job(connection, job_id)
+    if retried_job is None:
+        raise RuntimeError(f"Retried job not found after update: {job_id}")
+    return retried_job
+
+
 def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
     payload = dict(job.get("payload") or {})
     job_type = str(job["job_type"])

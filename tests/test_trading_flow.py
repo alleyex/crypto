@@ -27,6 +27,7 @@ from app.core.job_queue import fail_job
 from app.core.job_queue import get_job
 from app.core.job_queue import lease_next_job
 from app.core.job_queue import list_jobs
+from app.core.job_queue import retry_job
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import _auto_id_column_sql
 from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
@@ -2528,9 +2529,13 @@ def test_admin_page_is_served() -> None:
     assert 'data-action="queue-enqueue-strategy"' in response.text
     assert 'data-action="queue-drain-strategy"' in response.text
     assert 'data-action="queue-drain-execution"' in response.text
+    assert 'data-action="queue-retry-strategy"' in response.text
+    assert 'data-action="queue-retry-execution"' in response.text
     assert "Enqueue Strategy Job" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
+    assert "Retry Failed Strategy Job" in response.text
+    assert "Retry Failed Execution Job" in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
@@ -3080,6 +3085,13 @@ def test_job_queue_lifecycle_round_trip() -> None:
         assert failed_job["error_message"] == "execution worker unavailable"
         assert failed_job["result"] == {"symbol_names": ["ETHUSDT"]}
 
+        retried_job = retry_job(connection, second_job_id)
+        assert retried_job["status"] == "queued"
+        assert retried_job["error_message"] is None
+        assert retried_job["result"] is None
+        assert retried_job["started_at"] is None
+        assert retried_job["completed_at"] is None
+
         queue_rows = get_job_queue_jobs(connection, limit=10)
         assert queue_rows[0]["id"] == second_job_id
         assert queue_rows[0]["payload"] == {"symbol_names": ["ETHUSDT"]}
@@ -3217,6 +3229,26 @@ def test_run_next_queue_job_endpoint(monkeypatch) -> None:
     assert captured["job_type"] == "strategy"
     assert response.json()["status"] == "completed"
     assert response.json()["job"]["id"] == 9
+
+
+def test_retry_queue_job_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.api.main.retry_job",
+        lambda connection, job_id: {
+            "id": job_id,
+            "job_type": "strategy",
+            "status": "queued",
+            "payload": {"strategy_names": ["ma_cross"]},
+        },
+    )
+
+    response = client.post("/queue/jobs/42/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["job_id"] == 42
+    assert response.json()["job"]["status"] == "queued"
 
 
 def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:

@@ -701,6 +701,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
             <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
             <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
+            <button class="secondary" data-action="queue-retry-strategy">Retry Failed Strategy Job</button>
+            <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
           </div>
           <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
           <pre id="queue-json">Loading...</pre>
@@ -745,6 +747,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let strategySortMode = "gross_realized_pnl";
       let strategyFilterMode = "all";
       let closedTradesStrategyFilter = "all";
+      let queueSummaryState = null;
       const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
@@ -1585,6 +1588,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         window.__schedulerSymbolsStatus = schedulerSymbols;
         window.__strategyClosedTrades = closedTrades;
         window.__schedulerStrategyStatus = schedulerStrategy;
+        queueSummaryState = queueSummary;
         const strategySelect = el("pipeline-strategy-select");
         if (strategySelect && strategies?.default_strategy && !strategySelect.dataset.initialized) {
           strategySelect.value = strategies.default_strategy;
@@ -1655,6 +1659,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-enqueue-strategy": "queue-message",
           "queue-drain-strategy": "queue-message",
           "queue-drain-execution": "queue-message",
+          "queue-retry-strategy": "queue-message",
+          "queue-retry-execution": "queue-message",
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
           "alert-test": "alerts-message",
@@ -1745,6 +1751,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             result = await api("/queue/jobs/run-next", {
               method: "POST",
               body: JSON.stringify({ job_type: "execution" }),
+            });
+          } else if (type === "queue-retry-strategy" || type === "queue-retry-execution") {
+            const jobType = type === "queue-retry-strategy" ? "strategy" : "execution";
+            const latestFailedJob = (queueSummaryState?.latest_jobs || [])
+              .find((job) => job.job_type === jobType && job.status === "failed");
+            if (!latestFailedJob) {
+              throw new Error(`No failed ${jobType} job available to retry.`);
+            }
+            result = await api(`/queue/jobs/${latestFailedJob.id}/retry`, {
+              method: "POST",
             });
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });

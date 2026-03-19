@@ -25,6 +25,7 @@ from app.core.job_queue import build_job_payload
 from app.core.job_queue import JOB_TYPES
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import list_jobs as list_queue_jobs
+from app.core.job_queue import retry_job
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
@@ -506,6 +507,20 @@ def run_next_queue_job(payload: Optional[QueueRunRequest] = None) -> dict[str, A
     try:
         job_type = payload.job_type if payload is not None else None
         return run_next_queued_job(connection, job_type=job_type)
+    finally:
+        connection.close()
+
+
+@app.post("/queue/jobs/{job_id}/retry")
+def retry_queue_job(job_id: int) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        job = retry_job(connection, job_id)
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "job": job,
+        }
     finally:
         connection.close()
 
