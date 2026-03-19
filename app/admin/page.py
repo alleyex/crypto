@@ -662,6 +662,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Scheduler Control Activity</h2>
           <p>Recent scheduler strategy operations extracted from structured audit actions.</p>
+          <div class="inline-controls">
+            <label for="scheduler-control-filter-select">Filter</label>
+            <select id="scheduler-control-filter-select">
+              <option value="all">all</option>
+              <option value="priority">priority</option>
+              <option value="limit">limit</option>
+              <option value="enable_disable">enable/disable</option>
+            </select>
+          </div>
           <div class="trade-list" id="scheduler-control-board">
             <div class="strategy-card">Loading...</div>
           </div>
@@ -702,6 +711,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let autoRefreshTimer = null;
       let autoRefreshEnabled = true;
       let schedulerLogsMode = "all";
+      let schedulerControlFilterMode = "all";
       let strategySortMode = "gross_realized_pnl";
       let strategyFilterMode = "all";
       let closedTradesStrategyFilter = "all";
@@ -1222,9 +1232,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const board = el("scheduler-control-board");
         const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
           .filter((event) => event.event_type === "scheduler_control")
+          .filter((event) => {
+            if (schedulerControlFilterMode === "all") return true;
+            const action = String(event.payload?.action || "");
+            if (schedulerControlFilterMode === "priority") {
+              return action.startsWith("promote:")
+                || action.startsWith("demote:")
+                || action.startsWith("priority_preset:")
+                || action === "set_strategy_priorities";
+            }
+            if (schedulerControlFilterMode === "limit") {
+              return action.startsWith("limit_preset:") || action === "set_effective_strategy_limit";
+            }
+            if (schedulerControlFilterMode === "enable_disable") {
+              return action.startsWith("enable:")
+                || action.startsWith("disable:")
+                || action === "set_disabled_strategies";
+            }
+            return true;
+          })
           .slice(0, 6);
         if (schedulerEvents.length === 0) {
-          board.innerHTML = '<div class="strategy-card">No scheduler control activity recorded yet.</div>';
+          board.innerHTML = '<div class="strategy-card">No scheduler control activity matches the current filter.</div>';
           return;
         }
 
@@ -1600,6 +1629,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       el("logs-mode-select")?.addEventListener("change", () => {
         refreshAll().catch((error) => {
           el("logs-json").textContent = `Failed to load logs: ${error.message}`;
+        });
+      });
+
+      el("scheduler-control-filter-select")?.addEventListener("change", (event) => {
+        schedulerControlFilterMode = event.target.value;
+        refreshAll().catch((error) => {
+          el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to filter scheduler control activity: ${error.message}</div>`;
         });
       });
 
