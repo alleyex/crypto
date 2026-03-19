@@ -670,6 +670,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <option value="limit">limit</option>
               <option value="enable_disable">enable/disable</option>
             </select>
+            <button class="secondary" type="button" id="scheduler-control-reset-button">Reset</button>
           </div>
           <div class="trade-list" id="scheduler-control-board">
             <div class="strategy-card">Loading...</div>
@@ -1636,6 +1637,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         schedulerControlFilterMode = event.target.value;
         refreshAll().catch((error) => {
           el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to filter scheduler control activity: ${error.message}</div>`;
+        });
+      });
+
+      el("scheduler-control-reset-button")?.addEventListener("click", () => {
+        schedulerControlFilterMode = "all";
+        const select = el("scheduler-control-filter-select");
+        if (select) {
+          select.value = "all";
+        }
+        refreshAll().catch((error) => {
+          el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to reset scheduler control activity filter: ${error.message}</div>`;
         });
       });
 
