@@ -64,6 +64,8 @@ export CRYPTO_SQLITE_PATH=storage/market_data.db
 export CRYPTO_DATABASE_URL=
 export CRYPTO_POSTGRES_CONNECT_RETRIES=15
 export CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS=1
+export CRYPTO_USE_FAKE_KLINES=
+export CRYPTO_FAKE_KLINE_CLOSES=
 export TELEGRAM_BOT_TOKEN=
 export TELEGRAM_CHAT_ID=8703043602
 ```
@@ -127,6 +129,8 @@ Run clean PostgreSQL Compose validation end-to-end:
 python scripts/run_postgres_compose_validation.py --mode compose-runtime
 ```
 
+The PostgreSQL validation script now injects fake kline input automatically so CI validates runtime/database behavior without depending on live Binance availability.
+
 Available validation modes:
 
 - `smoke`
@@ -173,6 +177,10 @@ Docker Compose runtime validation status:
 - top-level workflows now also call a reusable workflow at `.github/workflows/workflow-summary-job.yml`, so summary jobs themselves no longer duplicate the runner/step wrapper around summary rendering
 - reusable workflow files now also carry minimal `contents: read` permissions, and the summary reusable workflow has its own short timeout, so execution policy is aligned inside the reusable layer instead of only at the top level
 - the PostgreSQL CI job publishes a markdown step summary and JSON artifact for the validation result
+- PostgreSQL validation now treats `POST /pipeline/run` as successful only when the returned step payload does not contain `failed` or `blocked` states
+- PostgreSQL validation no longer depends on live Binance availability during CI; it runs with `CRYPTO_USE_FAKE_KLINES=1`
+- PostgreSQL migration bootstrap is now serialized with a PostgreSQL advisory lock so API, scheduler, and pipeline startup do not race each other on `schema_migrations`
+- GitHub Actions workflow dependencies are now pinned to Node 24-compatible versions: `actions/checkout@v5`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`
 - Stage 1 local container startup verification is complete
 
 ## CLI Utilities

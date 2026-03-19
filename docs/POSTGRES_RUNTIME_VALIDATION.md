@@ -21,6 +21,28 @@ Confirmed working:
 - Docker Compose runtime with PostgreSQL for `api`, `scheduler`, and `postgres`
 - Clean Docker Compose runtime with PostgreSQL-backed successful scheduler execution
 
+## CI Incident Notes
+
+The PostgreSQL validation workflow hit several real failures while being hardened for GitHub Actions. The current validation design reflects those incidents directly.
+
+Resolved issues:
+
+- API startup race during `/health` polling caused transient connection resets before the server was ready to serve HTTP responses.
+- Multiple PostgreSQL runtime entrypoints could call `run_migrations()` concurrently during startup, creating a migration race around `schema_migrations`.
+- Runtime validation previously accepted any JSON from `POST /pipeline/run`, which meant a pipeline failure could be wrapped as a structured payload and still look like a successful validation run.
+- GitHub-hosted runners received `451` responses from Binance for live market-data fetches, which made PostgreSQL validation depend on a third-party API and regional availability rather than on the project runtime itself.
+- GitHub Actions emitted Node 20 deprecation warnings until the workflow actions were upgraded to Node 24-compatible versions.
+
+Final validation policy:
+
+- PostgreSQL migration execution is serialized with a PostgreSQL advisory lock, and applied-version recording uses `ON CONFLICT DO NOTHING`.
+- `POST /pipeline/run` results are treated as successful only when the returned step payload does not contain `failed` or `blocked` step states.
+- Compose-based PostgreSQL validation uses fake kline input by setting `CRYPTO_USE_FAKE_KLINES=1`, so CI validates runtime/database behavior without relying on Binance availability.
+- GitHub Actions workflow dependencies are pinned to Node 24-compatible versions:
+  - `actions/checkout@v5`
+  - `actions/setup-python@v6`
+  - `actions/upload-artifact@v6`
+
 ## Commands Executed
 
 Local smoke path:
@@ -93,6 +115,7 @@ When PostgreSQL is active:
 - `schema_migrations` and core trading tables should exist in PostgreSQL
 - `audit_events`, `orders`, and heartbeats should be readable through the API
 - `api` and `scheduler` should tolerate PostgreSQL startup lag via connection retry instead of failing immediately during container startup
+- compose-based CI validation should not require external Binance connectivity, because it runs with fake kline input
 
 ## Observed Clean Compose Result
 
@@ -119,6 +142,8 @@ The first manual `POST /pipeline/run` after scheduler startup was rejected by co
 
 - `CRYPTO_POSTGRES_CONNECT_RETRIES`
 - `CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS`
+- `CRYPTO_USE_FAKE_KLINES`
+- `CRYPTO_FAKE_KLINE_CLOSES`
 
 ## Next Recommended Checks
 
