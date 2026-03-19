@@ -294,6 +294,26 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
     total_job_count = sum(counts.values())
     completed_count = counts.get("completed", 0)
     failed_count = counts.get("failed", 0)
+    recent_batches: list[dict[str, Any]] = []
+    batch_map: dict[str, dict[str, Any]] = {}
+    for job in latest_jobs:
+        payload = job.get("payload") or {}
+        batch_id = payload.get("batch_id")
+        if not batch_id:
+            continue
+        batch_entry = batch_map.get(batch_id)
+        if batch_entry is None:
+            batch_entry = {
+                "batch_id": batch_id,
+                "job_types": [],
+                "statuses": {},
+                "strategy_names": payload.get("strategy_names", []),
+                "symbol_names": payload.get("symbol_names", []),
+            }
+            batch_map[batch_id] = batch_entry
+            recent_batches.append(batch_entry)
+        batch_entry["job_types"].append(job["job_type"])
+        batch_entry["statuses"][job["job_type"]] = job["status"]
     return {
         "counts": {
             "queued": counts.get("queued", 0),
@@ -317,6 +337,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         "retry_jobs": retry_jobs,
         "latest_failed_job": latest_failed_job,
         "latest_retry_job": latest_retry_job,
+        "recent_batches": recent_batches,
         "latest_jobs": latest_jobs,
     }
 

@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any
 from typing import Optional
 
@@ -100,11 +101,14 @@ def enqueue_pipeline_jobs(
         symbol_names=symbol_names,
         payload=payload,
     )
+    batch_id = str(uuid.uuid4())
+    job_payload["batch_id"] = batch_id
     jobs: list[dict[str, Any]] = []
     for job_type in PIPELINE_QUEUE_JOB_TYPES:
         job_id = enqueue_job(connection, job_type, payload=job_payload or None)
         jobs.append(
             {
+                "batch_id": batch_id,
                 "job_id": job_id,
                 "job_type": job_type,
                 "payload": job_payload,

@@ -1557,6 +1557,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const byType = queueSummary?.job_type_counts || {};
         const latestFailedJob = queueSummary?.latest_failed_job || null;
         const latestRetryJob = queueSummary?.latest_retry_job || null;
+        const recentBatches = Array.isArray(queueSummary?.recent_batches) ? queueSummary.recent_batches : [];
         const jobs = Array.isArray(queueSummary?.latest_jobs) ? queueSummary.latest_jobs : [];
         const filteredJobs = jobs.filter((job) => {
           if (queueFilterMode === "all") return true;
@@ -1591,8 +1592,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const latestRetryBit = latestRetryJob
           ? `Latest retry: #${latestRetryJob.id} ${latestRetryJob.job_type} attempts=${latestRetryJob.attempt_count}`
           : "Latest retry: none";
+        const batchBits = recentBatches.length
+          ? recentBatches.map((batch) => {
+              const statuses = Object.entries(batch.statuses || {})
+                .map(([jobType, status]) => `${jobType}=${status}`)
+                .join(",");
+              return `batch=${String(batch.batch_id).slice(0, 8)} statuses=${statuses}`;
+            }).join(" | ")
+          : "Recent batches: none";
         if (filteredJobs.length === 0) {
-          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>No queue jobs match the current filter.</div>`;
+          board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${batchBits}<br>No queue jobs match the current filter.</div>`;
           return;
         }
         board.innerHTML = filteredJobs.map((job) => {
@@ -1608,7 +1617,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `;
         }).join("") + `
           <div class="strategy-card">
-            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}
+            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${batchBits}
           </div>
         `;
       }
