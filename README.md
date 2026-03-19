@@ -102,24 +102,24 @@ python scripts/run_pipeline.py
 Run the scheduler once for testing:
 
 ```bash
-python scripts/run_scheduler.py --interval 1 --iterations 1
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --interval 1 --iterations 1
 ```
 
 Run the scheduler continuously:
 
 ```bash
-python scripts/run_scheduler.py
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py
 ```
 
 Run the scheduler in a specific job mode:
 
 ```bash
-python scripts/run_scheduler.py --mode pipeline
-python scripts/run_scheduler.py --mode market-data-only
-python scripts/run_scheduler.py --mode strategy-only
-python scripts/run_scheduler.py --mode execution-only
-python scripts/run_scheduler.py --mode strategy-only --queue-dispatch
-python scripts/run_scheduler.py --mode strategy-only --queue-drain
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode pipeline
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode market-data-only
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode strategy-only
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode execution-only
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode strategy-only --queue-dispatch
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode strategy-only --queue-drain
 ```
 
 Run a specific strategy job:
@@ -127,7 +127,7 @@ Run a specific strategy job:
 ```bash
 python scripts/run_strategy_job.py --strategy ma_cross
 python scripts/run_strategy_job.py --strategy momentum_3bar
-python scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
+/Users/alleyex/Projects/crypto/scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
 ```
 
 Execution backend modes:
@@ -172,8 +172,12 @@ curl -s -X POST http://127.0.0.1:8000/scheduler/strategy/limit-preset \
 Run the API locally:
 
 ```bash
-python scripts/run_api.py
+/Users/alleyex/Projects/crypto/scripts/run_api.py
 ```
+
+The API launcher will automatically re-exec into the project virtualenv Python at `/Users/alleyex/Projects/crypto/.venv/bin/python` when needed, so it does not stay on an older system interpreter by accident.
+
+The scheduler launcher applies the same guard and will automatically re-exec into `/Users/alleyex/Projects/crypto/.venv/bin/python` when needed.
 
 Open the admin UI:
 

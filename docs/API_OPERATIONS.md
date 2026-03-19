@@ -9,7 +9,7 @@ Base URL:
 Start the API first:
 
 ```bash
-python scripts/run_api.py
+/Users/alleyex/Projects/crypto/scripts/run_api.py
 ```
 
 ## 1. Check System Health
