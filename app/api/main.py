@@ -1,4 +1,4 @@
-import sqlite3
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Union
 
@@ -14,7 +14,13 @@ from app.alerting.health import maybe_send_health_alert
 from app.alerting.telegram import send_telegram_message
 from app.alerting.telegram import telegram_configured
 from app.core.db import DB_FILE, get_connection
+from app.core.db import DBConnection
+from app.core.db import DBError
 from app.core.db import get_database_info
+from app.core.db import parse_db_timestamp
+from app.core.db import list_tables
+from app.core.db import table_exists
+from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -49,37 +55,33 @@ from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
 
 
-app = FastAPI(title="Crypto Trading MVP API")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+    finally:
+        connection.close()
+    yield
+
+
+app = FastAPI(title="Crypto Trading MVP API", lifespan=lifespan)
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _parse_sqlite_timestamp(value: str) -> datetime:
-    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
-
-def _database_check(connection: sqlite3.Connection) -> dict[str, Any]:
-    row = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC;").fetchall()
-    table_names = [item[0] for item in row]
+def _database_check(connection: DBConnection) -> dict[str, Any]:
+    database_info = get_database_info()
+    table_names = list_tables(connection)
     return {
         "status": "ok",
-        "database": str(DB_FILE),
+        "database": database_info.get("database_url", str(DB_FILE)),
         "table_count": len(table_names),
         "tables": table_names,
     }
 
 
-def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    row = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _candle_check(connection: sqlite3.Connection) -> dict[str, Any]:
+def _candle_check(connection: DBConnection) -> dict[str, Any]:
     latest_candle = connection.execute(
         """
         SELECT symbol, timeframe, open_time, close_time
@@ -142,9 +144,9 @@ def _kill_switch_check() -> dict[str, Any]:
     return result
 
 
-def _pipeline_check(connection: sqlite3.Connection) -> dict[str, Any]:
+def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     required_tables = ("signals", "risk_events", "orders")
-    missing_tables = [table_name for table_name in required_tables if not _table_exists(connection, table_name)]
+    missing_tables = [table_name for table_name in required_tables if not table_exists(connection, table_name)]
     if missing_tables:
         return {
             "status": "degraded",
@@ -187,26 +189,26 @@ def _pipeline_check(connection: sqlite3.Connection) -> dict[str, Any]:
         result["latest_signal"] = {
             "signal_type": latest_signal[0],
             "created_at": latest_signal[1],
-            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_signal[1])).total_seconds()),
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_signal[1])).total_seconds()),
         }
     if latest_risk is not None:
         result["latest_risk"] = {
             "decision": latest_risk[0],
             "reason": latest_risk[1],
             "created_at": latest_risk[2],
-            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_risk[2])).total_seconds()),
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_risk[2])).total_seconds()),
         }
     if latest_order is not None:
         result["latest_order"] = {
             "side": latest_order[0],
             "status": latest_order[1],
             "created_at": latest_order[2],
-            "age_seconds": int((_utc_now() - _parse_sqlite_timestamp(latest_order[2])).total_seconds()),
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_order[2])).total_seconds()),
         }
     return result
 
 
-def _heartbeat_check(connection: sqlite3.Connection) -> dict[str, Any]:
+def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
     heartbeats = get_heartbeats(connection)
     if not heartbeats:
         return {
@@ -229,10 +231,10 @@ def build_health_report() -> dict[str, Any]:
 
     try:
         connection = get_connection()
-    except sqlite3.Error as exc:
+    except DBError as exc:
         return {
             "status": "error",
-            "database": str(DB_FILE),
+            "database": get_database_info().get("database_url", str(DB_FILE)),
             "checks": {
                 "database": {
                     "status": "error",
@@ -246,7 +248,7 @@ def build_health_report() -> dict[str, Any]:
         checks["candles"] = _candle_check(connection)
         checks["pipeline"] = _pipeline_check(connection)
         checks["heartbeats"] = _heartbeat_check(connection)
-    except sqlite3.Error as exc:
+    except DBError as exc:
         checks["database"] = {
             "status": "error",
             "reason": str(exc),
@@ -270,7 +272,7 @@ def build_health_report() -> dict[str, Any]:
     return {
         "status": overall_status,
         "checked_at": _utc_now().isoformat(),
-        "database": str(DB_FILE),
+        "database": get_database_info().get("database_url", str(DB_FILE)),
         "database_info": get_database_info(),
         "config": {
             "order_qty": DEFAULT_ORDER_QTY,

@@ -11,10 +11,45 @@ RUNTIME_DIR = Path("runtime")
 HEALTH_ALERT_STATE_FILE = RUNTIME_DIR / "health_alert_state.json"
 
 
+def _normalize_check(name: str, check: Any) -> dict[str, Any]:
+    if not isinstance(check, dict):
+        return {"name": name, "status": "unknown"}
+
+    normalized: dict[str, Any] = {
+        "name": name,
+        "status": check.get("status", "unknown"),
+    }
+    if "reason" in check and check.get("reason") is not None:
+        normalized["reason"] = check.get("reason")
+
+    if name == "kill_switch":
+        normalized["enabled"] = bool(check.get("enabled"))
+    elif name == "scheduler":
+        normalized["stopped"] = bool(check.get("stopped"))
+    elif name == "heartbeats":
+        normalized["components"] = sorted(
+            {
+                "component": str(item.get("component")),
+                "status": str(item.get("status")),
+                "message": str(item.get("message")),
+            }
+            for item in check.get("components", [])
+            if isinstance(item, dict) and item.get("status") in ("failed", "stopped")
+        )
+
+    return normalized
+
+
 def _build_fingerprint(report: dict[str, Any]) -> str:
+    checks = report.get("checks", {})
+    degraded_checks = {
+        name: _normalize_check(name, check)
+        for name, check in checks.items()
+        if isinstance(check, dict) and check.get("status") in ("degraded", "error")
+    }
     payload = {
         "status": report.get("status"),
-        "checks": report.get("checks"),
+        "checks": degraded_checks,
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

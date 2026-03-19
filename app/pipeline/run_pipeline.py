@@ -2,6 +2,8 @@ from typing import Any, Dict, List
 
 from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
+from app.core.db import get_database_label
+from app.core.migrations import run_migrations
 from app.data.binance_client import fetch_klines
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
@@ -38,19 +40,25 @@ def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[
 
 
 def run_pipeline_collect() -> Dict[str, Any]:
-    result: Dict[str, Any] = {"database": str(DB_FILE), "steps": []}
+    database_label = get_database_label()
+    result: Dict[str, Any] = {"database": database_label, "steps": []}
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+    finally:
+        connection.close()
     record_heartbeat(
         component="pipeline",
         status="started",
         message="Pipeline run started.",
-        payload={"database": str(DB_FILE)},
+        payload={"database": database_label},
     )
     log_event(
         event_type="pipeline_run",
         status="started",
         source="pipeline",
         message="Pipeline run started.",
-        payload={"database": str(DB_FILE)},
+        payload={"database": database_label},
     )
 
     if kill_switch_enabled():
@@ -66,6 +74,7 @@ def run_pipeline_collect() -> Dict[str, Any]:
 
     connection = get_connection()
     try:
+        run_migrations(connection)
         ensure_candles_table(connection)
         klines = fetch_klines()
         saved_klines = save_klines(connection, klines)

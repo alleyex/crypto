@@ -1,0 +1,72 @@
+name: CI Job
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: Python version to use.
+        required: true
+        type: string
+      artifact_name:
+        description: Uploaded artifact name.
+        required: true
+        type: string
+      artifact_dir:
+        description: Artifact output directory.
+        required: true
+        type: string
+      event_name:
+        description: Source event name for test artifact metadata.
+        required: true
+        type: string
+      run_id:
+        description: Workflow run id for test artifact metadata.
+        required: true
+        type: string
+    outputs:
+      artifact_name:
+        description: Uploaded test artifact name.
+        value: ${{ jobs.run.outputs.artifact_name }}
+      artifact_dir:
+        description: Test artifact directory.
+        value: ${{ jobs.run.outputs.artifact_dir }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      artifact_name: ${{ steps.expose-outputs.outputs.artifact_name }}
+      artifact_dir: ${{ steps.expose-outputs.outputs.artifact_dir }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Project
+        uses: ./.github/actions/setup-python-project
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Run Test Suite
+        uses: ./.github/actions/run-test-suite
+        with:
+          artifact-dir: ${{ inputs.artifact_dir }}
+          event-name: ${{ inputs.event_name }}
+          run-id: ${{ inputs.run_id }}
+
+      - name: Upload test results artifact
+        if: always()
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.artifact_dir }}/
+
+      - name: Expose workflow outputs
+        id: expose-outputs
+        shell: bash
+        run: |
+          echo "artifact_name=${{ inputs.artifact_name }}" >> "$GITHUB_OUTPUT"
+          echo "artifact_dir=${{ inputs.artifact_dir }}" >> "$GITHUB_OUTPUT"

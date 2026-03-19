@@ -1,12 +1,13 @@
-import sqlite3
 from typing import Optional
 
+from app.core.db import DBConnection
+from app.core.migrations import run_migrations
 from app.system.heartbeat import upsert_heartbeat
 
 
 CREATE_CANDLES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS candles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     open_time INTEGER NOT NULL,
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS candles (
 
 
 INSERT_CANDLE_SQL = """
-INSERT OR IGNORE INTO candles (
+INSERT INTO candles (
     symbol,
     timeframe,
     open_time,
@@ -41,7 +42,8 @@ INSERT OR IGNORE INTO candles (
     number_of_trades,
     taker_buy_base_volume,
     taker_buy_quote_volume
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, timeframe, open_time) DO NOTHING;
 """
 
 
@@ -55,13 +57,12 @@ LIMIT 1;
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_CANDLES_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
 def save_klines(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     klines: list[list],
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
@@ -101,7 +102,7 @@ def save_klines(
 
 
 def get_latest_close(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
 ) -> Optional[float]:

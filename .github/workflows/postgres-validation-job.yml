@@ -1,0 +1,100 @@
+name: Postgres Validation Job
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: Python version to use.
+        required: true
+        type: string
+      mode:
+        description: Validation mode to run.
+        required: true
+        type: string
+      artifact_name:
+        description: Uploaded artifact name.
+        required: true
+        type: string
+      artifact_dir:
+        description: Artifact output directory.
+        required: true
+        type: string
+      artifact_retention_days:
+        description: Artifact retention in days.
+        required: true
+        type: string
+      database_url:
+        description: PostgreSQL DSN to validate against.
+        required: true
+        type: string
+      api_port:
+        description: API port for compose-based modes.
+        required: false
+        default: "8012"
+        type: string
+      start_postgres:
+        description: Whether to start local postgres before validation.
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      artifact_name:
+        description: Uploaded PostgreSQL validation artifact name.
+        value: ${{ jobs.run.outputs.artifact_name }}
+      artifact_dir:
+        description: PostgreSQL validation artifact directory.
+        value: ${{ jobs.run.outputs.artifact_dir }}
+      mode:
+        description: Validation mode that ran.
+        value: ${{ jobs.run.outputs.mode }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.mode == 'smoke' && 10 || 20 }}
+    outputs:
+      artifact_name: ${{ steps.expose-outputs.outputs.artifact_name }}
+      artifact_dir: ${{ steps.expose-outputs.outputs.artifact_dir }}
+      mode: ${{ steps.expose-outputs.outputs.mode }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python Project
+        uses: ./.github/actions/setup-python-project
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Start PostgreSQL
+        if: inputs.start_postgres
+        run: docker compose --profile postgres up -d postgres
+
+      - name: Run PostgreSQL Validation
+        uses: ./.github/actions/run-postgres-validation
+        with:
+          mode: ${{ inputs.mode }}
+          artifact-dir: ${{ inputs.artifact_dir }}
+          api-port: ${{ inputs.api_port }}
+          database-url: ${{ inputs.database_url }}
+
+      - name: Upload PostgreSQL validation artifact
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.artifact_dir }}/
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+      - name: Stop PostgreSQL
+        if: always() && inputs.start_postgres
+        run: docker compose --profile postgres down -v
+
+      - name: Expose workflow outputs
+        id: expose-outputs
+        shell: bash
+        run: |
+          echo "artifact_name=${{ inputs.artifact_name }}" >> "$GITHUB_OUTPUT"
+          echo "artifact_dir=${{ inputs.artifact_dir }}" >> "$GITHUB_OUTPUT"
+          echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"

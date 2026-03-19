@@ -1,8 +1,12 @@
-import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, Optional, Union
 
 from app.audit.service import log_event
+from app.core.db import DBConnection
+from app.core.db import insert_and_get_rowid
+from app.core.db import parse_db_timestamp
+from app.core.db import table_exists
+from app.core.migrations import run_migrations
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
@@ -13,7 +17,7 @@ from app.system.kill_switch import enable_kill_switch
 
 CREATE_RISK_EVENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS risk_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     signal_id INTEGER,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
@@ -78,29 +82,14 @@ INSERT INTO risk_events (
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_RISK_EVENTS_TABLE_SQL)
-    columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(risk_events);").fetchall()
-    }
-    if "signal_id" not in columns:
-        connection.execute("ALTER TABLE risk_events ADD COLUMN signal_id INTEGER;")
-    connection.commit()
-
-
-def _parse_created_at(value: str) -> datetime:
-    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
-
-def _fills_table_exists(connection: sqlite3.Connection) -> bool:
-    row = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fills' LIMIT 1;"
-    ).fetchone()
-    return row is not None
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
+def _fills_table_exists(connection: DBConnection) -> bool:
+    return table_exists(connection, "fills")
 
 
 def evaluate_latest_signal(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     order_qty: float = DEFAULT_ORDER_QTY,
     max_position_qty: float = MAX_POSITION_QTY,
     cooldown_seconds: int = COOLDOWN_SECONDS,
@@ -141,7 +130,7 @@ def evaluate_latest_signal(
                 ),
             )
         elif latest_fill is not None:
-            last_fill_at = _parse_created_at(latest_fill[0])
+            last_fill_at = parse_db_timestamp(latest_fill[0])
             now = datetime.now(timezone.utc)
             cooldown_elapsed = (now - last_fill_at).total_seconds()
             if cooldown_elapsed < cooldown_seconds:
@@ -191,7 +180,8 @@ def evaluate_latest_signal(
                 decision = "APPROVED"
                 reason = "Passed basic risk checks."
 
-    cursor = connection.execute(
+    risk_event_id = insert_and_get_rowid(
+        connection,
         INSERT_RISK_EVENT_SQL,
         (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason),
     )
@@ -202,7 +192,7 @@ def evaluate_latest_signal(
         source="risk_service",
         message=reason,
         payload={
-            "risk_event_id": cursor.lastrowid,
+            "risk_event_id": risk_event_id,
             "signal_id": signal_id,
             "symbol": symbol,
             "signal_type": signal_type,
@@ -213,7 +203,7 @@ def evaluate_latest_signal(
     )
 
     return {
-        "id": cursor.lastrowid,
+        "id": risk_event_id,
         "signal_id": signal_id,
         "symbol": symbol,
         "timeframe": timeframe,

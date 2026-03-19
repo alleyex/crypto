@@ -1,11 +1,11 @@
-import sqlite3
 from typing import Any
 
+from app.core.db import DBConnection
+from app.core.db import fetch_all_as_dicts
 
-def _fetch_all(connection: sqlite3.Connection, query: str, limit: int = 5) -> list[dict[str, Any]]:
-    connection.row_factory = sqlite3.Row
-    rows = connection.execute(query, (limit,)).fetchall()
-    return [dict(row) for row in rows]
+
+def _fetch_all(connection: DBConnection, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    return fetch_all_as_dicts(connection, query, (limit,))
 
 
 SELECT_CANDLES_SQL = """
@@ -137,33 +137,33 @@ LIMIT ?;
 """
 
 
-def get_candles(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_candles(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
 
-def get_signals(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_signals(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_SIGNALS_SQL, limit)
 
 
-def get_risk_events(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_risk_events(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_RISK_EVENTS_SQL, limit)
 
 
-def get_orders(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_orders(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_ORDERS_SQL, limit)
 
 
-def get_fills(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_fills(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_FILLS_SQL, limit)
 
 
-def get_positions(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_positions(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_POSITIONS_SQL, limit)
 
 
-def get_pnl_snapshots(connection: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+def get_pnl_snapshots(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_PNL_SQL, limit)
 
 
-def get_audit_events(connection: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+def get_audit_events(connection: DBConnection, limit: int = 20) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_AUDIT_EVENTS_SQL, limit)

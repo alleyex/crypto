@@ -1,7 +1,10 @@
-import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.core.db import DBConnection
+from app.core.db import parse_db_timestamp
+from app.core.db import table_exists
+from app.core.migrations import run_migrations
 
 CREATE_DAILY_REALIZED_PNL_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS daily_realized_pnl (
@@ -37,23 +40,13 @@ ON CONFLICT(symbol, pnl_date) DO UPDATE SET
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_DAILY_REALIZED_PNL_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
-def _fills_table_exists(connection: sqlite3.Connection) -> bool:
-    row = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fills' LIMIT 1;"
-    ).fetchone()
-    return row is not None
-
-
-def _parse_created_at(value: str) -> datetime:
-    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
-
-def rebuild_daily_realized_pnl(connection: sqlite3.Connection) -> int:
+def _fills_table_exists(connection: DBConnection) -> bool:
+    return table_exists(connection, "fills")
+def rebuild_daily_realized_pnl(connection: DBConnection) -> int:
     ensure_table(connection)
     connection.execute(DELETE_DAILY_REALIZED_PNL_SQL)
 
@@ -88,7 +81,7 @@ def rebuild_daily_realized_pnl(connection: sqlite3.Connection) -> int:
         positions[symbol]["qty"] -= sell_qty
         positions[symbol]["cost"] -= sell_qty * avg_price
 
-        pnl_date = _parse_created_at(created_at).date().isoformat()
+        pnl_date = parse_db_timestamp(created_at).date().isoformat()
         ledger_key = (symbol, pnl_date)
         daily_pnl[ledger_key] = daily_pnl.get(ledger_key, 0.0) + (price - avg_price) * sell_qty
 
@@ -103,7 +96,7 @@ def rebuild_daily_realized_pnl(connection: sqlite3.Connection) -> int:
 
 
 def get_daily_realized_pnl(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     symbol: str,
     pnl_date: Optional[str] = None,
 ) -> float:

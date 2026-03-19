@@ -1,0 +1,45 @@
+name: Run Postgres Validation
+description: Run PostgreSQL validation and write artifacts to a target directory.
+
+inputs:
+  mode:
+    description: Validation mode to run.
+    required: true
+  artifact-dir:
+    description: Directory where validation artifacts should be written.
+    required: true
+  database-url:
+    description: PostgreSQL DSN to validate against.
+    required: true
+  api-port:
+    description: API port for compose-based validation modes.
+    required: false
+    default: "8012"
+
+runs:
+  using: composite
+  steps:
+    - name: Run validation command
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.artifact-dir }}"
+
+        args=(
+          python scripts/run_postgres_compose_validation.py
+          --mode "${{ inputs.mode }}"
+          --database-url "${{ inputs.database-url }}"
+          --json-output "${{ inputs.artifact-dir }}/result.json"
+          --summary-file "${{ inputs.artifact-dir }}/summary.md"
+          --manifest-output "${{ inputs.artifact-dir }}/manifest.json"
+          --raw-log-output "${{ inputs.artifact-dir }}/raw.log"
+        )
+
+        if [[ "${{ inputs.mode }}" != "smoke" ]]; then
+          args+=(
+            --api-port "${{ inputs.api-port }}"
+            --docker-logs-output "${{ inputs.artifact-dir }}/docker.log"
+            --docker-logs-dir "${{ inputs.artifact-dir }}/services"
+          )
+        fi
+
+        "${args[@]}"

@@ -1,11 +1,43 @@
+import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.api.main import app
+from app.core import db as db_module
 from app.core.db import get_database_info
+from app.core.db import fetch_all_as_dicts
+from app.core.db import get_backend_name
+from app.core.db import get_table_columns
+from app.core.db import get_connection
+from app.core.db import insert_and_get_rowid
+from app.core.db import list_tables
+from app.core.db import parse_db_timestamp
+from app.core.db import _rewrite_query_params
+from app.core.db import table_exists
+from app.core.migrations import _auto_id_column_sql
+from app.core.postgres_smoke import run_postgres_migration_smoke
+from app.core.postgres_smoke import run_postgres_smoke
+from app.query.read_service import get_orders as query_get_orders
+from scripts.run_postgres_compose_validation import build_override_compose
+from scripts.run_postgres_compose_validation import attach_metadata
+from scripts.run_postgres_compose_validation import make_env
+from scripts.run_postgres_compose_validation import run_validation_mode
+from scripts.write_postgres_validation_artifact import build_artifact_manifest
+from scripts.write_postgres_validation_artifact import build_summary_markdown
+from scripts.write_postgres_validation_artifact import get_validation_layer
+from scripts.write_postgres_validation_artifact import get_validation_verdict
+from scripts.write_postgres_validation_artifact import write_optional_output
+from scripts.write_postgres_validation_artifact import write_validation_artifacts
+from scripts.artifact_utils import build_file_entry
+from scripts.artifact_utils import build_manifest_files
+from scripts.write_test_artifact import build_test_artifact_manifest
+from scripts.write_test_artifact import build_test_summary
+from scripts.write_test_artifact import get_outcome
+from scripts.write_test_artifact import read_junit_counts
+from scripts.write_test_artifact import write_test_artifact
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
@@ -94,6 +126,918 @@ def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
         assert result["signal_type"] == "BUY"
         signals = get_signals(connection, limit=1)
         assert signals[0]["strategy_name"] == "ma_cross"
+    finally:
+        connection.close()
+
+
+def test_run_postgres_smoke_requires_database_url() -> None:
+    try:
+        run_postgres_smoke("")
+        assert False, "Expected RuntimeError for missing database URL."
+    except RuntimeError as exc:
+        assert "CRYPTO_DATABASE_URL" in str(exc)
+
+
+def test_run_postgres_smoke_executes_basic_postgres_flow(monkeypatch) -> None:
+    executed: list[tuple[str, object]] = []
+
+    class DummyCursor:
+        def execute(self, query: str, params=None) -> None:
+            executed.append((query.strip(), params))
+
+        def fetchone(self):
+            query = executed[-1][0]
+            if query == "SELECT current_database(), current_user;":
+                return ("crypto", "crypto")
+            if query == "SELECT COUNT(*), MIN(note), MAX(note) FROM crypto_postgres_smoke;":
+                return (1, "smoke", "smoke")
+            raise AssertionError(f"Unexpected fetch for query: {query}")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyPsycopg:
+        def connect(self, database_url: str):
+            assert database_url == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
+            return DummyConnection()
+
+    monkeypatch.setattr("app.core.postgres_smoke._load_psycopg", lambda: DummyPsycopg())
+
+    result = run_postgres_smoke("postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+
+    assert result == {
+        "ok": True,
+        "database": "crypto",
+        "user": "crypto",
+        "temp_row_count": 1,
+        "temp_first_note": "smoke",
+        "temp_last_note": "smoke",
+    }
+    assert any("ON CONFLICT (id) DO NOTHING" in query for query, _ in executed)
+
+
+def test_run_postgres_migration_smoke_runs_migrations_and_checks_tables(monkeypatch) -> None:
+    executed: list[tuple[str, object]] = []
+    run_calls: list[str] = []
+
+    class DummyRawConnection:
+        def cursor(self):
+            executed_ref = executed
+
+            class CursorContext:
+                description = None
+                _rows = []
+
+                def execute(self, query: str, params=None):
+                    normalized = " ".join(query.split())
+                    executed_ref.append((normalized, params))
+                    if "FROM pg_catalog.pg_tables" in normalized and "schemaname = 'public'" in normalized:
+                        self.description = [("tablename",)]
+                        self._rows = [
+                            ("audit_events",),
+                            ("candles",),
+                            ("daily_realized_pnl",),
+                            ("fills",),
+                            ("orders",),
+                            ("pnl_snapshots",),
+                            ("positions",),
+                            ("risk_events",),
+                            ("runtime_heartbeats",),
+                            ("schema_migrations",),
+                            ("signals",),
+                        ]
+                    else:
+                        self.description = None
+                        self._rows = []
+
+                def fetchone(self):
+                    return self._rows[0] if self._rows else None
+
+                def fetchall(self):
+                    return list(self._rows)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return CursorContext()
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    class DummyPsycopg:
+        def connect(self, database_url: str):
+            assert database_url == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
+            return DummyRawConnection()
+
+    monkeypatch.setattr("app.core.postgres_smoke._load_psycopg", lambda: DummyPsycopg())
+    monkeypatch.setattr(
+        "app.core.postgres_smoke.run_migrations",
+        lambda connection: run_calls.append(connection.__class__.__name__) or ["001_create_candles_table"],
+    )
+
+    result = run_postgres_migration_smoke("postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+
+    assert result["ok"] is True
+    assert result["applied_migrations"] == ["001_create_candles_table"]
+    assert result["all_expected_tables_present"] is True
+    assert run_calls == ["PostgresConnectionAdapter"]
+
+
+def test_build_override_compose_uses_isolated_mounts_and_api_port(tmp_path: Path) -> None:
+    rendered = build_override_compose(api_port=8012, work_dir=tmp_path)
+
+    assert 'ports: []' in rendered
+    assert '- "8012:8000"' in rendered
+    assert f"- {tmp_path / 'storage'}:/app/storage" in rendered
+    assert f"- {tmp_path / 'logs'}:/app/logs" in rendered
+    assert f"- {tmp_path / 'runtime'}:/app/runtime" in rendered
+
+
+def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
+    monkeypatch.delenv("CRYPTO_POSTGRES_CONNECT_RETRIES", raising=False)
+    monkeypatch.delenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", raising=False)
+
+    env = make_env(
+        project_name="crypto_pg_validation",
+        database_url="postgresql://crypto:crypto@postgres:5432/crypto",
+    )
+
+    assert env["COMPOSE_PROJECT_NAME"] == "crypto_pg_validation"
+    assert env["CRYPTO_DB_BACKEND"] == "postgres"
+    assert env["CRYPTO_DATABASE_URL"] == "postgresql://crypto:crypto@postgres:5432/crypto"
+    assert env["CRYPTO_POSTGRES_CONNECT_RETRIES"] == "15"
+    assert env["CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS"] == "1"
+
+
+def test_build_summary_markdown_renders_key_runtime_fields() -> None:
+    markdown = build_summary_markdown(
+        {
+            "mode": "compose-soak-readability",
+            "ok": True,
+            "event_name": "schedule",
+            "run_id": "12345",
+            "generated_at": "2026-03-18T15:05:16+00:00",
+            "base_url": "http://127.0.0.1:8012",
+            "health": {"status": "ok", "database": "postgresql://crypto:crypto@postgres:5432/crypto"},
+            "pipeline": {"steps": [{"step": "save_klines"}, {"step": "update_pnl"}]},
+            "orders": [{"id": 1}],
+            "audit_events": [{"id": 1}, {"id": 2}],
+            "scheduler_logs": ["scheduler-1  | [2026-03-18T15:05:15] soak_snapshot status=ok"],
+            "soak_validation": {"status": "ok"},
+            "soak_history": [
+                {"recorded_at": "2026-03-18T15:05:15+00:00", "status": "ok"},
+                {"recorded_at": "2026-03-18T15:04:15+00:00", "status": "ok"},
+            ],
+        }
+    )
+
+    assert "# PostgreSQL Compose Validation" in markdown
+    assert "- mode: `compose-soak-readability`" in markdown
+    assert "- validation_layer: `readability`" in markdown
+    assert "- verdict: `readability-check`" in markdown
+    assert "- event_name: `schedule`" in markdown
+    assert "- run_id: `12345`" in markdown
+    assert "- generated_at: `2026-03-18T15:05:16+00:00`" in markdown
+    assert "- health_status: `ok`" in markdown
+    assert "- pipeline_step_count: `2`" in markdown
+    assert "- order_count: `1`" in markdown
+    assert "- soak_status: `ok`" in markdown
+    assert "- soak_history_count: `2`" in markdown
+    assert "- soak_history_latest_at: `2026-03-18T15:05:15+00:00`" in markdown
+    assert "soak_snapshot status=ok" in markdown
+
+
+def test_write_optional_output_writes_requested_file(tmp_path: Path) -> None:
+    output_path = tmp_path / "reports" / "summary.md"
+
+    write_optional_output(str(output_path), "hello\n")
+
+    assert output_path.read_text(encoding="utf-8") == "hello\n"
+
+
+def test_build_file_entry_includes_relative_path_and_checksum(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    path = artifact_root / "summary.md"
+    path.write_text("summary\n", encoding="utf-8")
+
+    entry = build_file_entry(path, artifact_root, "Human-readable summary.")
+
+    assert entry["path"] == "summary.md"
+    assert entry["purpose"] == "Human-readable summary."
+    assert entry["size_bytes"] == str(len("summary\n".encode("utf-8")))
+    assert len(entry["sha256"]) == 64
+
+
+def test_build_manifest_files_skips_missing_paths(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    (artifact_root / "summary.md").write_text("summary\n", encoding="utf-8")
+
+    files = build_manifest_files(
+        artifact_root=artifact_root,
+        file_purposes={
+            "summary.md": "Human-readable summary.",
+            "missing.log": "Should be skipped.",
+        },
+    )
+
+    assert [item["path"] for item in files] == ["summary.md"]
+
+
+def test_read_junit_counts_reads_pytest_xml(tmp_path: Path) -> None:
+    junit_path = tmp_path / "junit.xml"
+    junit_path.write_text(
+        '<testsuite tests="7" failures="1" errors="2" skipped="3"></testsuite>\n',
+        encoding="utf-8",
+    )
+
+    counts = read_junit_counts(junit_path)
+
+    assert counts == {"tests": 7, "failures": 1, "errors": 2, "skipped": 3}
+
+
+def test_build_test_summary_renders_test_metadata() -> None:
+    summary = build_test_summary(
+        {"tests": 7, "failures": 0, "errors": 0, "skipped": 1},
+        event_name="pull_request",
+        run_id="321",
+        generated_at="2026-03-19T01:02:03+00:00",
+    )
+
+    assert "# Test Results" in summary
+    assert "- outcome: `passed`" in summary
+    assert "- event_name: `pull_request`" in summary
+    assert "- run_id: `321`" in summary
+    assert "- generated_at: `2026-03-19T01:02:03+00:00`" in summary
+    assert "- validation_layer: `test`" in summary
+    assert "- verdict: `test-check`" in summary
+    assert "- tests: `7`" in summary
+    assert "- skipped: `1`" in summary
+
+
+def test_get_outcome_maps_junit_counts() -> None:
+    assert get_outcome({"tests": 1, "failures": 0, "errors": 0, "skipped": 0}) == "passed"
+    assert get_outcome({"tests": 1, "failures": 1, "errors": 0, "skipped": 0}) == "failed"
+
+
+def test_build_test_artifact_manifest_includes_summary_junit_and_manifest(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = artifact_dir / "summary.md"
+    junit_path = artifact_dir / "junit.xml"
+    manifest_path = artifact_dir / "manifest.json"
+    summary_path.write_text("summary\n", encoding="utf-8")
+    junit_path.write_text(
+        '<testsuite tests="7" failures="0" errors="0" skipped="1"></testsuite>\n',
+        encoding="utf-8",
+    )
+    manifest_path.write_text("{}\n", encoding="utf-8")
+
+    manifest = build_test_artifact_manifest(
+        artifact_dir=artifact_dir,
+        junit_xml_path=junit_path,
+        summary_path=summary_path,
+        event_name="push",
+        run_id="555",
+        generated_at="2026-03-19T01:02:03+00:00",
+    )
+
+    manifest["files"].append(
+        {
+            "path": "manifest.json",
+            "purpose": "Artifact manifest for test results.",
+            "size_bytes": str(len(manifest_path.read_bytes())),
+            "sha256": "placeholder",
+        }
+    )
+
+    assert manifest["artifact_kind"] == "test-results-artifact"
+    assert manifest["validation_layer"] == "test"
+    assert manifest["verdict"] == "test-check"
+    assert manifest["outcome"] == "passed"
+    assert manifest["event_name"] == "push"
+    assert manifest["run_id"] == "555"
+    assert [item["path"] for item in manifest["files"]] == [
+        "summary.md",
+        "junit.xml",
+        "manifest.json",
+    ]
+
+
+def test_write_test_artifact_writes_summary_manifest_and_step_summary(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    junit_path = artifact_dir / "junit.xml"
+    step_summary_path = tmp_path / "step-summary.md"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    junit_path.write_text(
+        '<testsuite tests="9" failures="0" errors="0" skipped="2"></testsuite>\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary_path))
+
+    summary_path, manifest_path = write_test_artifact(
+        artifact_dir=artifact_dir,
+        junit_xml_path=junit_path,
+        event_name="workflow_dispatch",
+        run_id="777",
+        write_step_summary=True,
+    )
+
+    assert summary_path.exists()
+    assert manifest_path.exists()
+    summary_text = summary_path.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "- outcome: `passed`" in summary_text
+    assert "- event_name: `workflow_dispatch`" in summary_text
+    assert "- run_id: `777`" in summary_text
+    assert step_summary_path.read_text(encoding="utf-8") == summary_text
+    assert manifest["artifact_kind"] == "test-results-artifact"
+    assert manifest["validation_layer"] == "test"
+    assert manifest["verdict"] == "test-check"
+    assert manifest["outcome"] == "passed"
+    assert [item["path"] for item in manifest["files"]] == [
+        "summary.md",
+        "junit.xml",
+        "manifest.json",
+    ]
+
+
+def test_attach_metadata_uses_github_env_when_present(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_RUN_ID", "98765")
+
+    enriched = attach_metadata({"mode": "smoke", "ok": True})
+
+    assert enriched["validation_layer"] == "smoke"
+    assert enriched["verdict"] == "quick-check"
+    assert enriched["event_name"] == "pull_request"
+    assert enriched["run_id"] == "98765"
+    assert enriched["mode"] == "smoke"
+    assert enriched["ok"] is True
+    assert "generated_at" in enriched
+
+
+def test_attach_metadata_defaults_to_local_when_github_env_missing(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+
+    enriched = attach_metadata({"mode": "smoke", "ok": True})
+
+    assert enriched["validation_layer"] == "smoke"
+    assert enriched["verdict"] == "quick-check"
+    assert enriched["event_name"] == "local"
+    assert enriched["run_id"] == "local"
+    assert "generated_at" in enriched
+
+
+def test_build_artifact_manifest_for_smoke(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "smoke-artifact"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    (artifact_root / "summary.md").write_text("summary\n", encoding="utf-8")
+    (artifact_root / "result.json").write_text("{}\n", encoding="utf-8")
+    (artifact_root / "raw.log").write_text("raw\n", encoding="utf-8")
+
+    manifest = build_artifact_manifest(
+        result={
+            "mode": "smoke",
+            "event_name": "pull_request",
+            "run_id": "111",
+            "generated_at": "2026-03-18T15:05:16+00:00",
+        },
+        artifact_root=artifact_root,
+        file_purposes={
+            "summary.md": "Human-readable validation summary.",
+            "result.json": "Full structured validation result.",
+            "raw.log": "Raw stdout from the validation script.",
+        },
+    )
+
+    assert manifest["mode"] == "smoke"
+    assert manifest["artifact_kind"] == "postgres-validation-artifact"
+    assert manifest["validation_layer"] == "smoke"
+    assert manifest["verdict"] == "quick-check"
+    assert manifest["event_name"] == "pull_request"
+    assert [item["path"] for item in manifest["files"]] == ["summary.md", "result.json", "raw.log"]
+    assert all("size_bytes" in item for item in manifest["files"])
+    assert all("sha256" in item for item in manifest["files"])
+
+
+def test_build_artifact_manifest_for_compose_with_service_logs(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "compose-artifact"
+    (artifact_root / "services").mkdir(parents=True, exist_ok=True)
+    for relative_path, content in {
+        "summary.md": "summary\n",
+        "result.json": "{}\n",
+        "raw.log": "raw\n",
+        "docker.log": "docker\n",
+        "services/api.log": "api\n",
+        "services/scheduler.log": "scheduler\n",
+        "services/postgres.log": "postgres\n",
+    }.items():
+        path = artifact_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    manifest = build_artifact_manifest(
+        result={
+            "mode": "compose-soak-readability",
+            "event_name": "schedule",
+            "run_id": "222",
+            "generated_at": "2026-03-18T15:05:16+00:00",
+        },
+        artifact_root=artifact_root,
+        file_purposes={
+            "summary.md": "Human-readable validation summary.",
+            "result.json": "Full structured validation result.",
+            "raw.log": "Raw stdout from the validation script.",
+            "docker.log": "Combined Docker Compose logs for postgres, api, and scheduler.",
+            "services/api.log": "Docker Compose logs for the api service.",
+            "services/scheduler.log": "Docker Compose logs for the scheduler service.",
+            "services/postgres.log": "Docker Compose logs for the postgres service.",
+        },
+    )
+
+    assert manifest["mode"] == "compose-soak-readability"
+    assert manifest["artifact_kind"] == "postgres-validation-artifact"
+    assert manifest["validation_layer"] == "readability"
+    assert manifest["verdict"] == "readability-check"
+    assert manifest["event_name"] == "schedule"
+    assert [item["path"] for item in manifest["files"]] == [
+        "summary.md",
+        "result.json",
+        "raw.log",
+        "docker.log",
+        "services/api.log",
+        "services/scheduler.log",
+        "services/postgres.log",
+    ]
+    assert all("size_bytes" in item for item in manifest["files"])
+    assert all("sha256" in item for item in manifest["files"])
+
+
+def test_write_validation_artifacts_writes_compose_outputs_and_step_summary(tmp_path: Path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "artifact"
+    step_summary_path = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary_path))
+
+    result_json = write_validation_artifacts(
+        result={
+            "mode": "compose-runtime",
+            "ok": True,
+            "event_name": "push",
+            "run_id": "444",
+            "generated_at": "2026-03-19T01:02:03+00:00",
+            "health": {"status": "ok", "database": "postgresql://crypto:crypto@postgres:5432/crypto"},
+            "pipeline": {"steps": [{"step": "save_klines"}]},
+            "orders": [{"id": 1}],
+            "audit_events": [{"id": 1}],
+            "scheduler_logs": ["scheduler-1 | tick"],
+            "docker_logs": "docker logs\n",
+            "api_logs": "api logs\n",
+            "scheduler_logs_full": "scheduler logs\n",
+            "postgres_logs": "postgres logs\n",
+        },
+        json_output=str(artifact_dir / "result.json"),
+        summary_file=str(artifact_dir / "summary.md"),
+        raw_log_output=str(artifact_dir / "raw.log"),
+        docker_logs_output=str(artifact_dir / "docker.log"),
+        docker_logs_dir=str(artifact_dir / "services"),
+        manifest_output=str(artifact_dir / "manifest.json"),
+        write_step_summary=True,
+    )
+
+    assert json.loads(result_json)["mode"] == "compose-runtime"
+    assert (artifact_dir / "result.json").exists()
+    assert (artifact_dir / "summary.md").exists()
+    assert (artifact_dir / "raw.log").exists()
+    assert (artifact_dir / "docker.log").read_text(encoding="utf-8") == "docker logs\n"
+    assert (artifact_dir / "services" / "api.log").read_text(encoding="utf-8") == "api logs\n"
+    assert (artifact_dir / "services" / "scheduler.log").read_text(encoding="utf-8") == "scheduler logs\n"
+    assert (artifact_dir / "services" / "postgres.log").read_text(encoding="utf-8") == "postgres logs\n"
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_kind"] == "postgres-validation-artifact"
+    assert manifest["validation_layer"] == "runtime"
+    assert manifest["verdict"] == "runtime-check"
+    assert [item["path"] for item in manifest["files"]] == [
+        "summary.md",
+        "result.json",
+        "raw.log",
+        "docker.log",
+        "services/api.log",
+        "services/scheduler.log",
+        "services/postgres.log",
+    ]
+    assert step_summary_path.read_text(encoding="utf-8") == (artifact_dir / "summary.md").read_text(encoding="utf-8")
+
+
+def test_get_validation_layer_maps_modes() -> None:
+    assert get_validation_layer("smoke") == "smoke"
+    assert get_validation_layer("compose-runtime") == "runtime"
+    assert get_validation_layer("compose-soak-readability") == "readability"
+    assert get_validation_layer("unknown") == "unknown"
+
+
+def test_get_validation_verdict_maps_modes() -> None:
+    assert get_validation_verdict("smoke") == "quick-check"
+    assert get_validation_verdict("compose-runtime") == "runtime-check"
+    assert get_validation_verdict("compose-soak-readability") == "readability-check"
+    assert get_validation_verdict("unknown") == "unknown-check"
+
+
+def test_run_validation_mode_dispatches_smoke(monkeypatch) -> None:
+    smoke_calls: list[str] = []
+    migration_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.run_postgres_smoke",
+        lambda database_url: smoke_calls.append(database_url) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.run_postgres_migration_smoke",
+        lambda database_url: migration_calls.append(database_url) or {"ok": True},
+    )
+
+    class Args:
+        mode = "smoke"
+        database_url = "postgresql://crypto:crypto@postgres:5432/crypto"
+        api_port = 8012
+        project_name = "crypto_pg_validation"
+        startup_timeout = 90.0
+        keep_up = False
+
+    result = run_validation_mode(Args())
+
+    assert result["mode"] == "smoke"
+    assert smoke_calls == ["postgresql://crypto:crypto@postgres:5432/crypto"]
+    assert migration_calls == ["postgresql://crypto:crypto@postgres:5432/crypto"]
+
+
+def test_run_validation_mode_dispatches_compose_soak(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    compose_result = {
+        "mode": "compose-runtime",
+        "ok": True,
+        "base_url": "http://127.0.0.1:8012",
+        "health": {"status": "ok", "database": "postgresql://crypto:crypto@postgres:5432/crypto"},
+        "pipeline": {"steps": []},
+        "orders": [],
+        "audit_events": [],
+        "scheduler_logs": [],
+        "docker_logs": "api-1 | up\nscheduler-1 | up\n",
+        "api_logs": "api-1 | ready\n",
+        "scheduler_logs_full": "scheduler-1 | tick\n",
+        "postgres_logs": "postgres-1 | healthy\n",
+    }
+
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.validate_compose_runtime",
+        lambda **kwargs: calls.append(("compose", kwargs)) or dict(compose_result),
+    )
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.request_json",
+        lambda method, url: calls.append((method, url))
+        or ({"status": "ok"} if url.endswith("/validation/soak") else []),
+    )
+
+    class Args:
+        mode = "compose-soak-readability"
+        database_url = "postgresql://crypto:crypto@postgres:5432/crypto"
+        api_port = 8012
+        project_name = "crypto_pg_validation"
+        startup_timeout = 90.0
+        keep_up = False
+
+    result = run_validation_mode(Args())
+
+    assert result["mode"] == "compose-soak-readability"
+    assert result["soak_validation"] == {"status": "ok"}
+    assert result["soak_history"] == []
+    assert result["docker_logs"] == "api-1 | up\nscheduler-1 | up\n"
+    assert result["api_logs"] == "api-1 | ready\n"
+    assert result["scheduler_logs_full"] == "scheduler-1 | tick\n"
+    assert result["postgres_logs"] == "postgres-1 | healthy\n"
+    assert any(call[0] == "GET" and str(call[1]).endswith("/validation/soak") for call in calls)
+    assert any(call[0] == "GET" and str(call[1]).endswith("/validation/soak/history") for call in calls)
+
+
+def test_auto_id_column_sql_supports_sqlite_and_postgres() -> None:
+    assert _auto_id_column_sql("sqlite") == "id INTEGER PRIMARY KEY"
+    assert _auto_id_column_sql("postgres") == "id BIGSERIAL PRIMARY KEY"
+
+
+def test_get_backend_name_detects_postgres_adapter() -> None:
+    class DummyRawConnection:
+        def cursor(self):
+            raise AssertionError("cursor should not be used")
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    connection = db_module.PostgresConnectionAdapter(DummyRawConnection())
+
+    assert get_backend_name(connection) == "postgres"
+
+
+def test_db_helpers_support_postgres_introspection_queries() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class DummyConnection:
+        def execute(self, query: str, params=None):
+            executed.append((" ".join(query.split()), params))
+
+            class DummyCursor:
+                def __init__(self, rows):
+                    self._rows = rows
+                    self.description = [("name",)] if rows and len(rows[0]) == 1 else None
+
+                def fetchall(self):
+                    return self._rows
+
+                def fetchone(self):
+                    return self._rows[0] if self._rows else None
+
+            normalized = " ".join(query.split())
+            if "FROM pg_catalog.pg_tables" in normalized:
+                return DummyCursor([("audit_events",), ("candles",)])
+            if "FROM information_schema.tables" in normalized:
+                return DummyCursor([("candles",)])
+            if "FROM information_schema.columns" in normalized:
+                return DummyCursor([("id",), ("symbol",)])
+            raise AssertionError(f"Unexpected query: {normalized}")
+
+    connection = DummyConnection()
+
+    assert list_tables(connection, backend="postgres") == ["audit_events", "candles"]
+    assert table_exists(connection, "candles", backend="postgres") is True
+    assert get_table_columns(connection, "candles", backend="postgres") == {"id", "symbol"}
+    assert any("%s" in query for query, _ in executed)
+
+
+def test_rewrite_query_params_converts_sqlite_placeholders() -> None:
+    query = "INSERT INTO demo (name, note) VALUES (?, '? literal stays', ?);"
+    assert _rewrite_query_params(query) == "INSERT INTO demo (name, note) VALUES (%s, '? literal stays', %s);"
+
+
+def test_parse_db_timestamp_supports_sqlite_and_postgres_formats() -> None:
+    sqlite_parsed = parse_db_timestamp("2026-03-18 10:00:00")
+    postgres_parsed = parse_db_timestamp("2026-03-18 10:00:00.622394+00:00")
+    postgres_short_offset = parse_db_timestamp("2026-03-18 10:00:00.622394+00")
+
+    assert sqlite_parsed.isoformat() == "2026-03-18T10:00:00+00:00"
+    assert postgres_parsed.isoformat() == "2026-03-18T10:00:00.622394+00:00"
+    assert postgres_short_offset.isoformat() == "2026-03-18T10:00:00.622394+00:00"
+
+
+def test_get_connection_supports_postgres_backend(monkeypatch) -> None:
+    class DummyRawConnection:
+        def cursor(self):
+            raise AssertionError("cursor should not be used in this test")
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    class DummyPsycopg:
+        def connect(self, database_url: str):
+            assert database_url == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
+            return DummyRawConnection()
+
+    monkeypatch.setattr(db_module, "DB_BACKEND", "postgres")
+    monkeypatch.setattr(db_module, "DATABASE_URL", "postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+    monkeypatch.setattr(db_module, "_load_psycopg", lambda: DummyPsycopg())
+
+    connection = get_connection()
+
+    assert connection.__class__.__name__ == "PostgresConnectionAdapter"
+
+
+def test_get_connection_retries_postgres_until_ready(monkeypatch) -> None:
+    attempts: list[str] = []
+    sleep_calls: list[float] = []
+
+    class DummyRawConnection:
+        def cursor(self):
+            raise AssertionError("cursor should not be used in this test")
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    class DummyPsycopg:
+        def connect(self, database_url: str):
+            attempts.append(database_url)
+            if len(attempts) < 3:
+                raise RuntimeError("database system is starting up")
+            return DummyRawConnection()
+
+    monkeypatch.setattr(db_module, "DB_BACKEND", "postgres")
+    monkeypatch.setattr(db_module, "DATABASE_URL", "postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+    monkeypatch.setattr(db_module, "POSTGRES_CONNECT_RETRIES", 3)
+    monkeypatch.setattr(db_module, "POSTGRES_CONNECT_RETRY_DELAY_SECONDS", 0.25)
+    monkeypatch.setattr(db_module, "_load_psycopg", lambda: DummyPsycopg())
+    monkeypatch.setattr(db_module.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    connection = get_connection()
+
+    assert connection.__class__.__name__ == "PostgresConnectionAdapter"
+    assert len(attempts) == 3
+    assert sleep_calls == [0.25, 0.25]
+
+
+def test_insert_and_get_rowid_uses_returning_for_postgres() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class DummyCursor:
+        def __init__(self, rows, description):
+            self._rows = rows
+            self.description = description
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class DummyRawConnection:
+        def cursor(self):
+            executed_ref = executed
+
+            class CursorContext:
+                description = None
+                _rows = []
+
+                def execute(self, query: str, params=None):
+                    executed_ref.append((query, params))
+                    if "RETURNING id" in query:
+                        self.description = [("id",)]
+                        self._rows = [(7,)]
+                    else:
+                        self.description = None
+                        self._rows = []
+
+                def fetchone(self):
+                    return self._rows[0] if self._rows else None
+
+                def fetchall(self):
+                    return list(self._rows)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return CursorContext()
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    connection = db_module.PostgresConnectionAdapter(DummyRawConnection())
+
+    row_id = insert_and_get_rowid(
+        connection,
+        "INSERT INTO audit_events (event_type, status, source, message, payload_json) VALUES (?, ?, ?, ?, ?);",
+        ("manual_action", "completed", "test", "hello", None),
+    )
+
+    assert row_id == 7
+    assert executed[0][0].endswith("RETURNING id;")
+    assert executed[0][1] == ("manual_action", "completed", "test", "hello", None)
+
+
+def test_fetch_all_as_dicts_maps_cursor_description_to_dicts() -> None:
+    class DummyCursor:
+        description = [("id",), ("name",)]
+
+        def fetchall(self):
+            return [(1, "alpha"), (2, "beta")]
+
+    class DummyConnection:
+        def execute(self, query: str, params=None):
+            assert query == "SELECT id, name FROM sample LIMIT %s;"
+            assert params == (2,)
+            return DummyCursor()
+
+    result = fetch_all_as_dicts(DummyConnection(), "SELECT id, name FROM sample LIMIT %s;", (2,))
+
+    assert result == [{"id": 1, "name": "alpha"}, {"id": 2, "name": "beta"}]
+
+
+def test_query_read_service_supports_postgres_limit_queries() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class DummyRawConnection:
+        def cursor(self):
+            executed_ref = executed
+
+            class CursorContext:
+                description = None
+                _rows = []
+
+                def execute(self, query: str, params=None):
+                    executed_ref.append((query, params))
+                    self.description = [
+                        ("id",),
+                        ("client_order_id",),
+                        ("risk_event_id",),
+                        ("symbol",),
+                        ("timeframe",),
+                        ("strategy_name",),
+                        ("side",),
+                        ("qty",),
+                        ("price",),
+                        ("status",),
+                        ("created_at",),
+                    ]
+                    self._rows = [
+                        (1, "order-1", 11, "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 100.0, "FILLED", "2026-03-18 10:00:00")
+                    ]
+
+                def fetchone(self):
+                    return self._rows[0] if self._rows else None
+
+                def fetchall(self):
+                    return list(self._rows)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return CursorContext()
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    connection = db_module.PostgresConnectionAdapter(DummyRawConnection())
+
+    rows = query_get_orders(connection, limit=1)
+
+    assert rows == [
+        {
+            "id": 1,
+            "client_order_id": "order-1",
+            "risk_event_id": 11,
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "strategy_name": "ma_cross",
+            "side": "BUY",
+            "qty": 0.001,
+            "price": 100.0,
+            "status": "FILLED",
+            "created_at": "2026-03-18 10:00:00",
+        }
+    ]
+    assert executed[0][1] == (1,)
+    assert "LIMIT %s" in executed[0][0]
+
+
+def test_save_klines_does_not_duplicate_existing_candles() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        kline = make_kline(60_000, 10)
+
+        save_klines(connection, [kline])
+        save_klines(connection, [kline])
+
+        row = connection.execute("SELECT COUNT(*) FROM candles;").fetchone()
+        assert row is not None
+        assert row[0] == 1
     finally:
         connection.close()
 
@@ -217,6 +1161,7 @@ def test_evaluate_latest_signal_rejects_when_cooldown_is_active() -> None:
 def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> None:
     connection = make_connection()
     try:
+        today = datetime.now(timezone.utc).date().isoformat()
         ensure_execution_tables(connection)
         ensure_signals_table(connection)
         ensure_positions_table(connection)
@@ -227,7 +1172,7 @@ def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> N
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-daily-1", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-18 10:00:00"),
+            ("buy-daily-1", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", f"{today} 10:00:00"),
         )
         connection.execute(
             """
@@ -235,10 +1180,10 @@ def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> N
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-daily-1", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-18 10:05:00"),
+            ("sell-daily-1", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", f"{today} 10:05:00"),
         )
-        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-18 10:00:00")
-        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-18 10:05:00")
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{today} 10:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{today} 10:05:00")
         connection.commit()
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
@@ -273,6 +1218,7 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
         or "runtime/kill.switch",
     )
     try:
+        today = datetime.now(timezone.utc).date().isoformat()
         ensure_execution_tables(connection)
         ensure_signals_table(connection)
         ensure_positions_table(connection)
@@ -283,7 +1229,7 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-daily-2", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-18 11:00:00"),
+            ("buy-daily-2", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", f"{today} 11:00:00"),
         )
         connection.execute(
             """
@@ -291,10 +1237,10 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-daily-2", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-18 11:05:00"),
+            ("sell-daily-2", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", f"{today} 11:05:00"),
         )
-        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-18 11:00:00")
-        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-18 11:05:00")
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{today} 11:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{today} 11:05:00")
         connection.commit()
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
@@ -317,6 +1263,7 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
 def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
     connection = make_connection()
     try:
+        previous_day = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
         ensure_execution_tables(connection)
         ensure_signals_table(connection)
         ensure_positions_table(connection)
@@ -327,7 +1274,7 @@ def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-prev-day", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", "2026-03-17 10:00:00"),
+            ("buy-prev-day", 1, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", f"{previous_day} 10:00:00"),
         )
         connection.execute(
             """
@@ -335,13 +1282,13 @@ def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-prev-day", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", "2026-03-17 10:05:00"),
+            ("sell-prev-day", 2, "BTCUSDT", "1m", "manual_test", "SELL", 1.0, 25.0, "FILLED", f"{previous_day} 10:05:00"),
         )
-        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-17 10:00:00")
-        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, "2026-03-17 10:05:00")
+        insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{previous_day} 10:00:00")
+        insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{previous_day} 10:05:00")
         connection.commit()
 
-        assert get_daily_realized_pnl(connection, "BTCUSDT", pnl_date="2026-03-17") == -75.0
+        assert get_daily_realized_pnl(connection, "BTCUSDT", pnl_date=previous_day) == -75.0
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
         risk_result = evaluate_latest_signal(
@@ -630,6 +1577,61 @@ def test_maybe_send_health_alert_clears_state_when_health_returns_ok(monkeypatch
     assert not state_file.exists()
 
 
+def test_maybe_send_health_alert_ignores_volatile_heartbeat_fields(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "health_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.health.HEALTH_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.health.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.health import maybe_send_health_alert
+
+    first_report = {
+        "status": "degraded",
+        "checks": {
+            "kill_switch": {"status": "degraded", "enabled": True, "reason": "Kill switch is enabled."},
+            "heartbeats": {
+                "status": "ok",
+                "components": [
+                    {
+                        "component": "alerting",
+                        "status": "ok",
+                        "message": "Telegram alert delivered.",
+                        "last_seen_at": "2026-03-18 22:07:00",
+                    }
+                ],
+            },
+        },
+    }
+    second_report = {
+        "status": "degraded",
+        "checks": {
+            "kill_switch": {"status": "degraded", "enabled": True, "reason": "Kill switch is enabled."},
+            "heartbeats": {
+                "status": "ok",
+                "components": [
+                    {
+                        "component": "alerting",
+                        "status": "ok",
+                        "message": "Telegram alert delivered.",
+                        "last_seen_at": "2026-03-18 22:08:00",
+                    }
+                ],
+            },
+        },
+    }
+
+    first = maybe_send_health_alert(first_report)
+    second = maybe_send_health_alert(second_report)
+
+    assert first["sent"] is True
+    assert second == {"sent": False, "reason": "Health alert already sent for current state."}
+    assert len(sent_messages) == 1
+
+
 def test_admin_page_is_served() -> None:
     client = TestClient(app)
 
@@ -859,6 +1861,83 @@ def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
     assert payload["database_info"]["backend"] == "sqlite"
     assert payload["database_info"]["sqlite_path"] == str(db_path)
     assert payload["checks"]["heartbeats"]["status"] == "ok"
+
+
+def test_health_report_uses_postgres_database_url_when_backend_is_postgres(monkeypatch) -> None:
+    class DummyConnection:
+        def execute(self, query: str, params=None):
+            normalized = " ".join(query.split())
+
+            class DummyCursor:
+                def __init__(self, rows):
+                    self._rows = rows
+                    self.description = [("name",)] if rows else None
+
+                def fetchone(self):
+                    return self._rows[0] if self._rows else None
+
+                def fetchall(self):
+                    return list(self._rows)
+
+            if "FROM pg_catalog.pg_tables" in normalized:
+                return DummyCursor([("candles",), ("runtime_heartbeats",)])
+            if "FROM candles" in normalized:
+                return DummyCursor([( "BTCUSDT", "1m", 0, 0)])
+            if "FROM information_schema.tables" in normalized:
+                return DummyCursor([])
+            if "FROM runtime_heartbeats" in normalized:
+                cursor = DummyCursor([])
+                cursor.description = [
+                    ("component",),
+                    ("status",),
+                    ("message",),
+                    ("payload_json",),
+                    ("last_seen_at",),
+                ]
+                return cursor
+            raise AssertionError(f"Unexpected query: {normalized}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.get_database_info",
+        lambda: {
+            "backend": "postgres",
+            "database_url": "postgresql://crypto:crypto@127.0.0.1:5432/crypto",
+        },
+    )
+    monkeypatch.setattr("app.api.main._utc_now", lambda: datetime.fromtimestamp(0, tz=timezone.utc))
+    monkeypatch.setattr(
+        "app.api.main.get_stop_status",
+        lambda: {"stopped": False, "stop_file": "runtime/scheduler.stop"},
+    )
+    monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
+    monkeypatch.setattr(
+        "app.api.main.get_kill_switch_status",
+        lambda: {"enabled": False, "kill_switch_file": "runtime/kill.switch"},
+    )
+
+    payload = app.openapi()  # keep app imported/initialized
+    del payload
+    report = __import__("app.api.main", fromlist=["build_health_report"]).build_health_report()
+
+    assert report["database"] == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
+    assert report["database_info"]["backend"] == "postgres"
+
+
+def test_run_pipeline_collect_uses_postgres_database_label(monkeypatch) -> None:
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_database_label", lambda: "postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.pipeline.run_pipeline.get_kill_switch_status",
+        lambda: {"enabled": True, "kill_switch_file": "runtime/kill.switch"},
+    )
+
+    result = run_pipeline_collect()
+
+    assert result["database"] == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
 
 
 def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:

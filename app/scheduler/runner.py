@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Optional
 
 from app.pipeline.run_pipeline import run_pipeline_collect
+from app.core.db import get_connection
+from app.core.migrations import run_migrations
 from app.system.heartbeat import record_heartbeat
 
 
@@ -66,6 +68,11 @@ def _record_soak_snapshot() -> None:
 
 def run_scheduler(interval_seconds: int = 60, iterations: Optional[int] = None) -> None:
     run_count = 0
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+    finally:
+        connection.close()
 
     while True:
         if stop_requested():

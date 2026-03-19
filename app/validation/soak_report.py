@@ -1,9 +1,11 @@
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 from typing import Optional
 
+from app.core.db import DBConnection
 from app.core.db import get_connection
+from app.core.db import parse_db_timestamp
+from app.core.db import table_exists
 from app.core.settings import SOAK_ACTIVITY_STALENESS_SECONDS
 from app.scheduler.control import read_scheduler_log
 from app.system.heartbeat import get_heartbeats
@@ -24,27 +26,19 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    row = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _count_rows(connection: sqlite3.Connection, table_name: str) -> int:
-    if not _table_exists(connection, table_name):
+def _count_rows(connection: DBConnection, table_name: str) -> int:
+    if not table_exists(connection, table_name):
         return 0
     row = connection.execute(f"SELECT COUNT(*) FROM {table_name};").fetchone()
     return int(row[0]) if row is not None else 0
 
 
 def _latest_timestamp(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     table_name: str,
     column: str = "created_at",
 ) -> Optional[str]:
-    if not _table_exists(connection, table_name):
+    if not table_exists(connection, table_name):
         return None
     row = connection.execute(
         f"SELECT {column} FROM {table_name} ORDER BY {column} DESC LIMIT 1;"
@@ -52,14 +46,8 @@ def _latest_timestamp(
     if row is None:
         return None
     return str(row[0])
-
-
-def _parse_created_at(value: str) -> datetime:
-    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
-
-def _positions_summary(connection: sqlite3.Connection) -> dict[str, float]:
-    if not _table_exists(connection, "positions"):
+def _positions_summary(connection: DBConnection) -> dict[str, float]:
+    if not table_exists(connection, "positions"):
         return {"open_symbols": 0, "total_qty": 0.0, "total_realized_pnl": 0.0}
 
     row = connection.execute(
@@ -144,7 +132,7 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
             latest_activity_with_age[name] = None
             continue
 
-        age_seconds = int((_utc_now() - _parse_created_at(created_at)).total_seconds())
+        age_seconds = int((_utc_now() - parse_db_timestamp(created_at)).total_seconds())
         latest_activity_with_age[name] = {
             "created_at": created_at,
             "age_seconds": age_seconds,

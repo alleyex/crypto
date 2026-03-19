@@ -1,0 +1,28 @@
+name: Run Test Suite
+description: Run pytest and generate test result artifacts in a target directory.
+
+inputs:
+  artifact-dir:
+    description: Directory where test artifacts should be written.
+    required: true
+  event-name:
+    description: Source event name for generated metadata.
+    required: true
+  run-id:
+    description: Workflow run id for generated metadata.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run pytest and write test artifacts
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.artifact-dir }}"
+        pytest -q --junitxml="${{ inputs.artifact-dir }}/junit.xml"
+        python scripts/write_test_artifact.py \
+          --junit-xml "${{ inputs.artifact-dir }}/junit.xml" \
+          --artifact-dir "${{ inputs.artifact-dir }}" \
+          --event-name "${{ inputs.event-name }}" \
+          --run-id "${{ inputs.run-id }}" \
+          --write-step-summary

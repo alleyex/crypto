@@ -1,0 +1,110 @@
+name: Postgres Validation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      validation_scope:
+        description: "Validation scope to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - smoke
+          - runtime
+          - readability
+      database_url:
+        description: "Optional PostgreSQL DSN override for manual runs"
+        required: false
+        default: ""
+        type: string
+      api_port:
+        description: "Optional API port override for compose-based manual runs"
+        required: false
+        default: "8012"
+        type: string
+      artifact_retention_days:
+        description: "Artifact retention in days for manual runs"
+        required: false
+        default: "14"
+        type: string
+      python_version:
+        description: "Python version override for manual runs"
+        required: false
+        default: "3.11"
+        type: choice
+        options:
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  postgres-smoke:
+    uses: ./.github/workflows/postgres-validation-job.yml
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.validation_scope == 'all' || github.event.inputs.validation_scope == 'smoke'
+    name: ${{ github.event_name == 'pull_request' && 'Postgres Quick Check (PR)' || 'Postgres Quick Check (Push)' }}
+    with:
+      python_version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.python_version || '3.11' }}
+      mode: smoke
+      artifact_name: ${{ format('postgres-smoke-validation-{0}', github.event_name) }}
+      artifact_dir: artifacts/postgres-smoke
+      artifact_retention_days: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.artifact_retention_days || '14' }}
+      database_url: ${{ github.event.inputs.database_url || 'postgresql://crypto:crypto@127.0.0.1:5432/crypto' }}
+      start_postgres: true
+
+  postgres-smoke-summary:
+    uses: ./.github/workflows/workflow-summary-job.yml
+    name: Postgres Quick Check Summary
+    needs:
+      - postgres-smoke
+    if: always() && needs.postgres-smoke.result != 'skipped'
+    with:
+      title: "# Postgres Quick Check Summary"
+      body: |
+        - event_name: `${{ github.event_name }}`
+        - mode: `${{ needs.postgres-smoke.outputs.mode }}`
+        - artifact_name: `${{ needs.postgres-smoke.outputs.artifact_name }}`
+        - artifact_dir: `${{ needs.postgres-smoke.outputs.artifact_dir }}`
+
+  postgres-compose-validation:
+    uses: ./.github/workflows/postgres-validation-job.yml
+    name: ${{ (github.event_name == 'schedule' || github.event.inputs.validation_scope == 'readability') && 'Postgres Readability Check' || 'Postgres Runtime Check' }}
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event.inputs.validation_scope == 'runtime' || github.event.inputs.validation_scope == 'readability'
+    with:
+      python_version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.python_version || '3.11' }}
+      mode: ${{ (github.event_name == 'schedule' || github.event.inputs.validation_scope == 'readability') && 'compose-soak-readability' || 'compose-runtime' }}
+      artifact_name: ${{ (github.event_name == 'schedule' || github.event.inputs.validation_scope == 'readability') && format('postgres-soak-readability-validation-{0}', github.event_name) || format('postgres-compose-validation-{0}', github.event_name) }}
+      artifact_dir: artifacts/postgres-compose-validation
+      artifact_retention_days: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.artifact_retention_days || '14' }}
+      api_port: ${{ github.event.inputs.api_port || '8012' }}
+      database_url: ${{ github.event.inputs.database_url || 'postgresql://crypto:crypto@postgres:5432/crypto' }}
+
+  postgres-compose-validation-summary:
+    uses: ./.github/workflows/workflow-summary-job.yml
+    name: Postgres Validation Summary
+    needs:
+      - postgres-compose-validation
+    if: always() && needs.postgres-compose-validation.result != 'skipped'
+    with:
+      title: "# Postgres Validation Summary"
+      body: |
+        - event_name: `${{ github.event_name }}`
+        - mode: `${{ needs.postgres-compose-validation.outputs.mode }}`
+        - artifact_name: `${{ needs.postgres-compose-validation.outputs.artifact_name }}`
+        - artifact_dir: `${{ needs.postgres-compose-validation.outputs.artifact_dir }}`

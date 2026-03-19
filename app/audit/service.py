@@ -1,13 +1,15 @@
 import json
-import sqlite3
 from typing import Any, Optional
 
+from app.core.db import DBConnection
 from app.core.db import get_connection
+from app.core.db import insert_and_get_rowid
+from app.core.migrations import run_migrations
 
 
 CREATE_AUDIT_EVENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS audit_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     event_type TEXT NOT NULL,
     status TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -29,13 +31,12 @@ INSERT INTO audit_events (
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_AUDIT_EVENTS_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
 def insert_event(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     event_type: str,
     status: str,
     source: str,
@@ -43,7 +44,8 @@ def insert_event(
     payload: Optional[dict[str, Any]] = None,
 ) -> int:
     ensure_table(connection)
-    cursor = connection.execute(
+    event_id = insert_and_get_rowid(
+        connection,
         INSERT_AUDIT_EVENT_SQL,
         (
             event_type,
@@ -54,7 +56,7 @@ def insert_event(
         ),
     )
     connection.commit()
-    return int(cursor.lastrowid)
+    return event_id
 
 
 def log_event(

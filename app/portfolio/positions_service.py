@@ -1,4 +1,5 @@
-import sqlite3
+from app.core.db import DBConnection
+from app.core.migrations import run_migrations
 
 
 CREATE_POSITIONS_TABLE_SQL = """
@@ -35,17 +36,11 @@ ORDER BY id ASC;
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_POSITIONS_TABLE_SQL)
-    columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(positions);").fetchall()
-    }
-    if "realized_pnl" not in columns:
-        connection.execute("ALTER TABLE positions ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0;")
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
-def update_positions(connection: sqlite3.Connection) -> int:
+def update_positions(connection: DBConnection) -> int:
     fills = connection.execute(SELECT_FILLS_SQL).fetchall()
     if not fills:
         return 0

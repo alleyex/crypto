@@ -1,10 +1,12 @@
-import sqlite3
 from typing import Dict, Optional, Union
 
+from app.core.db import DBConnection
+from app.core.db import insert_and_get_rowid
+from app.core.migrations import run_migrations
 
 CREATE_SIGNALS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     strategy_name TEXT NOT NULL,
@@ -38,13 +40,12 @@ INSERT INTO signals (
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_SIGNALS_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
 def insert_signal(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     signal_type: str,
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
@@ -52,13 +53,14 @@ def insert_signal(
     short_ma: float = 0.0,
     long_ma: float = 0.0,
 ) -> Dict[str, Union[int, float, str]]:
-    cursor = connection.execute(
+    signal_id = insert_and_get_rowid(
+        connection,
         INSERT_SIGNAL_SQL,
         (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma),
     )
     connection.commit()
     return {
-        "id": cursor.lastrowid,
+        "id": signal_id,
         "symbol": symbol,
         "timeframe": timeframe,
         "strategy_name": strategy_name,
@@ -73,7 +75,7 @@ def average(values: list[float]) -> float:
 
 
 def generate_signal(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
     short_window: int = 3,

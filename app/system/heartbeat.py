@@ -1,9 +1,11 @@
 import json
-import sqlite3
 from typing import Any
 from typing import Optional
 
+from app.core.db import DBConnection
+from app.core.db import fetch_all_as_dicts
 from app.core.db import get_connection
+from app.core.migrations import run_migrations
 
 
 CREATE_RUNTIME_HEARTBEATS_TABLE_SQL = """
@@ -33,13 +35,12 @@ ON CONFLICT(component) DO UPDATE SET
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_RUNTIME_HEARTBEATS_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
 def upsert_heartbeat(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     component: str,
     status: str,
     message: str,
@@ -71,14 +72,13 @@ def record_heartbeat(
         connection.close()
 
 
-def get_heartbeats(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_heartbeats(connection: DBConnection) -> list[dict[str, Any]]:
     ensure_table(connection)
-    connection.row_factory = sqlite3.Row
-    rows = connection.execute(
+    return fetch_all_as_dicts(
+        connection,
         """
         SELECT component, status, message, payload_json, last_seen_at
         FROM runtime_heartbeats
         ORDER BY component ASC;
-        """
-    ).fetchall()
-    return [dict(row) for row in rows]
+        """,
+    )

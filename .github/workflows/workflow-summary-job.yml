@@ -1,0 +1,27 @@
+name: Workflow Summary Job
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: Markdown title line to write.
+        required: true
+        type: string
+      body:
+        description: Markdown body content to append under the title.
+        required: true
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write workflow summary
+        uses: ./.github/actions/write-workflow-summary
+        with:
+          title: ${{ inputs.title }}
+          body: ${{ inputs.body }}

@@ -1,0 +1,22 @@
+name: Write Workflow Summary
+description: Append a markdown summary block to GITHUB_STEP_SUMMARY.
+
+inputs:
+  title:
+    description: Markdown title line to write.
+    required: true
+  body:
+    description: Markdown body content to append under the title.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Append workflow summary
+      shell: bash
+      run: |
+        {
+          echo "${{ inputs.title }}"
+          echo
+          printf '%s\n' "${{ inputs.body }}"
+        } >> "$GITHUB_STEP_SUMMARY"

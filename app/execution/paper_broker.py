@@ -1,13 +1,15 @@
-import sqlite3
 import uuid
 from typing import Dict, Optional, Union
 
+from app.core.db import DBConnection
+from app.core.db import insert_and_get_rowid
+from app.core.migrations import run_migrations
 from app.data.candles_service import get_latest_close
 
 
 CREATE_ORDERS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     client_order_id TEXT NOT NULL UNIQUE,
     risk_event_id INTEGER UNIQUE,
     symbol TEXT NOT NULL,
@@ -24,7 +26,7 @@ CREATE TABLE IF NOT EXISTS orders (
 
 CREATE_FILLS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS fills (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     order_id INTEGER NOT NULL,
     symbol TEXT NOT NULL,
     side TEXT NOT NULL,
@@ -77,23 +79,12 @@ INSERT INTO fills (
 """
 
 
-def ensure_tables(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_ORDERS_TABLE_SQL)
-    connection.execute(CREATE_FILLS_TABLE_SQL)
-    columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(orders);").fetchall()
-    }
-    if "risk_event_id" not in columns:
-        connection.execute("ALTER TABLE orders ADD COLUMN risk_event_id INTEGER;")
-        connection.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_risk_event_id "
-            "ON orders(risk_event_id);"
-        )
-    connection.commit()
+def ensure_tables(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
 def execute_latest_risk(
-    connection: sqlite3.Connection,
+    connection: DBConnection,
     order_qty: float = 0.001,
 ) -> Optional[Dict[str, Union[float, str, int]]]:
     latest_risk = connection.execute(SELECT_LATEST_RISK_SQL).fetchone()
@@ -118,7 +109,8 @@ def execute_latest_risk(
         return {"risk_event_id": risk_event_id, "decision": "SKIPPED", "reason": "No candle data"}
 
     client_order_id = str(uuid.uuid4())
-    cursor = connection.execute(
+    order_id = insert_and_get_rowid(
+        connection,
         INSERT_ORDER_SQL,
         (
             client_order_id,
@@ -132,8 +124,8 @@ def execute_latest_risk(
             "FILLED",
         ),
     )
-    order_id = cursor.lastrowid
-    connection.execute(
+    insert_and_get_rowid(
+        connection,
         INSERT_FILL_SQL,
         (order_id, symbol, signal_type, order_qty, latest_close),
     )

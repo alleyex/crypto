@@ -1,11 +1,11 @@
-import sqlite3
-
+from app.core.db import DBConnection
+from app.core.migrations import run_migrations
 from app.data.candles_service import get_latest_close
 
 
 CREATE_PNL_SNAPSHOTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS pnl_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     symbol TEXT NOT NULL,
     qty REAL NOT NULL,
     avg_price REAL NOT NULL,
@@ -33,12 +33,11 @@ INSERT INTO pnl_snapshots (
 """
 
 
-def ensure_table(connection: sqlite3.Connection) -> None:
-    connection.execute(CREATE_PNL_SNAPSHOTS_TABLE_SQL)
-    connection.commit()
+def ensure_table(connection: DBConnection) -> None:
+    run_migrations(connection)
 
 
-def update_pnl_snapshots(connection: sqlite3.Connection) -> int:
+def update_pnl_snapshots(connection: DBConnection) -> int:
     positions = connection.execute(SELECT_POSITIONS_SQL).fetchall()
     if not positions:
         return 0

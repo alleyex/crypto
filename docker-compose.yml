@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: ${CRYPTO_POSTGRES_DB:-crypto}
+      POSTGRES_USER: ${CRYPTO_POSTGRES_USER:-crypto}
+      POSTGRES_PASSWORD: ${CRYPTO_POSTGRES_PASSWORD:-crypto}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CRYPTO_POSTGRES_USER:-crypto} -d ${CRYPTO_POSTGRES_DB:-crypto}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   api:
     build:
       context: .
@@ -11,6 +28,9 @@ services:
       CRYPTO_COOLDOWN_SECONDS: ${CRYPTO_COOLDOWN_SECONDS:-300}
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
     volumes:
       - ./storage:/app/storage
       - ./logs:/app/logs
@@ -29,7 +49,13 @@ services:
       CRYPTO_CANDLE_STALENESS_SECONDS: ${CRYPTO_CANDLE_STALENESS_SECONDS:-600}
       CRYPTO_MAX_DAILY_LOSS: ${CRYPTO_MAX_DAILY_LOSS:-50}
       CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
     volumes:
       - ./storage:/app/storage
       - ./logs:/app/logs
       - ./runtime:/app/runtime
+
+volumes:
+  postgres-data:
