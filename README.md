@@ -42,13 +42,27 @@ Current default risk rules:
 
 ## Setup
 
+Recommended local Python baseline:
+
+- Python `3.12`
+- OpenSSL-backed build (not LibreSSL)
+
 Create and use the virtual environment:
 
 ```bash
 cd /Users/alleyex/Projects/crypto
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+To verify the interpreter is using OpenSSL:
+
+```bash
+python - <<'PY'
+import ssl
+print(ssl.OPENSSL_VERSION)
+PY
 ```
 
 Optional runtime configuration:
