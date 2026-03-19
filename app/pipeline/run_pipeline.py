@@ -4,19 +4,9 @@ from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_label
 from app.core.migrations import run_migrations
-from app.data.binance_client import fetch_klines
-from app.data.candles_service import ensure_table as ensure_candles_table
-from app.data.candles_service import save_klines
-from app.execution.paper_broker import ensure_tables as ensure_execution_tables
-from app.execution.paper_broker import execute_latest_risk
-from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
-from app.portfolio.pnl_service import update_pnl_snapshots
-from app.portfolio.positions_service import ensure_table as ensure_positions_table
-from app.portfolio.positions_service import update_positions
-from app.risk.risk_service import ensure_table as ensure_risk_table
-from app.risk.risk_service import evaluate_latest_signal
-from app.strategy.ma_cross import ensure_table as ensure_signals_table
-from app.strategy.ma_cross import generate_signal
+from app.pipeline.execution_job import run_execution_job
+from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.strategy_job import run_strategy_job
 from app.system.heartbeat import record_heartbeat
 from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
@@ -132,46 +122,21 @@ def run_pipeline_collect() -> Dict[str, Any]:
         current_step = "save_klines"
         try:
             run_migrations(connection)
-            ensure_candles_table(connection)
-            klines = fetch_klines()
-            saved_klines = save_klines(connection, klines)
-            result["steps"].append({"step": "save_klines", "saved_klines": saved_klines})
+            result["steps"].append(run_market_data_job(connection))
 
             current_step = "generate_signal"
-            ensure_signals_table(connection)
-            signal_result = generate_signal(connection)
-            if signal_result is None:
-                result["steps"].append(
-                    {"step": "generate_signal", "status": "skipped", "reason": "Not enough candle data"}
+            strategy_job_result = run_strategy_job(connection)
+            result["steps"].extend(strategy_job_result["steps"])
+            if strategy_job_result.get("status") == "completed":
+                return _finalize_result(
+                    result,
+                    "completed",
+                    str(strategy_job_result["terminal_message"]),
                 )
-                return _finalize_result(result, "completed", "Pipeline run completed with skipped signal generation.")
-            result["steps"].append({"step": "generate_signal", **signal_result})
-
-            current_step = "evaluate_risk"
-            ensure_positions_table(connection)
-            ensure_risk_table(connection)
-            risk_result = evaluate_latest_signal(connection)
-            if risk_result is None:
-                result["steps"].append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
-                return _finalize_result(result, "completed", "Pipeline run completed with skipped risk evaluation.")
-            result["steps"].append({"step": "evaluate_risk", **risk_result})
 
             current_step = "paper_execute"
-            ensure_execution_tables(connection)
-            execution_result = execute_latest_risk(connection)
-            if execution_result is None:
-                result["steps"].append({"step": "paper_execute", "status": "skipped", "reason": "No risk event found"})
-            else:
-                result["steps"].append({"step": "paper_execute", **execution_result})
-
-            current_step = "update_positions"
-            updated_positions = update_positions(connection)
-            result["steps"].append({"step": "update_positions", "updated_symbols": updated_positions})
-
-            current_step = "update_pnl"
-            ensure_pnl_table(connection)
-            snapshot_count = update_pnl_snapshots(connection)
-            result["steps"].append({"step": "update_pnl", "snapshot_count": snapshot_count})
+            execution_job_result = run_execution_job(connection)
+            result["steps"].extend(execution_job_result["steps"])
         except Exception as exc:
             return _pipeline_failure_result(result, current_step, exc)
     finally:

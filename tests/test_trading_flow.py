@@ -49,6 +49,9 @@ from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
 from app.execution.paper_broker import execute_latest_risk
+from app.pipeline.execution_job import run_execution_job
+from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -1651,7 +1654,7 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
-        "app.pipeline.run_pipeline.fetch_klines",
+        "app.pipeline.market_data_job.fetch_klines",
         lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
     )
 
@@ -1710,7 +1713,7 @@ def test_run_pipeline_collect_returns_failed_result_when_fetch_klines_errors(mon
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
-        "app.pipeline.run_pipeline.fetch_klines",
+        "app.pipeline.market_data_job.fetch_klines",
         lambda: (_ for _ in ()).throw(RuntimeError("Binance API unavailable")),
     )
 
@@ -2353,7 +2356,7 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
-        "app.pipeline.run_pipeline.fetch_klines",
+        "app.pipeline.market_data_job.fetch_klines",
         lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
@@ -2376,6 +2379,25 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
     finally:
         connection.close()
     assert any(item["component"] == "pipeline" and item["status"] == "completed" for item in heartbeats)
+
+
+def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        monkeypatch.setattr(
+            "app.pipeline.market_data_job.fetch_klines",
+            lambda: [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])],
+        )
+
+        market_result = run_market_data_job(connection)
+        strategy_result = run_strategy_job(connection)
+        execution_result = run_execution_job(connection)
+
+        assert market_result == {"step": "save_klines", "saved_klines": 5}
+        assert [step["step"] for step in strategy_result["steps"]] == ["generate_signal", "evaluate_risk"]
+        assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl"]
+    finally:
+        connection.close()
 
 
 def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
