@@ -2266,6 +2266,8 @@ def test_admin_page_is_served() -> None:
     assert 'data-action="scheduler-preset-top1"' in response.text
     assert 'data-action="scheduler-preset-top2"' in response.text
     assert 'data-action="scheduler-preset-all"' in response.text
+    assert 'data-action="scheduler-reset-priorities"' in response.text
+    assert 'Reset priorities' in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'data-promote-strategy="' in response.text

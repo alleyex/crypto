@@ -518,6 +518,7 @@ __STRATEGY_OPTIONS__
             <button class="secondary" type="button" data-action="scheduler-preset-top1">Apply top-1</button>
             <button class="secondary" type="button" data-action="scheduler-preset-top2">Apply top-2</button>
             <button class="secondary" type="button" data-action="scheduler-preset-all">All enabled</button>
+            <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset priorities</button>
           </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
@@ -1297,6 +1298,31 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         await refreshAll();
       }
 
+      async function resetStrategyPriorities() {
+        const payload = collectSchedulerStrategyPayload();
+        const strategyEntries = Array.isArray(window.__schedulerStrategyStatus?.strategy_entries)
+          ? window.__schedulerStrategyStatus.strategy_entries
+          : [];
+        const orderedNames = strategyEntries.length
+          ? strategyEntries.map((entry) => entry.strategy_name).filter(Boolean)
+          : Array.from(
+              new Set([
+                ...(payload.strategy_names || []),
+                ...(payload.disabled_strategy_names || []),
+                ...Object.keys(payload.strategy_priorities || {}),
+              ])
+            );
+        payload.strategy_priorities = Object.fromEntries(
+          orderedNames.map((strategyName, index) => [strategyName, index])
+        );
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -1443,6 +1469,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           } else if (type === "scheduler-preset-all") {
             await applySchedulerPreset(null);
+            return;
+          } else if (type === "scheduler-reset-priorities") {
+            await resetStrategyPriorities();
             return;
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
