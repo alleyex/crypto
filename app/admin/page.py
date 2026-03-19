@@ -381,7 +381,7 @@ __STRATEGY_OPTIONS__
           <p>Pause or resume automatic execution without touching launchd state directly.</p>
           <div class="inline-controls">
             <label for="scheduler-strategy-select">Active Strategy</label>
-            <select id="scheduler-strategy-select">
+            <select id="scheduler-strategy-select" multiple size="2">
 __STRATEGY_OPTIONS__
             </select>
             <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy</button>
@@ -538,7 +538,7 @@ __STRATEGY_OPTIONS__
         el("scheduler-status").className = `value ${statusClass(scheduler.status)}`;
         const schedulerStrategy = window.__schedulerStrategyStatus || null;
         el("scheduler-detail").textContent = schedulerStrategy
-          ? `active strategy: ${schedulerStrategy.strategy_name}`
+          ? `active strategies: ${(schedulerStrategy.strategy_names || [schedulerStrategy.strategy_name]).join(", ")}`
           : "Scheduler strategy not loaded yet.";
 
         const killSwitch = health.checks.kill_switch;
@@ -763,8 +763,10 @@ __STRATEGY_OPTIONS__
           strategySelect.dataset.initialized = "true";
         }
         const schedulerStrategySelect = el("scheduler-strategy-select");
-        if (schedulerStrategySelect && schedulerStrategy?.strategy_name) {
-          schedulerStrategySelect.value = schedulerStrategy.strategy_name;
+        if (schedulerStrategySelect && schedulerStrategy?.strategy_names) {
+          Array.from(schedulerStrategySelect.options).forEach((option) => {
+            option.selected = schedulerStrategy.strategy_names.includes(option.value);
+          });
         }
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
@@ -816,10 +818,15 @@ __STRATEGY_OPTIONS__
           } else if (type === "scheduler-stop") {
             result = await api("/scheduler/stop", { method: "POST" });
           } else if (type === "scheduler-strategy-save") {
+            const selectedSchedulerStrategies = Array.from(
+              el("scheduler-strategy-select")?.selectedOptions || []
+            ).map((option) => option.value);
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify({
-                strategy_name: el("scheduler-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
+                strategy_names: selectedSchedulerStrategies.length
+                  ? selectedSchedulerStrategies
+                  : ["__DEFAULT_STRATEGY_NAME__"],
               }),
             });
           } else if (type === "kill-enable") {

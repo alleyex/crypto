@@ -55,6 +55,7 @@ from app.execution.paper_broker import execute_latest_risk
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
+from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -2150,26 +2151,29 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
         "app.api.main.get_strategy_status",
         lambda: {
             "strategy_name": "ma_cross",
+            "strategy_names": ["ma_cross", "momentum_3bar"],
             "default_strategy": "ma_cross",
             "strategy_file": "runtime/scheduler.strategy",
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
     monkeypatch.setattr(
-        "app.api.main.set_active_strategy",
-        lambda strategy_name: {
-            "strategy_name": strategy_name,
+        "app.api.main.set_active_strategies",
+        lambda strategy_names: {
+            "strategy_name": strategy_names[0],
+            "strategy_names": strategy_names,
             "strategy_file": "runtime/scheduler.strategy",
         },
     )
 
     status_response = client.get("/scheduler/strategy")
-    update_response = client.post("/scheduler/strategy", json={"strategy_name": "momentum_3bar"})
+    update_response = client.post("/scheduler/strategy", json={"strategy_names": ["ma_cross", "momentum_3bar"]})
 
     assert status_response.status_code == 200
     assert status_response.json()["strategy_name"] == "ma_cross"
+    assert status_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
     assert update_response.status_code == 200
-    assert update_response.json()["strategy_name"] == "momentum_3bar"
+    assert update_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
 
 
 def test_favicon_returns_no_content() -> None:
@@ -2631,6 +2635,32 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
         connection.close()
 
 
+def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        monkeypatch.setattr(
+            "app.pipeline.strategy_job.run_strategy_job",
+            lambda conn, strategy_name="ma_cross": {
+                "status": "ok",
+                "steps": [
+                    {"step": "generate_signal", "strategy_name": strategy_name, "signal_type": "BUY"},
+                    {"step": "evaluate_risk", "strategy_name": strategy_name, "decision": "APPROVED"},
+                ],
+            },
+        )
+
+        result = run_strategy_jobs(connection, ["ma_cross", "momentum_3bar"])
+
+        assert result["status"] == "ok"
+        assert result["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert [step["strategy_name"] for step in result["steps"] if step["step"] == "generate_signal"] == [
+            "ma_cross",
+            "momentum_3bar",
+        ]
+    finally:
+        connection.close()
+
+
 def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
     outputs: list[str] = []
 
@@ -2724,15 +2754,18 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_active_strategy", lambda: "momentum_3bar")
+    monkeypatch.setattr("app.scheduler.control.read_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
-        "app.scheduler.runner.run_strategy_job",
-        lambda connection, strategy_name="ma_cross": {
+        "app.scheduler.runner.run_strategy_jobs",
+        lambda connection, strategy_names=None: {
             "status": "ok",
+            "strategy_names": strategy_names or ["ma_cross"],
             "steps": [
-                {"step": "generate_signal", "signal_type": "BUY", "strategy_name": strategy_name},
-                {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": strategy_name},
+                {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross"},
+                {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross"},
+                {"step": "generate_signal", "signal_type": "SELL", "strategy_name": "momentum_3bar"},
+                {"step": "evaluate_risk", "decision": "REJECTED", "strategy_name": "momentum_3bar"},
             ],
         },
     )
@@ -2746,9 +2779,9 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
     assert "mode=strategy-only" in log_text
-    assert "strategy=momentum_3bar" in log_text
-    assert "signal=BUY" in log_text
-    assert "risk=APPROVED" in log_text
+    assert "strategies=ma_cross,momentum_3bar" in log_text
+    assert "signal=SELL" in log_text
+    assert "risk=REJECTED" in log_text
 
     connection = sqlite3.connect(db_path)
     try:

@@ -56,35 +56,68 @@ def get_stop_status() -> Dict[str, Union[str, bool]]:
 
 
 def read_active_strategy() -> str:
+    return read_active_strategies()[0]
+
+
+def read_active_strategies() -> list[str]:
     if not STRATEGY_FILE.exists():
-        return DEFAULT_STRATEGY_NAME
-    strategy_name = STRATEGY_FILE.read_text(encoding="utf-8").strip()
-    if not strategy_name:
-        return DEFAULT_STRATEGY_NAME
-    if strategy_name not in list_registered_strategies():
-        return DEFAULT_STRATEGY_NAME
-    return strategy_name
+        return [DEFAULT_STRATEGY_NAME]
+
+    configured_names = [
+        item.strip()
+        for item in STRATEGY_FILE.read_text(encoding="utf-8").splitlines()
+        if item.strip()
+    ]
+    if not configured_names:
+        return [DEFAULT_STRATEGY_NAME]
+
+    allowed_names = set(list_registered_strategies())
+    normalized_names = [name for name in dict.fromkeys(configured_names) if name in allowed_names]
+    if not normalized_names:
+        return [DEFAULT_STRATEGY_NAME]
+    return normalized_names
 
 
 def set_active_strategy(strategy_name: str) -> Dict[str, str]:
-    if strategy_name not in list_registered_strategies():
-        raise ValueError(f"Unknown strategy: {strategy_name}")
+    result = set_active_strategies([strategy_name])
+    return {"strategy_name": result["strategy_name"], "strategy_file": result["strategy_file"]}
+
+
+def set_active_strategies(strategy_names: list[str]) -> Dict[str, Union[str, list[str]]]:
+    if not strategy_names:
+        raise ValueError("At least one strategy must be provided.")
+
+    unique_names = list(dict.fromkeys(strategy_names))
+    allowed_names = set(list_registered_strategies())
+    invalid_names = [name for name in unique_names if name not in allowed_names]
+    if invalid_names:
+        raise ValueError(f"Unknown strategies: {', '.join(invalid_names)}")
 
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    STRATEGY_FILE.write_text(f"{strategy_name}\n", encoding="utf-8")
+    STRATEGY_FILE.write_text("\n".join(unique_names) + "\n", encoding="utf-8")
     log_event(
         event_type="scheduler_control",
         status="updated",
         source="scheduler_control",
-        message="Scheduler active strategy updated.",
-        payload={"strategy_name": strategy_name, "strategy_file": str(STRATEGY_FILE)},
+        message="Scheduler active strategies updated.",
+        payload={
+            "strategy_name": unique_names[0],
+            "strategy_names": unique_names,
+            "strategy_file": str(STRATEGY_FILE),
+        },
     )
-    return {"strategy_name": strategy_name, "strategy_file": str(STRATEGY_FILE)}
+    return {
+        "strategy_name": unique_names[0],
+        "strategy_names": unique_names,
+        "strategy_file": str(STRATEGY_FILE),
+    }
 
 
 def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
+    active_strategy_names = read_active_strategies()
     return {
-        "strategy_name": read_active_strategy(),
+        "strategy_name": active_strategy_names[0],
+        "strategy_names": active_strategy_names,
         "default_strategy": DEFAULT_STRATEGY_NAME,
         "strategy_file": str(STRATEGY_FILE),
         "available_strategies": list_registered_strategies(),

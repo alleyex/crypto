@@ -50,3 +50,23 @@ def run_strategy_job(
             {"step": "evaluate_risk", **risk_result},
         ],
     }
+
+
+def run_strategy_jobs(
+    connection: DBConnection,
+    strategy_names: list[str],
+) -> Dict[str, Any]:
+    normalized_names = list(dict.fromkeys(strategy_names or [DEFAULT_STRATEGY_NAME]))
+    results = [run_strategy_job(connection, strategy_name=name) for name in normalized_names]
+
+    if any(result.get("status") == "ok" for result in results):
+        status = "ok"
+    else:
+        status = "completed"
+
+    return {
+        "status": status,
+        "strategy_names": normalized_names,
+        "steps": [step for result in results for step in result.get("steps", [])],
+        "results": results,
+    }

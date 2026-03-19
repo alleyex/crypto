@@ -45,6 +45,7 @@ from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
 from app.scheduler.control import set_active_strategy
+from app.scheduler.control import set_active_strategies
 from app.scheduler.control import set_stop_flag
 from app.scheduler.runner import LOG_DIR
 from app.scheduler.runner import LOG_FILE
@@ -307,6 +308,7 @@ class PipelineRunRequest(BaseModel):
 
 class SchedulerStrategyRequest(BaseModel):
     strategy_name: str = DEFAULT_STRATEGY_NAME
+    strategy_names: Optional[List[str]] = None
 
 
 @app.get("/health")
@@ -492,6 +494,8 @@ def scheduler_strategy_status() -> dict[str, Any]:
 
 @app.post("/scheduler/strategy")
 def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, Any]:
+    if payload.strategy_names is not None:
+        return set_active_strategies(payload.strategy_names)
     return set_active_strategy(payload.strategy_name)
 
 

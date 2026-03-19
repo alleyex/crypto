@@ -6,6 +6,7 @@ from typing import Optional
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
+from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.migrations import run_migrations
@@ -83,7 +84,11 @@ def _scheduler_component_name(mode: str) -> str:
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
 
-def _run_scheduled_job(mode: str, strategy_name: str = DEFAULT_STRATEGY_NAME) -> dict:
+def _run_scheduled_job(
+    mode: str,
+    strategy_name: str = DEFAULT_STRATEGY_NAME,
+    strategy_names: Optional[list[str]] = None,
+) -> dict:
     if mode == "pipeline":
         return run_pipeline_collect(strategy_name=strategy_name)
 
@@ -93,7 +98,7 @@ def _run_scheduled_job(mode: str, strategy_name: str = DEFAULT_STRATEGY_NAME) ->
         if mode == "market-data-only":
             return {"steps": [run_market_data_job(connection)]}
         if mode == "strategy-only":
-            return {"steps": list(run_strategy_job(connection, strategy_name=strategy_name)["steps"])}
+            return run_strategy_jobs(connection, strategy_names or [strategy_name])
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection)["steps"])}
     finally:
@@ -103,14 +108,31 @@ def _run_scheduled_job(mode: str, strategy_name: str = DEFAULT_STRATEGY_NAME) ->
 
 
 def _resolve_active_strategy(mode: str, fallback_strategy_name: str) -> str:
-    if mode not in ("pipeline", "strategy-only"):
-        return fallback_strategy_name
-    try:
-        from app.scheduler.control import read_active_strategy
+    return _resolve_active_strategies(mode, fallback_strategy_name)[0]
 
-        return read_active_strategy()
+
+def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[str]:
+    if mode not in ("pipeline", "strategy-only"):
+        return [fallback_strategy_name]
+    try:
+        from app.scheduler.control import read_active_strategies
+
+        return read_active_strategies()
     except Exception:
-        return fallback_strategy_name
+        return [fallback_strategy_name]
+
+
+def _format_strategy_log_label(strategy_names: list[str]) -> str:
+    if len(strategy_names) == 1:
+        return f"strategy={strategy_names[0]}"
+    return "strategies=" + ",".join(strategy_names)
+
+
+def _summarize_strategy_payload(strategy_names: list[str]) -> dict:
+    return {
+        "strategy_name": strategy_names[0],
+        "strategy_names": strategy_names,
+    }
 
 
 def stop_requested() -> bool:
@@ -172,23 +194,25 @@ def run_scheduler(
 
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
-        active_strategy_name = _resolve_active_strategy(mode, strategy_name)
+        active_strategy_names = _resolve_active_strategies(mode, strategy_name)
+        active_strategy_name = active_strategy_names[0]
         record_heartbeat(
             component=component,
             status="running",
             message=f"{component} loop started.",
-            payload={"run_count": run_count, "mode": mode, "strategy_name": active_strategy_name},
+            payload={"run_count": run_count, "mode": mode, **_summarize_strategy_payload(active_strategy_names)},
         )
-        result = _run_scheduled_job(mode, strategy_name=active_strategy_name)
+        result = _run_scheduled_job(mode, strategy_name=active_strategy_name, strategy_names=active_strategy_names)
         summary = _summarize_result(result)
-        log_line = f"[{started_at}] run={run_count} mode={mode} strategy={active_strategy_name} {summary}"
+        strategy_label = _format_strategy_log_label(active_strategy_names)
+        log_line = f"[{started_at}] run={run_count} mode={mode} {strategy_label} {summary}"
         print(log_line)
         _write_log(log_line, mode)
         record_heartbeat(
             component=component,
             status="ok",
             message=f"{component} loop completed.",
-            payload={"run_count": run_count, "summary": summary, "mode": mode, "strategy_name": active_strategy_name},
+            payload={"run_count": run_count, "summary": summary, "mode": mode, **_summarize_strategy_payload(active_strategy_names)},
         )
         _record_soak_snapshot()
 
