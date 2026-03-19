@@ -172,8 +172,12 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ma_cross"]["latest_signal"] is not None
         assert by_name["ma_cross"]["latest_risk"] is not None
         assert by_name["ma_cross"]["latest_order"] is not None
+        assert by_name["ma_cross"]["latest_fill"] is not None
+        assert by_name["ma_cross"]["filled_order_count"] == 1
         assert by_name["momentum_3bar"]["latest_signal"] is not None
         assert by_name["momentum_3bar"]["latest_risk"] is not None
+        assert by_name["momentum_3bar"]["latest_fill"] is None
+        assert by_name["momentum_3bar"]["filled_order_count"] == 0
     finally:
         connection.close()
 
@@ -2188,6 +2192,8 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "latest_signal": {"signal_type": "BUY"},
                 "latest_risk": {"decision": "APPROVED"},
                 "latest_order": {"status": "FILLED"},
+                "latest_fill": {"side": "BUY"},
+                "filled_order_count": 1,
                 "has_activity": True,
             },
             {
@@ -2195,6 +2201,8 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "latest_signal": None,
                 "latest_risk": None,
                 "latest_order": None,
+                "latest_fill": None,
+                "filled_order_count": 0,
                 "has_activity": False,
             },
         ],
@@ -2212,6 +2220,8 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     payload = response.json()
     assert payload[0]["strategy_name"] == "ma_cross"
     assert payload[0]["latest_risk"]["decision"] == "APPROVED"
+    assert payload[0]["latest_fill"]["side"] == "BUY"
+    assert payload[0]["filled_order_count"] == 1
     assert payload[1]["strategy_name"] == "momentum_3bar"
 
 

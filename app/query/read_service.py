@@ -177,12 +177,17 @@ def get_strategy_activity_summary(
     signals = get_signals(connection, limit=per_table_limit)
     risk_events = get_risk_events(connection, limit=per_table_limit)
     orders = get_orders(connection, limit=per_table_limit)
+    fills = get_fills(connection, limit=per_table_limit)
 
     summaries: list[dict[str, Any]] = []
     for strategy_name in list_registered_strategies():
         latest_signal = next((item for item in signals if item["strategy_name"] == strategy_name), None)
         latest_risk = next((item for item in risk_events if item["strategy_name"] == strategy_name), None)
         latest_order = next((item for item in orders if item["strategy_name"] == strategy_name), None)
+        strategy_orders = [item for item in orders if item["strategy_name"] == strategy_name]
+        order_ids = {item["id"] for item in strategy_orders}
+        latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
+        filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
 
         summaries.append(
             {
@@ -190,7 +195,11 @@ def get_strategy_activity_summary(
                 "latest_signal": latest_signal,
                 "latest_risk": latest_risk,
                 "latest_order": latest_order,
-                "has_activity": any(item is not None for item in (latest_signal, latest_risk, latest_order)),
+                "latest_fill": latest_fill,
+                "filled_order_count": filled_order_count,
+                "has_activity": any(
+                    item is not None for item in (latest_signal, latest_risk, latest_order, latest_fill)
+                ),
             }
         )
 
