@@ -1261,6 +1261,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         board.innerHTML = schedulerEvents.map((event, index) => {
           const action = event.payload?.action || "unknown";
           const preset = event.payload?.preset || "";
+          const replayButton = preset && (action.startsWith("priority_preset:") || action.startsWith("limit_preset:"))
+            ? `<button type="button" class="secondary" data-replay-scheduler-preset="${preset}" data-replay-scheduler-action="${action}">Replay Preset</button>`
+            : "";
           const strategyNames = event.payload?.strategy_names || event.payload?.disabled_strategy_names || [];
           const strategyLabel = Array.isArray(strategyNames) && strategyNames.length
             ? strategyNames.join(", ")
@@ -1275,7 +1278,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="trade-row">
               <div><strong>Action</strong>${action}${index === 0 ? ' <span class="ok">LATEST</span>' : ""}<br>${event.created_at}</div>
               <div><strong>Status</strong><span class="${statusClassName}">${event.status}</span><br>${event.source}</div>
-              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}<br><button type="button" class="secondary" data-copy-scheduler-action="${action}" data-copy-scheduler-preset="${preset}">Copy Action</button></div>
+              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}<br><button type="button" class="secondary" data-copy-scheduler-action="${action}" data-copy-scheduler-preset="${preset}">Copy Action</button> ${replayButton}</div>
             </div>
           `;
         }).join("");
@@ -1652,6 +1655,29 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("scheduler-control-board")?.addEventListener("click", async (event) => {
+        const replayButton = event.target.closest("[data-replay-scheduler-preset]");
+        if (replayButton) {
+          const preset = replayButton.dataset.replaySchedulerPreset || "";
+          const action = replayButton.dataset.replaySchedulerAction || "";
+          try {
+            if (action.startsWith("priority_preset:")) {
+              await api("/scheduler/strategy/preset", {
+                method: "POST",
+                body: JSON.stringify({ preset }),
+              });
+            } else if (action.startsWith("limit_preset:")) {
+              await api("/scheduler/strategy/limit-preset", {
+                method: "POST",
+                body: JSON.stringify({ preset }),
+              });
+            }
+            el("scheduler-message").textContent = `Replayed scheduler preset: ${action}`;
+            await refreshAll();
+          } catch (error) {
+            el("scheduler-message").textContent = `Failed to replay scheduler preset: ${error.message}`;
+          }
+          return;
+        }
         const button = event.target.closest("[data-copy-scheduler-action]");
         if (!button) return;
         const action = button.dataset.copySchedulerAction || "unknown";
