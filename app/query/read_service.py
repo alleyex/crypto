@@ -227,6 +227,27 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         ORDER BY job_type ASC, status ASC;
         """,
     )
+    attempt_rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT
+            job_type,
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
+        FROM job_queue
+        GROUP BY job_type
+        ORDER BY job_type ASC;
+        """,
+    )
+    overall_attempt_row = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
+        FROM job_queue;
+        """,
+    )[0]
     job_type_counts: dict[str, dict[str, int]] = {
         "market_data": {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
         "strategy": {"queued": 0, "leased": 0, "completed": 0, "failed": 0, "total": 0},
@@ -242,16 +263,38 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         )
         entry[status] = job_count
         entry["total"] += job_count
+    attempt_map = {str(row["job_type"]): row for row in attempt_rows}
+    for job_type, entry in job_type_counts.items():
+        total = int(entry["total"])
+        completed = int(entry["completed"])
+        failed = int(entry["failed"])
+        attempts = attempt_map.get(job_type, {})
+        entry["success_ratio"] = round(completed / total, 4) if total else 0.0
+        entry["failure_ratio"] = round(failed / total, 4) if total else 0.0
+        entry["avg_attempt_count"] = round(float(attempts.get("avg_attempt_count") or 0.0), 2)
+        entry["max_attempt_count"] = int(attempts.get("max_attempt_count") or 0)
+    retry_jobs = [job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1]
+    total_job_count = sum(counts.values())
+    completed_count = counts.get("completed", 0)
+    failed_count = counts.get("failed", 0)
     return {
         "counts": {
             "queued": counts.get("queued", 0),
             "leased": counts.get("leased", 0),
             "completed": counts.get("completed", 0),
             "failed": counts.get("failed", 0),
-            "total": sum(counts.values()),
+            "total": total_job_count,
+        },
+        "metrics": {
+            "success_ratio": round(completed_count / total_job_count, 4) if total_job_count else 0.0,
+            "failure_ratio": round(failed_count / total_job_count, 4) if total_job_count else 0.0,
+            "avg_attempt_count": round(float(overall_attempt_row.get("avg_attempt_count") or 0.0), 2),
+            "max_attempt_count": int(overall_attempt_row.get("max_attempt_count") or 0),
+            "retry_job_count": len(retry_jobs),
         },
         "job_type_counts": job_type_counts,
         "failed_jobs": [job for job in latest_jobs if job["status"] == "failed"],
+        "retry_jobs": retry_jobs,
         "latest_jobs": latest_jobs,
     }
 

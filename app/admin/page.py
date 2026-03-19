@@ -1552,6 +1552,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const board = el("queue-board");
         if (!board) return;
         const counts = queueSummary?.counts || {};
+        const metrics = queueSummary?.metrics || {};
         const byType = queueSummary?.job_type_counts || {};
         const jobs = Array.isArray(queueSummary?.latest_jobs) ? queueSummary.latest_jobs : [];
         const filteredJobs = jobs.filter((job) => {
@@ -1565,10 +1566,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `queued=${counts.queued ?? 0}`,
           `leased=${counts.leased ?? 0}`,
           `failed=${counts.failed ?? 0}`,
+          `fail%=${Number(metrics.failure_ratio || 0) * 100}%`,
+          `avg attempts=${metrics.avg_attempt_count ?? 0}`,
+          `retries=${metrics.retry_job_count ?? 0}`,
         ];
         const typeBits = ["market_data", "strategy", "execution"].map((jobType) => {
           const item = byType[jobType] || {};
-          return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0}`;
+          return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0} fail%=${Number(item.failure_ratio || 0) * 100}% avg=${item.avg_attempt_count ?? 0}`;
         });
         if (filteredJobs.length === 0) {
           board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>No queue jobs match the current filter.</div>`;

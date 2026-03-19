@@ -75,6 +75,7 @@ from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_fills
 from app.query.read_service import get_audit_events
 from app.query.read_service import get_job_queue_jobs
+from app.query.read_service import get_job_queue_summary
 from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
@@ -2533,6 +2534,9 @@ def test_admin_page_is_served() -> None:
     assert 'data-action="queue-drain-execution"' in response.text
     assert 'data-action="queue-retry-strategy"' in response.text
     assert 'data-action="queue-retry-execution"' in response.text
+    assert "avg attempts=" in response.text
+    assert "fail%=" in response.text
+    assert "retries=" in response.text
     assert "Enqueue Strategy Job" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
@@ -2652,12 +2656,50 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
         "app.api.main.get_job_queue_summary",
         lambda connection: {
             "counts": {"queued": 2, "leased": 1, "completed": 4, "failed": 1, "total": 8},
+            "metrics": {
+                "success_ratio": 0.5,
+                "failure_ratio": 0.125,
+                "avg_attempt_count": 1.38,
+                "max_attempt_count": 3,
+                "retry_job_count": 2,
+            },
             "job_type_counts": {
-                "market_data": {"queued": 0, "leased": 0, "completed": 1, "failed": 0, "total": 1},
-                "strategy": {"queued": 2, "leased": 1, "completed": 2, "failed": 1, "total": 6},
-                "execution": {"queued": 0, "leased": 0, "completed": 1, "failed": 0, "total": 1},
+                "market_data": {
+                    "queued": 0,
+                    "leased": 0,
+                    "completed": 1,
+                    "failed": 0,
+                    "total": 1,
+                    "success_ratio": 1.0,
+                    "failure_ratio": 0.0,
+                    "avg_attempt_count": 1.0,
+                    "max_attempt_count": 1,
+                },
+                "strategy": {
+                    "queued": 2,
+                    "leased": 1,
+                    "completed": 2,
+                    "failed": 1,
+                    "total": 6,
+                    "success_ratio": 0.3333,
+                    "failure_ratio": 0.1667,
+                    "avg_attempt_count": 1.67,
+                    "max_attempt_count": 3,
+                },
+                "execution": {
+                    "queued": 0,
+                    "leased": 0,
+                    "completed": 1,
+                    "failed": 0,
+                    "total": 1,
+                    "success_ratio": 1.0,
+                    "failure_ratio": 0.0,
+                    "avg_attempt_count": 1.0,
+                    "max_attempt_count": 1,
+                },
             },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
+            "retry_jobs": [{"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2}],
             "latest_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
         },
     )
@@ -2666,9 +2708,64 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["counts"]["queued"] == 2
+    assert response.json()["metrics"]["retry_job_count"] == 2
+    assert response.json()["metrics"]["max_attempt_count"] == 3
     assert response.json()["job_type_counts"]["strategy"]["failed"] == 1
+    assert response.json()["job_type_counts"]["strategy"]["failure_ratio"] == 0.1667
     assert response.json()["failed_jobs"][0]["id"] == 9
+    assert response.json()["retry_jobs"][0]["attempt_count"] == 2
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
+
+
+def test_get_job_queue_summary_includes_quality_metrics() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        market_job_id = enqueue_job(connection, "market_data", payload={"symbol_names": ["BTCUSDT"]})
+        strategy_job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        execution_job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["ETHUSDT"]})
+
+        leased_market_job = lease_next_job(connection, job_type="market_data")
+        assert leased_market_job is not None
+        complete_job(connection, market_job_id, result={"saved_klines": 5})
+
+        leased_strategy_job = lease_next_job(connection, job_type="strategy")
+        assert leased_strategy_job is not None
+        fail_job(connection, strategy_job_id, "strategy failed")
+        retried_strategy_job = retry_job(connection, strategy_job_id)
+        assert retried_strategy_job["attempt_count"] == 1
+
+        leased_retried_strategy_job = lease_next_job(connection, job_type="strategy")
+        assert leased_retried_strategy_job is not None
+        fail_job(connection, strategy_job_id, "strategy failed again")
+
+        summary = get_job_queue_summary(connection)
+
+        assert summary["counts"] == {
+            "queued": 1,
+            "leased": 0,
+            "completed": 1,
+            "failed": 1,
+            "total": 3,
+        }
+        assert summary["metrics"] == {
+            "success_ratio": 0.3333,
+            "failure_ratio": 0.3333,
+            "avg_attempt_count": 1.0,
+            "max_attempt_count": 2,
+            "retry_job_count": 1,
+        }
+        assert summary["job_type_counts"]["market_data"]["success_ratio"] == 1.0
+        assert summary["job_type_counts"]["strategy"]["failure_ratio"] == 1.0
+        assert summary["job_type_counts"]["strategy"]["avg_attempt_count"] == 2.0
+        assert summary["job_type_counts"]["strategy"]["max_attempt_count"] == 2
+        assert summary["job_type_counts"]["execution"]["total"] == 1
+        assert summary["retry_jobs"][0]["id"] == strategy_job_id
+        assert summary["retry_jobs"][0]["attempt_count"] == 2
+        assert summary["failed_jobs"][0]["id"] == strategy_job_id
+        assert execution_job_id in [job["id"] for job in summary["latest_jobs"]]
+    finally:
+        connection.close()
 
 
 def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
