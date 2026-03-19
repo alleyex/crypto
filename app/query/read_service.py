@@ -253,3 +253,52 @@ def get_strategy_activity_summary(
         )
 
     return summaries
+
+
+def get_strategy_closed_trades(
+    connection: DBConnection,
+    limit: int = 20,
+    per_table_limit: int = 200,
+) -> list[dict[str, Any]]:
+    orders = get_orders(connection, limit=per_table_limit)
+    filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
+    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    closed_trades: list[dict[str, Any]] = []
+
+    for order in filled_orders:
+        strategy_name = str(order["strategy_name"])
+        symbol = str(order["symbol"])
+        key = (strategy_name, symbol)
+        position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
+
+        qty = float(order["qty"])
+        price = float(order["price"])
+        if order["side"] == "BUY":
+            position["qty"] += qty
+            position["cost"] += qty * price
+            continue
+
+        if order["side"] != "SELL" or position["qty"] <= 0:
+            continue
+
+        close_qty = min(qty, position["qty"])
+        average_entry_price = position["cost"] / position["qty"]
+        realized_pnl = (price - average_entry_price) * close_qty
+        position["qty"] -= close_qty
+        position["cost"] -= close_qty * average_entry_price
+        closed_trades.append(
+            {
+                "strategy_name": strategy_name,
+                "symbol": symbol,
+                "qty": close_qty,
+                "entry_price": average_entry_price,
+                "exit_price": price,
+                "realized_pnl": realized_pnl,
+                "closed_at": order["created_at"],
+                "order_id": order["id"],
+                "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
+            }
+        )
+
+    closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
+    return closed_trades[:limit]

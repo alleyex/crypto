@@ -39,6 +39,7 @@ from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
+from app.query.read_service import get_strategy_closed_trades
 from app.query.read_service import get_signals
 from app.query.read_service import get_strategy_activity_summary
 from app.scheduler.control import clear_stop_flag
@@ -384,6 +385,15 @@ def strategy_summary() -> list[dict[str, Any]]:
     connection = get_connection()
     try:
         return get_strategy_activity_summary(connection)
+    finally:
+        connection.close()
+
+
+@app.get("/strategies/closed-trades")
+def strategy_closed_trades(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, Any]]:
+    connection = get_connection()
+    try:
+        return get_strategy_closed_trades(connection, limit=limit)
     finally:
         connection.close()
 

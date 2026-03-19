@@ -300,6 +300,28 @@ def render_admin_page() -> str:
         letter-spacing: 0.06em;
       }
 
+      .trade-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .trade-row {
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: #0b1219;
+        border-radius: 14px;
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 1.2fr 1fr 1fr 1fr;
+        gap: 10px;
+        font-size: 12px;
+      }
+
+      .trade-row strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--text);
+      }
+
       pre {
         margin: 0;
         padding: 16px;
@@ -505,6 +527,13 @@ __STRATEGY_OPTIONS__
             </select>
           </div>
           <div class="strategy-board" id="strategy-summary-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+        <article class="panel data-card">
+          <h2>Recent Closed Trades</h2>
+          <p>Latest realized trade outcomes grouped by strategy.</p>
+          <div class="trade-list" id="strategy-closed-trades-board">
             <div class="strategy-card">Loading...</div>
           </div>
         </article>
@@ -836,6 +865,30 @@ __STRATEGY_OPTIONS__
         }).join("");
       }
 
+      function updateClosedTrades(closedTrades) {
+        const board = el("strategy-closed-trades-board");
+        if (!Array.isArray(closedTrades) || closedTrades.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No closed trades recorded yet.</div>';
+          return;
+        }
+
+        board.innerHTML = closedTrades.map((item) => {
+          const pnlClass = Number(item.realized_pnl || 0) > 0
+            ? "ok"
+            : Number(item.realized_pnl || 0) < 0
+              ? "bad"
+              : "warn";
+          return `
+            <div class="trade-row">
+              <div><strong>Strategy</strong>${item.strategy_name}<br>${item.symbol}</div>
+              <div><strong>Qty / Status</strong>${item.qty}<br><span class="${pnlClass}">${item.status}</span></div>
+              <div><strong>Entry / Exit</strong>${Number(item.entry_price).toFixed(4)}<br>${Number(item.exit_price).toFixed(4)}</div>
+              <div><strong>Realized PnL</strong><span class="${pnlClass}">${Number(item.realized_pnl).toFixed(6)}</span><br>${item.closed_at}</div>
+            </div>
+          `;
+        }).join("");
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -872,11 +925,12 @@ __STRATEGY_OPTIONS__
 
       async function refreshAll() {
         schedulerLogsMode = el("logs-mode-select")?.value || "all";
-        const [health, positions, orders, strategySummary, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
+        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
           api("/strategies/summary"),
+          api("/strategies/closed-trades?limit=10"),
           api("/pnl?limit=10"),
           api(`/scheduler/logs?lines=20&mode=${encodeURIComponent(schedulerLogsMode)}`),
           api("/audit-events?limit=20"),
@@ -904,6 +958,7 @@ __STRATEGY_OPTIONS__
         updatePipelineSummary(auditEvents);
         updateSoakValidation(soakReport, soakHistory);
         updateStrategySummary(strategySummary);
+        updateClosedTrades(closedTrades);
         updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
