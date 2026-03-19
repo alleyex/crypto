@@ -2155,6 +2155,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
     assert 'id="strategy-summary-board"' in response.text
+    assert 'id="strategy-sort-select"' in response.text
+    assert 'id="strategy-filter-select"' in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text

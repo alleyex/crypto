@@ -488,6 +488,22 @@ __STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Strategy Activity</h2>
           <p>Latest signal, risk, fills, and trade outcomes grouped by strategy.</p>
+          <div class="inline-controls">
+            <label for="strategy-sort-select">Sort</label>
+            <select id="strategy-sort-select">
+              <option value="gross_realized_pnl">gross pnl</option>
+              <option value="winning_trade_count">wins</option>
+              <option value="filled_order_count">filled orders</option>
+              <option value="strategy_name">name</option>
+            </select>
+            <label for="strategy-filter-select">Filter</label>
+            <select id="strategy-filter-select">
+              <option value="all">all</option>
+              <option value="active">active only</option>
+              <option value="open_positions">open positions</option>
+              <option value="winners">winners</option>
+            </select>
+          </div>
           <div class="strategy-board" id="strategy-summary-board">
             <div class="strategy-card">Loading...</div>
           </div>
@@ -553,6 +569,8 @@ __STRATEGY_OPTIONS__
       let autoRefreshTimer = null;
       let autoRefreshEnabled = true;
       let schedulerLogsMode = "all";
+      let strategySortMode = "gross_realized_pnl";
+      let strategyFilterMode = "all";
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
@@ -764,7 +782,26 @@ __STRATEGY_OPTIONS__
           return;
         }
 
-        board.innerHTML = strategySummary.map((item) => {
+        const filteredStrategies = strategySummary.filter((item) => {
+          if (strategyFilterMode === "active") return Boolean(item.has_activity);
+          if (strategyFilterMode === "open_positions") return Number(item.net_position_qty || 0) !== 0;
+          if (strategyFilterMode === "winners") return Number(item.gross_realized_pnl || 0) > 0;
+          return true;
+        });
+
+        const sortedStrategies = [...filteredStrategies].sort((left, right) => {
+          if (strategySortMode === "strategy_name") {
+            return String(left.strategy_name).localeCompare(String(right.strategy_name));
+          }
+          return Number(right[strategySortMode] || 0) - Number(left[strategySortMode] || 0);
+        });
+
+        if (sortedStrategies.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No strategies match the current filter.</div>';
+          return;
+        }
+
+        board.innerHTML = sortedStrategies.map((item) => {
           const latestSignal = item.latest_signal?.signal_type || "none";
           const latestRisk = item.latest_risk?.decision || "none";
           const latestOrder = item.latest_order?.status || "none";
@@ -954,6 +991,20 @@ __STRATEGY_OPTIONS__
       el("logs-mode-select")?.addEventListener("change", () => {
         refreshAll().catch((error) => {
           el("logs-json").textContent = `Failed to load logs: ${error.message}`;
+        });
+      });
+
+      el("strategy-sort-select")?.addEventListener("change", (event) => {
+        strategySortMode = event.target.value;
+        refreshAll().catch((error) => {
+          el("strategy-summary-board").innerHTML = `<div class="strategy-card">Failed to sort strategies: ${error.message}</div>`;
+        });
+      });
+
+      el("strategy-filter-select")?.addEventListener("change", (event) => {
+        strategyFilterMode = event.target.value;
+        refreshAll().catch((error) => {
+          el("strategy-summary-board").innerHTML = `<div class="strategy-card">Failed to filter strategies: ${error.message}</div>`;
         });
       });
 
