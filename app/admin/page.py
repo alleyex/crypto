@@ -272,6 +272,21 @@ def render_admin_page() -> str:
         padding: 16px;
       }
 
+      .strategy-card.clickable {
+        cursor: pointer;
+        transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+      }
+
+      .strategy-card.clickable:hover {
+        border-color: rgba(119, 208, 255, 0.5);
+        background: #0e1620;
+      }
+
+      .strategy-card.selected {
+        border-color: rgba(119, 208, 255, 0.85);
+        box-shadow: inset 0 0 0 1px rgba(119, 208, 255, 0.25);
+      }
+
       .strategy-card-header {
         display: flex;
         justify-content: space-between;
@@ -868,7 +883,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               : "warn";
 
           return `
-            <div class="strategy-card">
+            <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
               <div class="strategy-card-header">
                 <strong>${item.strategy_name}</strong>
                 <span class="${item.has_activity ? "ok" : "warn"}">${item.has_activity ? "ACTIVE" : "IDLE"}</span>
@@ -916,6 +931,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             </div>
           `;
         }).join("");
+      }
+
+      function applyClosedTradesStrategyFilter(strategyName) {
+        const select = el("closed-trades-strategy-select");
+        if (select) {
+          select.value = strategyName;
+        }
+        closedTradesStrategyFilter = strategyName;
+        refreshAll().catch((error) => {
+          el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
+        });
       }
 
       function updateHeartbeats(health) {
@@ -1102,6 +1128,20 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         refreshAll().catch((error) => {
           el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
         });
+      });
+
+      el("strategy-summary-board")?.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-strategy-name]");
+        if (!card) return;
+        applyClosedTradesStrategyFilter(card.dataset.strategyName);
+      });
+
+      el("strategy-summary-board")?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const card = event.target.closest("[data-strategy-name]");
+        if (!card) return;
+        event.preventDefault();
+        applyClosedTradesStrategyFilter(card.dataset.strategyName);
       });
 
       updateAutoRefreshStatus();

@@ -2253,6 +2253,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
     assert 'id="strategy-summary-board"' in response.text
+    assert 'data-strategy-name="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text
     assert 'id="strategy-sort-select"' in response.text
     assert 'id="strategy-filter-select"' in response.text
