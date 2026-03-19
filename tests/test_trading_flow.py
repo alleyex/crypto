@@ -1990,6 +1990,58 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         connection.close()
 
 
+def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audit(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "market_data_multi_symbol_pipeline.db"
+
+    def fake_connection() -> sqlite3.Connection:
+        return sqlite3.connect(db_path)
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
+    monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
+    monkeypatch.setattr("app.audit.service.get_connection", fake_connection)
+    monkeypatch.setattr("app.system.heartbeat.get_connection", fake_connection)
+    monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr(
+        "app.pipeline.market_data_job.fetch_klines",
+        lambda symbol="BTCUSDT", interval="1m", limit=5: [
+            make_kline((index + 1) * 60_000, close)
+            for index, close in enumerate(
+                [10, 11, 12, 13, 14] if symbol == "BTCUSDT" else [20, 21, 22, 23, 24]
+            )
+        ],
+    )
+
+    result = run_pipeline_collect()
+
+    assert result["steps"][0]["symbol_results"] == [
+        {"symbol": "BTCUSDT", "saved_klines": 5},
+        {"symbol": "ETHUSDT", "saved_klines": 5},
+    ]
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+        events = get_audit_events(connection, limit=10)
+    finally:
+        connection.close()
+
+    pipeline_heartbeat = next(item for item in heartbeats if item["component"] == "pipeline" and item["status"] == "completed")
+    heartbeat_payload = json.loads(pipeline_heartbeat["payload_json"])
+    assert heartbeat_payload["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert heartbeat_payload["strategy_names"] == ["ma_cross"]
+    assert heartbeat_payload["generated_signal_count"] == 2
+    assert heartbeat_payload["approved_risk_count"] == 2
+    assert heartbeat_payload["filled_execution_count"] == 2
+
+    pipeline_event = next(item for item in events if item["event_type"] == "pipeline_run" and item["status"] == "completed")
+    event_payload = json.loads(pipeline_event["payload_json"])
+    assert event_payload["summary"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert event_payload["summary"]["generated_signal_count"] == 2
+    assert event_payload["summary"]["approved_risk_count"] == 2
+    assert event_payload["summary"]["filled_execution_count"] == 2
+
+
 def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "market_data_strategy.db"
 

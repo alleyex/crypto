@@ -13,6 +13,57 @@ from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
 
 
+def _build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    symbol_names: list[str] = []
+    strategy_names: list[str] = []
+    generated_signal_count = 0
+    approved_risk_count = 0
+    rejected_risk_count = 0
+    filled_execution_count = 0
+
+    for step_result in result.get("steps", []):
+        symbol_name = step_result.get("symbol")
+        if symbol_name is not None and symbol_name not in symbol_names:
+            symbol_names.append(symbol_name)
+
+        strategy_name = step_result.get("strategy_name")
+        if strategy_name is not None and strategy_name not in strategy_names:
+            strategy_names.append(strategy_name)
+
+        if step_result.get("step") == "save_klines":
+            for symbol_result in step_result.get("symbol_results", []):
+                result_symbol = symbol_result.get("symbol")
+                if result_symbol is not None and result_symbol not in symbol_names:
+                    symbol_names.append(result_symbol)
+
+        if step_result.get("step") == "generate_signal" and "signal_type" in step_result:
+            generated_signal_count += 1
+        elif step_result.get("step") == "evaluate_risk":
+            if step_result.get("decision") == "APPROVED":
+                approved_risk_count += 1
+            elif step_result.get("decision") == "REJECTED":
+                rejected_risk_count += 1
+        elif step_result.get("step") == "paper_execute" and step_result.get("status") == "FILLED":
+            filled_execution_count += 1
+
+    if not strategy_names and result.get("strategy_name") is not None:
+        strategy_names = [str(result["strategy_name"])]
+
+    payload: Dict[str, Any] = {
+        "step_count": len(result.get("steps", [])),
+        "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
+        "strategy_names": strategy_names,
+        "symbol_names": symbol_names,
+        "generated_signal_count": generated_signal_count,
+        "approved_risk_count": approved_risk_count,
+        "rejected_risk_count": rejected_risk_count,
+        "filled_execution_count": filled_execution_count,
+    }
+    if "database" in result:
+        payload["database"] = result["database"]
+    return payload
+
+
 def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
     scope_parts: List[str] = []
     if "strategy_name" in step_result:
@@ -54,17 +105,14 @@ def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[
         component="pipeline",
         status=status,
         message=message,
-        payload={
-            "step_count": len(result.get("steps", [])),
-            "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
-        },
+        payload=_build_pipeline_payload(result),
     )
     _safe_log_event(
         event_type="pipeline_run",
         status=status,
         source="pipeline",
         message=message,
-        payload=result,
+        payload={**result, "summary": _build_pipeline_payload(result)},
     )
     return result
 
@@ -117,14 +165,22 @@ def run_pipeline_collect(strategy_name: str = DEFAULT_STRATEGY_NAME) -> Dict[str
         component="pipeline",
         status="started",
         message="Pipeline run started.",
-        payload={"database": database_label, "strategy_name": strategy_name},
+        payload=_build_pipeline_payload(
+            {"database": database_label, "strategy_name": strategy_name, "steps": []}
+        ),
     )
     _safe_log_event(
         event_type="pipeline_run",
         status="started",
         source="pipeline",
         message="Pipeline run started.",
-        payload={"database": database_label, "strategy_name": strategy_name},
+        payload={
+            "database": database_label,
+            "strategy_name": strategy_name,
+            "summary": _build_pipeline_payload(
+                {"database": database_label, "strategy_name": strategy_name, "steps": []}
+            ),
+        },
     )
 
     if kill_switch_enabled():
