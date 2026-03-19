@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List, Tuple, Union
 
 from app.alerting.telegram import send_telegram_message
@@ -12,6 +13,7 @@ from app.scheduler.runner import STOP_FILE
 
 STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy"
 DISABLED_STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy.disabled"
+PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
 
 
 def set_stop_flag() -> str:
@@ -92,9 +94,37 @@ def read_disabled_strategies() -> list[str]:
     return [name for name in dict.fromkeys(configured_names) if name in allowed_names]
 
 
+def read_strategy_priorities() -> dict[str, int]:
+    if not PRIORITY_FILE.exists():
+        return {}
+
+    try:
+        payload = json.loads(PRIORITY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    allowed_names = set(list_registered_strategies())
+    normalized: dict[str, int] = {}
+    for name, value in payload.items():
+        if name not in allowed_names:
+            continue
+        try:
+            normalized[str(name)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
 def read_effective_active_strategies() -> list[str]:
     disabled_names = set(read_disabled_strategies())
-    return [name for name in read_active_strategies() if name not in disabled_names]
+    active_names = [name for name in read_active_strategies() if name not in disabled_names]
+    priorities = read_strategy_priorities()
+    indexed_names = list(enumerate(active_names))
+    indexed_names.sort(key=lambda item: (priorities.get(item[1], item[0]), item[0]))
+    return [name for _, name in indexed_names]
 
 
 def set_active_strategy(strategy_name: str) -> Dict[str, str]:
@@ -161,19 +191,51 @@ def set_disabled_strategies(strategy_names: list[str]) -> Dict[str, Union[str, l
     }
 
 
+def set_strategy_priorities(strategy_priorities: dict[str, int]) -> Dict[str, Union[str, dict[str, int]]]:
+    allowed_names = set(list_registered_strategies())
+    invalid_names = [name for name in strategy_priorities if name not in allowed_names]
+    if invalid_names:
+        raise ValueError(f"Unknown strategies: {', '.join(invalid_names)}")
+
+    normalized = {str(name): int(value) for name, value in strategy_priorities.items()}
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    if normalized:
+        PRIORITY_FILE.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    elif PRIORITY_FILE.exists():
+        PRIORITY_FILE.unlink()
+
+    log_event(
+        event_type="scheduler_control",
+        status="updated",
+        source="scheduler_control",
+        message="Scheduler strategy priorities updated.",
+        payload={
+            "strategy_priorities": normalized,
+            "priority_file": str(PRIORITY_FILE),
+        },
+    )
+    return {
+        "strategy_priorities": normalized,
+        "priority_file": str(PRIORITY_FILE),
+    }
+
+
 def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
     active_strategy_names = read_active_strategies()
     disabled_strategy_names = read_disabled_strategies()
-    effective_strategy_names = [name for name in active_strategy_names if name not in set(disabled_strategy_names)]
+    strategy_priorities = read_strategy_priorities()
+    effective_strategy_names = read_effective_active_strategies()
     available_strategies = list_registered_strategies()
     return {
         "strategy_name": active_strategy_names[0],
         "strategy_names": active_strategy_names,
         "disabled_strategy_names": disabled_strategy_names,
         "effective_strategy_names": effective_strategy_names,
+        "strategy_priorities": strategy_priorities,
         "default_strategy": DEFAULT_STRATEGY_NAME,
         "strategy_file": str(STRATEGY_FILE),
         "disabled_strategy_file": str(DISABLED_STRATEGY_FILE),
+        "priority_file": str(PRIORITY_FILE),
         "available_strategies": available_strategies,
         "strategy_entries": [
             {
@@ -181,6 +243,7 @@ def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
                 "active": name in active_strategy_names,
                 "enabled": name not in disabled_strategy_names,
                 "effective": name in effective_strategy_names,
+                "priority": strategy_priorities.get(name),
             }
             for name in available_strategies
         ],

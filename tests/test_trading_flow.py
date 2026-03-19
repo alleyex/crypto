@@ -83,6 +83,7 @@ from app.strategy.registry import list_registered_strategies
 from app.system.kill_switch import disable_kill_switch
 from app.system.kill_switch import enable_kill_switch
 from app.scheduler.runner import run_scheduler
+from app.scheduler.control import read_effective_active_strategies
 from app.system.heartbeat import get_heartbeats
 from app.system.heartbeat import upsert_heartbeat
 from app.validation.soak_history import read_soak_validation_history
@@ -2259,6 +2260,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text
     assert 'id="scheduler-disabled-strategy-select"' in response.text
+    assert 'id="scheduler-priority-controls"' in response.text
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text
@@ -2455,9 +2457,11 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "strategy_names": ["ma_cross", "momentum_3bar"],
             "disabled_strategy_names": ["momentum_3bar"],
             "effective_strategy_names": ["ma_cross"],
+            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
             "default_strategy": "ma_cross",
             "strategy_file": "runtime/scheduler.strategy",
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
+            "priority_file": "runtime/scheduler.strategy.priority.json",
             "available_strategies": ["ma_cross", "momentum_3bar"],
         },
     )
@@ -2476,8 +2480,16 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
         }
 
+    def fake_set_strategy_priorities(strategy_priorities):
+        captured["priorities"] = strategy_priorities
+        return {
+            "strategy_priorities": strategy_priorities,
+            "priority_file": "runtime/scheduler.strategy.priority.json",
+        }
+
     monkeypatch.setattr("app.api.main.set_active_strategies", fake_set_active_strategies)
     monkeypatch.setattr("app.api.main.set_disabled_strategies", fake_set_disabled_strategies)
+    monkeypatch.setattr("app.api.main.set_strategy_priorities", fake_set_strategy_priorities)
 
     status_response = client.get("/scheduler/strategy")
     update_response = client.post(
@@ -2485,6 +2497,7 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
         json={
             "strategy_names": ["ma_cross", "momentum_3bar"],
             "disabled_strategy_names": ["momentum_3bar"],
+            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
         },
     )
 
@@ -2496,9 +2509,11 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     assert update_response.status_code == 200
     assert update_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
     assert update_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
+    assert update_response.json()["strategy_priorities"] == {"ma_cross": 0, "momentum_3bar": 10}
     assert captured == {
         "active": ["ma_cross", "momentum_3bar"],
         "disabled": ["momentum_3bar"],
+        "priorities": {"ma_cross": 0, "momentum_3bar": 10},
     }
 
 
@@ -3115,6 +3130,22 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     finally:
         connection.close()
     assert any(item["component"] == "strategy_worker" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_read_effective_active_strategies_respects_priority_and_disabled(monkeypatch, tmp_path) -> None:
+    strategy_file = tmp_path / "scheduler.strategy"
+    disabled_file = tmp_path / "scheduler.strategy.disabled"
+    priority_file = tmp_path / "scheduler.strategy.priority.json"
+
+    strategy_file.write_text("momentum_3bar\nma_cross\n", encoding="utf-8")
+    disabled_file.write_text("", encoding="utf-8")
+    priority_file.write_text(json.dumps({"ma_cross": 1, "momentum_3bar": 5}), encoding="utf-8")
+
+    monkeypatch.setattr("app.scheduler.control.STRATEGY_FILE", strategy_file)
+    monkeypatch.setattr("app.scheduler.control.DISABLED_STRATEGY_FILE", disabled_file)
+    monkeypatch.setattr("app.scheduler.control.PRIORITY_FILE", priority_file)
+
+    assert read_effective_active_strategies() == ["ma_cross", "momentum_3bar"]
 
 
 def test_run_scheduler_skips_when_no_enabled_active_strategies(monkeypatch, tmp_path) -> None:
