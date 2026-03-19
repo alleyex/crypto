@@ -50,6 +50,23 @@ def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
+def build_job_payload(
+    *,
+    strategy_name: Optional[str] = None,
+    strategy_names: Optional[list[str]] = None,
+    symbol_names: Optional[list[str]] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    job_payload: dict[str, Any] = dict(payload or {})
+    if strategy_name:
+        job_payload["strategy_name"] = strategy_name
+    if strategy_names:
+        job_payload["strategy_names"] = list(dict.fromkeys(strategy_names))
+    if symbol_names:
+        job_payload["symbol_names"] = list(dict.fromkeys(symbol_names))
+    return job_payload
+
+
 def enqueue_job(
     connection: DBConnection,
     job_type: str,

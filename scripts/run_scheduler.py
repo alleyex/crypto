@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_STRATEGY_NAME,
         help=f"Strategy name for pipeline/strategy-only runs. Default: {DEFAULT_STRATEGY_NAME}",
     )
+    parser.add_argument(
+        "--queue-dispatch",
+        action="store_true",
+        help="Enqueue split worker jobs instead of executing them directly.",
+    )
     return parser.parse_args()
 
 
@@ -44,6 +49,7 @@ def main() -> None:
         iterations=args.iterations,
         mode=args.mode,
         strategy_name=args.strategy,
+        queue_dispatch=args.queue_dispatch,
     )
 
 

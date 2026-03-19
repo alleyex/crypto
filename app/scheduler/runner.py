@@ -9,6 +9,8 @@ from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
+from app.core.job_queue import build_job_payload
+from app.core.job_queue import enqueue_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.system.heartbeat import record_heartbeat
@@ -25,6 +27,7 @@ SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-o
 
 
 def _summarize_result(result: dict) -> str:
+    queued_items: list[str] = []
     signal_items: list[str] = []
     decision_items: list[str] = []
     execution_items: list[str] = []
@@ -35,7 +38,10 @@ def _summarize_result(result: dict) -> str:
         return value
 
     for step in result.get("steps", []):
-        if step["step"] == "generate_signal" and "signal_type" in step:
+        if step["step"] == "enqueue_job" and "job_id" in step:
+            label = step.get("job_type")
+            queued_items.append(_format_summary_item(label, f"queued#{step['job_id']}"))
+        elif step["step"] == "generate_signal" and "signal_type" in step:
             label = step.get("symbol") or step.get("strategy_name")
             signal_items.append(_format_summary_item(label, str(step["signal_type"])))
         elif step["step"] == "evaluate_risk" and "decision" in step:
@@ -53,7 +59,17 @@ def _summarize_result(result: dict) -> str:
     signal = ";".join(signal_items) if signal_items else "n/a"
     decision = ";".join(decision_items) if decision_items else "n/a"
     execution = ";".join(execution_items) if execution_items else "n/a"
-    return f"signal={signal} risk={decision} execution={execution}"
+    summary_parts: list[str] = []
+    if queued_items:
+        summary_parts.append(f"queued={';'.join(queued_items)}")
+    summary_parts.extend(
+        [
+            f"signal={signal}",
+            f"risk={decision}",
+            f"execution={execution}",
+        ]
+    )
+    return " ".join(summary_parts)
 
 
 def get_scheduler_log_file(mode: str = "pipeline") -> Path:
@@ -100,6 +116,7 @@ def _run_scheduled_job(
     strategy_name: str = DEFAULT_STRATEGY_NAME,
     strategy_names: Optional[list[str]] = None,
     symbol_names: Optional[list[str]] = None,
+    queue_dispatch: bool = False,
 ) -> dict:
     if mode == "pipeline":
         return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
@@ -107,6 +124,36 @@ def _run_scheduled_job(
     connection = get_connection()
     try:
         run_migrations(connection)
+        if queue_dispatch:
+            if mode == "market-data-only":
+                job_type = "market_data"
+                payload = build_job_payload(symbol_names=symbol_names)
+            elif mode == "strategy-only":
+                job_type = "strategy"
+                payload = build_job_payload(
+                    strategy_name=strategy_name,
+                    strategy_names=strategy_names,
+                    symbol_names=symbol_names,
+                )
+            elif mode == "execution-only":
+                job_type = "execution"
+                payload = build_job_payload(symbol_names=symbol_names)
+            else:
+                raise ValueError(f"Unsupported queue-dispatch mode: {mode}")
+            job_id = enqueue_job(connection, job_type, payload=payload or None)
+            return {
+                "status": "queued",
+                "steps": [
+                    {
+                        "step": "enqueue_job",
+                        "status": "queued",
+                        "job_id": job_id,
+                        "job_type": job_type,
+                        "strategy_names": strategy_names or [strategy_name],
+                        "symbol_names": symbol_names or [],
+                    }
+                ],
+            }
         if mode == "market-data-only":
             return {"steps": [run_market_data_job(connection, symbol_names=symbol_names)], "symbol_names": symbol_names or []}
         if mode == "strategy-only":
@@ -204,6 +251,7 @@ def run_scheduler(
     iterations: Optional[int] = None,
     mode: str = "pipeline",
     strategy_name: str = DEFAULT_STRATEGY_NAME,
+    queue_dispatch: bool = False,
 ) -> None:
     if mode not in SCHEDULER_MODES:
         raise ValueError(
@@ -228,7 +276,7 @@ def run_scheduler(
                 component=component,
                 status="stopped",
                 message=f"{component} stopped by flag.",
-                payload={"stop_file": str(STOP_FILE), "mode": mode},
+                payload={"stop_file": str(STOP_FILE), "mode": mode, "queue_dispatch": queue_dispatch},
             )
             break
 
@@ -244,7 +292,14 @@ def run_scheduler(
                 component=component,
                 status="ok",
                 message=f"{component} loop skipped because no enabled active strategies are configured.",
-                payload={"run_count": run_count, "mode": mode, "strategy_names": [], "skipped": True, **_summarize_symbol_payload(active_symbol_names)},
+                payload={
+                    "run_count": run_count,
+                    "mode": mode,
+                    "strategy_names": [],
+                    "skipped": True,
+                    "queue_dispatch": queue_dispatch,
+                    **_summarize_symbol_payload(active_symbol_names),
+                },
             )
             _record_soak_snapshot()
             if iterations is not None and run_count >= iterations:
@@ -257,13 +312,20 @@ def run_scheduler(
             component=component,
             status="running",
             message=f"{component} loop started.",
-            payload={"run_count": run_count, "mode": mode, **_summarize_strategy_payload(active_strategy_names), **_summarize_symbol_payload(active_symbol_names)},
+            payload={
+                "run_count": run_count,
+                "mode": mode,
+                "queue_dispatch": queue_dispatch,
+                **_summarize_strategy_payload(active_strategy_names),
+                **_summarize_symbol_payload(active_symbol_names),
+            },
         )
         result = _run_scheduled_job(
             mode,
             strategy_name=active_strategy_name,
             strategy_names=active_strategy_names,
             symbol_names=active_symbol_names,
+            queue_dispatch=queue_dispatch,
         )
         summary = _summarize_result(result)
         strategy_label = _format_strategy_log_label(active_strategy_names)
@@ -279,6 +341,7 @@ def run_scheduler(
                 "run_count": run_count,
                 "summary": summary,
                 "mode": mode,
+                "queue_dispatch": queue_dispatch,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },

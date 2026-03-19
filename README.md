@@ -103,6 +103,7 @@ python scripts/run_scheduler.py --mode pipeline
 python scripts/run_scheduler.py --mode market-data-only
 python scripts/run_scheduler.py --mode strategy-only
 python scripts/run_scheduler.py --mode execution-only
+python scripts/run_scheduler.py --mode strategy-only --queue-dispatch
 ```
 
 Run a specific strategy job:
@@ -198,6 +199,7 @@ Docker Compose runtime validation status:
 - split worker services now also exist behind the `split-workers` Compose profile: `data-worker`, `strategy-worker`, and `execution-worker`
 - split worker services can now run at different intervals via `CRYPTO_DATA_INTERVAL`, `CRYPTO_STRATEGY_INTERVAL`, and `CRYPTO_EXECUTION_INTERVAL`
 - pipeline and strategy workers can now select a registered strategy via `CRYPTO_STRATEGY_NAME` (currently `ma_cross` or `momentum_3bar`)
+- split worker scheduler modes can also run in queue-dispatch mode via `python scripts/run_scheduler.py --queue-dispatch`
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks

@@ -21,6 +21,7 @@ from app.core.db import get_database_info
 from app.core.db import parse_db_timestamp
 from app.core.db import list_tables
 from app.core.db import table_exists
+from app.core.job_queue import build_job_payload
 from app.core.job_queue import JOB_TYPES
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import list_jobs as list_queue_jobs
@@ -385,14 +386,12 @@ class SchedulerSymbolsRequest(BaseModel):
 
 
 def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
-    job_payload: dict[str, Any] = dict(payload.payload or {})
-    if payload.strategy_name:
-        job_payload["strategy_name"] = payload.strategy_name
-    if payload.strategy_names:
-        job_payload["strategy_names"] = list(dict.fromkeys(payload.strategy_names))
-    if payload.symbol_names:
-        job_payload["symbol_names"] = list(dict.fromkeys(payload.symbol_names))
-    return job_payload
+    return build_job_payload(
+        strategy_name=payload.strategy_name,
+        strategy_names=payload.strategy_names,
+        symbol_names=payload.symbol_names,
+        payload=payload.payload,
+    )
 
 
 @app.get("/health")
