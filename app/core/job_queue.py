@@ -8,6 +8,7 @@ from app.core.db import fetch_all_as_dicts
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
@@ -61,7 +62,9 @@ def build_job_payload(
     payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     job_payload: dict[str, Any] = dict(payload or {})
+    backend_status = get_execution_backend_status()
     job_payload.setdefault("execution_backend", get_execution_adapter_name())
+    job_payload.setdefault("execution_backend_status", backend_status)
     if strategy_name:
         job_payload["strategy_name"] = strategy_name
     if strategy_names:
@@ -380,21 +383,24 @@ def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None
         }
 
     job_id = int(leased_job["id"])
+    backend_status = get_execution_backend_status()
     try:
         result = _run_leased_job(connection, leased_job)
-        complete_job(connection, job_id, result=result)
+        result_with_backend = {**result, "execution_backend_status": backend_status}
+        complete_job(connection, job_id, result=result_with_backend)
         completed_job = get_job(connection, job_id)
         return {
             "status": "completed",
             "job": completed_job,
-            "result": result,
+            "result": result_with_backend,
+            "execution_backend_status": backend_status,
         }
     except Exception as exc:
         fail_job(
             connection,
             job_id,
             str(exc),
-            result={"error_type": exc.__class__.__name__},
+            result={"error_type": exc.__class__.__name__, "execution_backend_status": backend_status},
         )
         failed_job = get_job(connection, job_id)
         return {
@@ -402,4 +408,5 @@ def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None
             "job": failed_job,
             "error": str(exc),
             "error_type": exc.__class__.__name__,
+            "execution_backend_status": backend_status,
         }

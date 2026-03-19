@@ -249,6 +249,7 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
             "strategy_names": heartbeat_payload.get("strategy_names", []),
             "symbol_names": heartbeat_payload.get("symbol_names", []),
             "execution_backend": heartbeat_payload.get("execution_backend") or get_execution_adapter_name(),
+            "execution_backend_status": heartbeat_payload.get("execution_backend_status") or get_execution_backend_status(),
             "generated_signal_count": heartbeat_payload.get("generated_signal_count"),
             "approved_risk_count": heartbeat_payload.get("approved_risk_count"),
             "rejected_risk_count": heartbeat_payload.get("rejected_risk_count"),

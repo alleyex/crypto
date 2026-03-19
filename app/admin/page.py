@@ -1051,10 +1051,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             ? latestPipelineRun.symbol_names.join(", ")
             : "none";
           const executionBackend = latestPipelineRun.execution_backend || "unknown";
+          const executionBackendStatus = latestPipelineRun.execution_backend_status || {};
           el("pipeline-status").textContent = displayStatus;
           el("pipeline-status").className = `value ${statusClass(latestPipelineRun.status)}`;
           el("pipeline-detail").textContent =
-            `${latestPipelineRun.created_at} | ${latestPipelineRun.message} | strategies: ${strategyLabel} | execution: ${executionBackend}`;
+            `${latestPipelineRun.created_at} | ${latestPipelineRun.message} | strategies: ${strategyLabel} | execution: ${executionBackend} | dry_run=${Boolean(executionBackendStatus.dry_run)} | can_execute_orders=${Boolean(executionBackendStatus.can_execute_orders)}`;
           el("pipeline-symbols").textContent = `Symbols: ${symbolLabel}`;
           el("pipeline-counts").textContent =
             `Counts: signals=${latestPipelineRun.generated_signal_count ?? 0}, ` +
