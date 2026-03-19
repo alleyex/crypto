@@ -4392,6 +4392,49 @@ def test_run_execution_job_with_selected_symbols_only_executes_matching_pending_
         connection.close()
 
 
+def test_run_execution_job_uses_execution_adapter(monkeypatch) -> None:
+    connection = make_connection()
+    adapter_calls: list[tuple[str, object]] = []
+
+    class FakeExecutionAdapter:
+        name = "fake"
+
+        def ensure_tables(self, conn) -> None:
+            adapter_calls.append(("ensure_tables", conn))
+
+        def execute_risk_event_ids(self, conn, risk_event_ids, order_qty=0.001):
+            adapter_calls.append(("execute_risk_event_ids", list(risk_event_ids)))
+            return [{"status": "FILLED", "symbol": "BTCUSDT", "risk_event_id": 1, "order_id": 7}]
+
+        def execute_pending_approved_risks(self, conn, order_qty=0.001, symbol_names=None):
+            adapter_calls.append(("execute_pending_approved_risks", list(symbol_names or [])))
+            return []
+
+        def execute_latest_risk(self, conn, order_qty=0.001):
+            adapter_calls.append(("execute_latest_risk", conn))
+            return None
+
+    try:
+        monkeypatch.setattr("app.pipeline.execution_job.get_execution_adapter", lambda: FakeExecutionAdapter())
+        monkeypatch.setattr("app.pipeline.execution_job.update_positions", lambda conn: ["BTCUSDT"])
+        monkeypatch.setattr("app.pipeline.execution_job.ensure_pnl_table", lambda conn: None)
+        monkeypatch.setattr("app.pipeline.execution_job.update_pnl_snapshots", lambda conn: 1)
+
+        execution_result = run_execution_job(connection, risk_event_ids=[1, 2])
+
+        assert adapter_calls == [
+            ("ensure_tables", connection),
+            ("execute_risk_event_ids", [1, 2]),
+        ]
+        assert execution_result["steps"] == [
+            {"step": "paper_execute", "status": "FILLED", "symbol": "BTCUSDT", "risk_event_id": 1, "order_id": 7},
+            {"step": "update_positions", "updated_symbols": ["BTCUSDT"]},
+            {"step": "update_pnl", "snapshot_count": 1},
+        ]
+    finally:
+        connection.close()
+
+
 def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:

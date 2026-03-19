@@ -1,10 +1,7 @@
 from typing import Any, Dict, Optional
 
 from app.core.db import DBConnection
-from app.execution.paper_broker import ensure_tables as ensure_execution_tables
-from app.execution.paper_broker import execute_pending_approved_risks
-from app.execution.paper_broker import execute_risk_event_ids
-from app.execution.paper_broker import execute_latest_risk
+from app.execution.adapter import get_execution_adapter
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import update_positions
@@ -15,19 +12,20 @@ def run_execution_job(
     risk_event_ids: Optional[list[int]] = None,
     symbol_names: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
-    ensure_execution_tables(connection)
+    execution_adapter = get_execution_adapter()
+    execution_adapter.ensure_tables(connection)
     if risk_event_ids is not None:
-        execution_results = execute_risk_event_ids(connection, risk_event_ids)
+        execution_results = execution_adapter.execute_risk_event_ids(connection, risk_event_ids)
         if execution_results:
             paper_execute_steps = [{"step": "paper_execute", **execution_result} for execution_result in execution_results]
         else:
             paper_execute_steps = [{"step": "paper_execute", "status": "skipped", "reason": "No risk events selected"}]
     else:
-        execution_results = execute_pending_approved_risks(connection, symbol_names=symbol_names)
+        execution_results = execution_adapter.execute_pending_approved_risks(connection, symbol_names=symbol_names)
         if execution_results:
             paper_execute_steps = [{"step": "paper_execute", **execution_result} for execution_result in execution_results]
         else:
-            latest_execution_result = execute_latest_risk(connection)
+            latest_execution_result = execution_adapter.execute_latest_risk(connection)
             if latest_execution_result is None:
                 paper_execute_steps = [{"step": "paper_execute", "status": "skipped", "reason": "No risk event found"}]
             else:
