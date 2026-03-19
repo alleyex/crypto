@@ -801,6 +801,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       function updateHeadline(health) {
+        const schedulerSymbols = window.__schedulerSymbolsStatus || null;
         el("health-status").textContent = health.status.toUpperCase();
         el("health-status").className = `value ${statusClass(health.status)}`;
 
@@ -826,7 +827,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const limitedSummary = limitedStrategies.length
             ? ` | excluded by limit: ${limitedStrategies.join(", ")}`
             : "";
-          el("scheduler-detail").textContent = `effective order: ${orderLabel} | limit: ${limitLabel}${limitedSummary}${warning}${disabledSummary}`;
+          const symbolSummary = schedulerSymbols?.symbol_names?.length
+            ? ` | symbols: ${schedulerSymbols.symbol_names.join(", ")}`
+            : "";
+          el("scheduler-detail").textContent = `effective order: ${orderLabel} | limit: ${limitLabel}${symbolSummary}${limitedSummary}${warning}${disabledSummary}`;
         } else {
           el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
         }
@@ -907,7 +911,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           : "NONE";
         el("data-worker-status").className = `value ${statusClass(dataWorker ? dataWorker.status : "degraded")}`;
         el("data-worker-detail").textContent = dataWorker
-          ? `${dataWorker.last_seen_at} | ${dataWorker.message}`
+          ? `${dataWorker.last_seen_at} | ${dataWorker.message}${(dataWorker.payload?.symbol_names || []).length ? ` | symbols: ${dataWorker.payload.symbol_names.join(", ")}` : ""}`
           : "No data worker heartbeat recorded yet.";
 
         const strategyWorker = heartbeatMap.strategy_worker;
@@ -916,7 +920,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           : "NONE";
         el("strategy-worker-status").className = `value ${statusClass(strategyWorker ? strategyWorker.status : "degraded")}`;
         el("strategy-worker-detail").textContent = strategyWorker
-          ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}`
+          ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}${(strategyWorker.payload?.symbol_names || []).length ? ` | symbols: ${strategyWorker.payload.symbol_names.join(", ")}` : ""}`
           : "No strategy worker heartbeat recorded yet.";
 
         const executionWorker = heartbeatMap.execution_worker;
@@ -925,7 +929,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           : "NONE";
         el("execution-worker-status").className = `value ${statusClass(executionWorker ? executionWorker.status : "degraded")}`;
         el("execution-worker-detail").textContent = executionWorker
-          ? `${executionWorker.last_seen_at} | ${executionWorker.message}`
+          ? `${executionWorker.last_seen_at} | ${executionWorker.message}${(executionWorker.payload?.symbol_names || []).length ? ` | symbols: ${executionWorker.payload.symbol_names.join(", ")}` : ""}`
           : "No execution worker heartbeat recorded yet.";
 
         const heartbeatIssues = (heartbeatCheck.components || [])
@@ -1556,6 +1560,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         ]);
 
         window.__latestHealth = health;
+        window.__schedulerSymbolsStatus = schedulerSymbols;
         window.__strategyClosedTrades = closedTrades;
         window.__schedulerStrategyStatus = schedulerStrategy;
         const strategySelect = el("pipeline-strategy-select");

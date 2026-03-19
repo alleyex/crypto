@@ -2522,6 +2522,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="scheduler-priority-controls"' in response.text
     assert 'id="scheduler-disabled-note-controls"' in response.text
     assert 'id="scheduler-effective-limit-input"' in response.text
+    assert "symbols:" in response.text
     assert 'data-action="scheduler-preset-top1"' in response.text
     assert 'data-action="scheduler-preset-top2"' in response.text
     assert 'data-action="scheduler-preset-all"' in response.text
