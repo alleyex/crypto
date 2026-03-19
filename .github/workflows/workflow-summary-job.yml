@@ -3,6 +3,9 @@ name: Workflow Summary Job
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   workflow_call:
     inputs:
@@ -20,6 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Write workflow summary
         uses: ./.github/actions/write-workflow-summary
         with:
