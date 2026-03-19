@@ -32,3 +32,4 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_TIMEOUT_SECONDS = _get_int("TELEGRAM_TIMEOUT_SECONDS", 5)
 DEFAULT_STRATEGY_NAME = os.getenv("CRYPTO_STRATEGY_NAME", "ma_cross").strip() or "ma_cross"
+EXECUTION_BACKEND = os.getenv("CRYPTO_EXECUTION_BACKEND", "paper").strip().lower() or "paper"

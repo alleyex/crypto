@@ -61,6 +61,8 @@ from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
 from app.execution.paper_broker import execute_pending_approved_risks
 from app.execution.paper_broker import execute_latest_risk
+from app.execution.adapter import NoopExecutionAdapter
+from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.strategy_job import run_strategy_job
@@ -4435,6 +4437,39 @@ def test_run_execution_job_uses_execution_adapter(monkeypatch) -> None:
         connection.close()
 
 
+def test_noop_execution_adapter_skips_pending_risks() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        btc_risk = evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        assert btc_risk is not None
+
+        adapter = NoopExecutionAdapter()
+        execution_results = adapter.execute_pending_approved_risks(connection, symbol_names=["BTCUSDT"])
+
+        assert execution_results == [
+            {
+                "risk_event_id": int(btc_risk["id"]),
+                "decision": "SKIPPED",
+                "reason": "Execution backend noop",
+            }
+        ]
+        assert get_orders(connection, limit=10) == []
+    finally:
+        connection.close()
+
+
+def test_get_execution_adapter_name_reads_runtime_backend(monkeypatch) -> None:
+    monkeypatch.setattr("app.execution.adapter.EXECUTION_BACKEND", "noop")
+    assert get_execution_adapter_name() == "noop"
+
+
 def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:
@@ -4614,6 +4649,33 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
     assert '"saved_klines": 5' in outputs[0]
     assert '"strategy_name": "momentum_3bar"' in outputs[1]
     assert '"paper_execute"' in outputs[2]
+
+
+def test_paper_execute_sqlite_uses_execution_adapter(monkeypatch) -> None:
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    class FakeExecutionAdapter:
+        def ensure_tables(self, connection) -> None:
+            pass
+
+        def execute_latest_risk(self, connection):
+            return {"decision": "SKIPPED"}
+
+    monkeypatch.setattr("scripts.paper_execute_sqlite.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("scripts.paper_execute_sqlite.get_execution_adapter", lambda: FakeExecutionAdapter())
+    monkeypatch.setattr("scripts.paper_execute_sqlite.get_execution_adapter_name", lambda: "noop")
+
+    from scripts.paper_execute_sqlite import main as legacy_execute_main
+
+    buffer = StringIO()
+    with contextlib.redirect_stdout(buffer):
+        legacy_execute_main()
+
+    output = buffer.getvalue()
+    assert "execution_backend=noop" in output
+    assert "Latest risk event is not executable: SKIPPED" in output
 
 
 def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
