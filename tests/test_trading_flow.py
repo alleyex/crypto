@@ -72,6 +72,7 @@ from app.query.read_service import get_signals
 from app.query.read_service import get_strategy_activity_summary
 from app.query.read_service import get_strategy_closed_trades
 from app.risk.risk_service import ensure_table as ensure_risk_table
+from app.risk.risk_service import evaluate_signal_id
 from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
@@ -3178,10 +3179,10 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_latest_signal",
-            lambda conn: {
-                "id": 1,
-                "signal_id": 1,
+            "app.pipeline.strategy_job.evaluate_signal_id",
+            lambda conn, signal_id: {
+                "id": signal_id,
+                "signal_id": signal_id,
                 "symbol": "BTCUSDT",
                 "timeframe": "1m",
                 "strategy_name": "ma_cross",
@@ -3226,10 +3227,10 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_latest_signal",
-            lambda conn: {
+            "app.pipeline.strategy_job.evaluate_signal_id",
+            lambda conn, signal_id: {
                 "id": 22,
-                "signal_id": 11,
+                "signal_id": signal_id,
                 "symbol": "BTCUSDT",
                 "timeframe": "1m",
                 "strategy_name": "ma_cross",
@@ -3294,11 +3295,11 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_latest_signal",
-            lambda conn: {
-                "id": 22,
-                "signal_id": 12,
-                "symbol": "ETHUSDT",
+            "app.pipeline.strategy_job.evaluate_signal_id",
+            lambda conn, signal_id: {
+                "id": 22 if signal_id == 12 else 21,
+                "signal_id": signal_id,
+                "symbol": "ETHUSDT" if signal_id == 12 else "BTCUSDT",
                 "timeframe": "1m",
                 "strategy_name": "ma_cross",
                 "signal_type": "BUY",
@@ -3310,8 +3311,33 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
         result = run_strategy_job(connection, strategy_name="ma_cross", symbol_names=["BTCUSDT", "ETHUSDT"])
 
         assert result["status"] == "ok"
-        assert [step["step"] for step in result["steps"]] == ["generate_signal", "generate_signal", "evaluate_risk"]
+        assert [step["step"] for step in result["steps"]] == ["generate_signal", "generate_signal", "evaluate_risk", "evaluate_risk"]
         assert [step["symbol"] for step in result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
+    finally:
+        connection.close()
+
+
+def test_evaluate_signal_id_uses_specific_signal(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        connection.execute(
+            """
+            INSERT INTO signals (id, symbol, timeframe, strategy_name, signal_type, short_ma, long_ma, created_at)
+            VALUES
+                (1, 'BTCUSDT', '1m', 'ma_cross', 'BUY', 11.0, 10.0, '2026-03-19 10:00:00'),
+                (2, 'ETHUSDT', '1m', 'ma_cross', 'SELL', 9.0, 10.0, '2026-03-19 10:01:00');
+            """
+        )
+        connection.commit()
+        monkeypatch.setattr("app.risk.risk_service.get_daily_realized_pnl", lambda conn, symbol: 0.0)
+
+        result = evaluate_signal_id(connection, 1, cooldown_seconds=0)
+
+        assert result is not None
+        assert result["signal_id"] == 1
+        assert result["symbol"] == "BTCUSDT"
+        assert result["decision"] == "APPROVED"
     finally:
         connection.close()
 

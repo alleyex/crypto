@@ -43,6 +43,18 @@ LIMIT 1;
 """
 
 
+SELECT_SIGNAL_BY_ID_SQL = """
+SELECT
+    id,
+    symbol,
+    timeframe,
+    strategy_name,
+    signal_type
+FROM signals
+WHERE id = ?;
+"""
+
+
 SELECT_PREVIOUS_SIGNAL_SQL = """
 SELECT signal_type
 FROM signals
@@ -84,23 +96,24 @@ INSERT INTO risk_events (
 
 def ensure_table(connection: DBConnection) -> None:
     run_migrations(connection)
+
+
 def _fills_table_exists(connection: DBConnection) -> bool:
     return table_exists(connection, "fills")
 
 
-def evaluate_latest_signal(
+def _evaluate_signal_row(
     connection: DBConnection,
-    order_qty: float = DEFAULT_ORDER_QTY,
-    max_position_qty: float = MAX_POSITION_QTY,
-    cooldown_seconds: int = COOLDOWN_SECONDS,
-    max_daily_loss: float = MAX_DAILY_LOSS,
-) -> Optional[Dict[str, Union[int, str]]]:
-    latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
-    if latest_signal is None:
-        return None
+    signal_row,
+    order_qty: float,
+    max_position_qty: float,
+    cooldown_seconds: int,
+    max_daily_loss: float,
+) -> Dict[str, Union[int, str]]:
+    signal_id, symbol, timeframe, strategy_name, signal_type = signal_row
 
-    signal_id, symbol, timeframe, strategy_name, signal_type = latest_signal
-
+    daily_realized_pnl: Optional[float] = None
+    total_realized_pnl: Optional[float] = None
     if signal_type == "HOLD":
         decision = "REJECTED"
         reason = "Signal is HOLD."
@@ -212,3 +225,47 @@ def evaluate_latest_signal(
         "decision": decision,
         "reason": reason,
     }
+
+
+def evaluate_latest_signal(
+    connection: DBConnection,
+    order_qty: float = DEFAULT_ORDER_QTY,
+    max_position_qty: float = MAX_POSITION_QTY,
+    cooldown_seconds: int = COOLDOWN_SECONDS,
+    max_daily_loss: float = MAX_DAILY_LOSS,
+) -> Optional[Dict[str, Union[int, str]]]:
+    latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
+    if latest_signal is None:
+        return None
+
+    return _evaluate_signal_row(
+        connection,
+        latest_signal,
+        order_qty=order_qty,
+        max_position_qty=max_position_qty,
+        cooldown_seconds=cooldown_seconds,
+        max_daily_loss=max_daily_loss,
+    )
+
+
+
+def evaluate_signal_id(
+    connection: DBConnection,
+    signal_id: int,
+    order_qty: float = DEFAULT_ORDER_QTY,
+    max_position_qty: float = MAX_POSITION_QTY,
+    cooldown_seconds: int = COOLDOWN_SECONDS,
+    max_daily_loss: float = MAX_DAILY_LOSS,
+) -> Optional[Dict[str, Union[int, str]]]:
+    signal_row = connection.execute(SELECT_SIGNAL_BY_ID_SQL, (signal_id,)).fetchone()
+    if signal_row is None:
+        return None
+
+    return _evaluate_signal_row(
+        connection,
+        signal_row,
+        order_qty=order_qty,
+        max_position_qty=max_position_qty,
+        cooldown_seconds=cooldown_seconds,
+        max_daily_loss=max_daily_loss,
+    )

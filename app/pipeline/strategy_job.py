@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional
 from app.core.db import DBConnection
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
+from app.risk.risk_service import evaluate_signal_id
 from app.risk.risk_service import ensure_table as ensure_risk_table
-from app.risk.risk_service import evaluate_latest_signal
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.registry import generate_registered_signal
 
@@ -47,17 +47,26 @@ def run_strategy_job(
 
     ensure_positions_table(connection)
     ensure_risk_table(connection)
-    risk_result = evaluate_latest_signal(connection)
-    if risk_result is None:
+    risk_steps: list[dict[str, Any]] = []
+    generated_risk_results: list[dict[str, Any]] = []
+    for signal_result in generated_signal_results:
+        risk_result = evaluate_signal_id(connection, int(signal_result["id"]))
+        if risk_result is None:
+            risk_steps.append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
+            continue
+        generated_risk_results.append(risk_result)
+        risk_steps.append({"step": "evaluate_risk", **risk_result})
+
+    if not generated_risk_results:
         return {
             "status": "completed",
-            "steps": signal_steps + [{"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"}],
+            "steps": signal_steps + risk_steps,
             "terminal_message": "Pipeline run completed with skipped risk evaluation.",
         }
 
     return {
         "status": "ok",
-        "steps": signal_steps + [{"step": "evaluate_risk", **risk_result}],
+        "steps": signal_steps + risk_steps,
     }
 
 
