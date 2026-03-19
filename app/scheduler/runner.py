@@ -46,6 +46,18 @@ def _write_log(line: str) -> None:
         file.write(line + "\n")
 
 
+def _scheduler_component_name(mode: str) -> str:
+    if mode == "pipeline":
+        return "scheduler"
+    if mode == "market-data-only":
+        return "data_worker"
+    if mode == "strategy-only":
+        return "strategy_worker"
+    if mode == "execution-only":
+        return "execution_worker"
+    raise ValueError(f"Unsupported scheduler mode: {mode}")
+
+
 def _run_scheduled_job(mode: str) -> dict:
     if mode == "pipeline":
         return run_pipeline_collect()
@@ -99,6 +111,7 @@ def run_scheduler(
             f"Unsupported scheduler mode: {mode}. Expected one of: {', '.join(SCHEDULER_MODES)}"
         )
 
+    component = _scheduler_component_name(mode)
     run_count = 0
     connection = get_connection()
     try:
@@ -113,19 +126,19 @@ def run_scheduler(
             print(log_line)
             _write_log(log_line)
             record_heartbeat(
-                component="scheduler",
+                component=component,
                 status="stopped",
-                message="Scheduler stopped by flag.",
-                payload={"stop_file": str(STOP_FILE)},
+                message=f"{component} stopped by flag.",
+                payload={"stop_file": str(STOP_FILE), "mode": mode},
             )
             break
 
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
         record_heartbeat(
-            component="scheduler",
+            component=component,
             status="running",
-            message="Scheduler loop started.",
+            message=f"{component} loop started.",
             payload={"run_count": run_count, "mode": mode},
         )
         result = _run_scheduled_job(mode)
@@ -134,9 +147,9 @@ def run_scheduler(
         print(log_line)
         _write_log(log_line)
         record_heartbeat(
-            component="scheduler",
+            component=component,
             status="ok",
-            message="Scheduler loop completed.",
+            message=f"{component} loop completed.",
             payload={"run_count": run_count, "summary": summary, "mode": mode},
         )
         _record_soak_snapshot()

@@ -2512,6 +2512,13 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     assert "signal=BUY" in log_text
     assert "risk=APPROVED" in log_text
 
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(item["component"] == "strategy_worker" and item["status"] == "ok" for item in heartbeats)
+
 
 def test_build_soak_validation_report_summarizes_runtime_state(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "soak.db"
