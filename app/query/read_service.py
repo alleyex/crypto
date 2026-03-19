@@ -174,19 +174,27 @@ def get_strategy_activity_summary(
     connection: DBConnection,
     per_table_limit: int = 100,
 ) -> list[dict[str, Any]]:
+    strategy_names = list_registered_strategies()
     signals = get_signals(connection, limit=per_table_limit)
     risk_events = get_risk_events(connection, limit=per_table_limit)
     orders = get_orders(connection, limit=per_table_limit)
     fills = get_fills(connection, limit=per_table_limit)
+    closed_trades = get_strategy_closed_trades(
+        connection,
+        limit=max(len(strategy_names), per_table_limit),
+        per_table_limit=per_table_limit,
+    )
+    latest_closed_trades = {str(item["strategy_name"]): item for item in closed_trades}
 
     summaries: list[dict[str, Any]] = []
-    for strategy_name in list_registered_strategies():
+    for strategy_name in strategy_names:
         latest_signal = next((item for item in signals if item["strategy_name"] == strategy_name), None)
         latest_risk = next((item for item in risk_events if item["strategy_name"] == strategy_name), None)
         latest_order = next((item for item in orders if item["strategy_name"] == strategy_name), None)
         strategy_orders = [item for item in orders if item["strategy_name"] == strategy_name]
         order_ids = {item["id"] for item in strategy_orders}
         latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
+        latest_closed_trade = latest_closed_trades.get(strategy_name)
         filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
 
@@ -236,6 +244,7 @@ def get_strategy_activity_summary(
                 "latest_risk": latest_risk,
                 "latest_order": latest_order,
                 "latest_fill": latest_fill,
+                "latest_closed_trade": latest_closed_trade,
                 "filled_order_count": filled_order_count,
                 "filled_qty_total": filled_qty_total,
                 "net_position_qty": net_position_qty,
@@ -261,6 +270,8 @@ def get_strategy_closed_trades(
     per_table_limit: int = 200,
 ) -> list[dict[str, Any]]:
     orders = get_orders(connection, limit=per_table_limit)
+    fills = get_fills(connection, limit=per_table_limit)
+    fills_by_order_id = {int(item["order_id"]): item for item in fills}
     filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
     positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
@@ -283,6 +294,7 @@ def get_strategy_closed_trades(
 
         close_qty = min(qty, position["qty"])
         average_entry_price = position["cost"] / position["qty"]
+        latest_fill = fills_by_order_id.get(int(order["id"]))
         realized_pnl = (price - average_entry_price) * close_qty
         position["qty"] -= close_qty
         position["cost"] -= close_qty * average_entry_price
@@ -294,7 +306,7 @@ def get_strategy_closed_trades(
                 "entry_price": average_entry_price,
                 "exit_price": price,
                 "realized_pnl": realized_pnl,
-                "closed_at": order["created_at"],
+                "closed_at": latest_fill["created_at"] if latest_fill is not None else order["created_at"],
                 "order_id": order["id"],
                 "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
             }

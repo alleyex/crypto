@@ -835,6 +835,18 @@ __STRATEGY_OPTIONS__
           const latestRisk = item.latest_risk?.decision || "none";
           const latestOrder = item.latest_order?.status || "none";
           const latestFill = item.latest_fill?.side || "none";
+          const latestClosedTrade = item.latest_closed_trade || null;
+          const latestClosedAt = latestClosedTrade?.closed_at || "none";
+          const latestClosedPnl = latestClosedTrade
+            ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6)
+            : "n/a";
+          const latestClosedPnlClass = latestClosedTrade
+            ? Number(latestClosedTrade.realized_pnl || 0) > 0
+              ? "ok"
+              : Number(latestClosedTrade.realized_pnl || 0) < 0
+                ? "bad"
+                : "warn"
+            : "warn";
           const pnl = Number(item.gross_realized_pnl || 0).toFixed(6);
           const pnlClass = Number(item.gross_realized_pnl || 0) > 0
             ? "ok"
@@ -859,6 +871,8 @@ __STRATEGY_OPTIONS__
                 <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${pnl}</span></div>
                 <div class="strategy-metric"><strong>Wins</strong>${item.winning_trade_count}</div>
                 <div class="strategy-metric"><strong>Losses</strong>${item.losing_trade_count}</div>
+                <div class="strategy-metric"><strong>Latest Closed At</strong>${latestClosedAt}</div>
+                <div class="strategy-metric"><strong>Latest Closed PnL</strong><span class="${latestClosedPnlClass}">${latestClosedPnl}</span></div>
               </div>
             </div>
           `;
