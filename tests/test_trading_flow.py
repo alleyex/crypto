@@ -44,6 +44,7 @@ from scripts.write_test_artifact import build_test_summary
 from scripts.write_test_artifact import get_outcome
 from scripts.write_test_artifact import read_junit_counts
 from scripts.write_test_artifact import write_test_artifact
+from app.data.binance_client import fetch_klines
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
@@ -539,8 +540,22 @@ def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
     assert env["COMPOSE_PROJECT_NAME"] == "crypto_pg_validation"
     assert env["CRYPTO_DB_BACKEND"] == "postgres"
     assert env["CRYPTO_DATABASE_URL"] == "postgresql://crypto:crypto@postgres:5432/crypto"
+    assert env["CRYPTO_USE_FAKE_KLINES"] == "1"
+    assert env["CRYPTO_FAKE_KLINE_CLOSES"] == "10,11,12,13,14"
     assert env["CRYPTO_POSTGRES_CONNECT_RETRIES"] == "15"
     assert env["CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS"] == "1"
+
+
+def test_fetch_klines_returns_fake_data_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("CRYPTO_USE_FAKE_KLINES", "1")
+    monkeypatch.setenv("CRYPTO_FAKE_KLINE_CLOSES", "21,22,23,24,25")
+    monkeypatch.setattr("app.data.binance_client.time.time", lambda: 300.0)
+
+    klines = fetch_klines(limit=3)
+
+    assert len(klines) == 3
+    assert [kline[4] for kline in klines] == ["23.0", "24.0", "25.0"]
+    assert klines[0][0] < klines[-1][0]
 
 
 def test_build_summary_markdown_renders_key_runtime_fields() -> None:

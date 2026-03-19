@@ -217,6 +217,8 @@ def make_env(project_name: str, database_url: str) -> dict[str, str]:
     env["COMPOSE_PROJECT_NAME"] = project_name
     env["CRYPTO_DB_BACKEND"] = "postgres"
     env["CRYPTO_DATABASE_URL"] = database_url
+    env["CRYPTO_USE_FAKE_KLINES"] = "1"
+    env.setdefault("CRYPTO_FAKE_KLINE_CLOSES", "10,11,12,13,14")
     env.setdefault("CRYPTO_POSTGRES_CONNECT_RETRIES", "15")
     env.setdefault("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "1")
     return env
