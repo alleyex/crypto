@@ -319,6 +319,12 @@ def render_admin_page() -> str:
         font-size: 16px;
       }
 
+      .strategy-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .strategy-card-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1044,12 +1050,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               ? "warn"
               : activityState.className;
           const disabledReason = strategyEntry.disabled_reason || "none";
+          const canPromote = strategyEntry.active;
 
           return `
             <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
               <div class="strategy-card-header">
                 <strong>${item.strategy_name}</strong>
-                <span class="${enabledClass}">${enabledLabel}</span>
+                <div class="strategy-card-actions">
+                  ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
+                  <span class="${enabledClass}">${enabledLabel}</span>
+                </div>
               </div>
               <div class="strategy-card-grid">
                 <div class="strategy-metric"><strong>Signal</strong>${latestSignal}</div>
@@ -1191,6 +1201,51 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         });
       }
 
+      function collectSchedulerStrategyPayload() {
+        const selectedSchedulerStrategies = Array.from(
+          el("scheduler-strategy-select")?.selectedOptions || []
+        ).map((option) => option.value);
+        const selectedDisabledStrategies = Array.from(
+          el("scheduler-disabled-strategy-select")?.selectedOptions || []
+        ).map((option) => option.value);
+        const strategyPriorities = Object.fromEntries(
+          Array.from(document.querySelectorAll("[data-strategy-priority]")).map((input, index) => [
+            input.dataset.strategyPriority,
+            Number.parseInt(input.value || `${index}`, 10),
+          ])
+        );
+        const disabledStrategyNotes = Object.fromEntries(
+          Array.from(document.querySelectorAll("[data-strategy-disabled-note]"))
+            .map((input) => [input.dataset.strategyDisabledNote, input.value.trim()])
+            .filter(([, value]) => value)
+        );
+        const effectiveLimitRaw = el("scheduler-effective-limit-input")?.value?.trim() || "";
+        return {
+          strategy_names: selectedSchedulerStrategies.length
+            ? selectedSchedulerStrategies
+            : ["__DEFAULT_STRATEGY_NAME__"],
+          disabled_strategy_names: selectedDisabledStrategies,
+          strategy_priorities: strategyPriorities,
+          disabled_strategy_notes: disabledStrategyNotes,
+          effective_strategy_limit: effectiveLimitRaw ? Number.parseInt(effectiveLimitRaw, 10) : null,
+        };
+      }
+
+      async function promoteStrategyPriority(strategyName) {
+        const payload = collectSchedulerStrategyPayload();
+        const priorities = payload.strategy_priorities || {};
+        const currentValues = Object.values(priorities).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+        const nextPriority = currentValues.length ? Math.min(...currentValues) - 1 : 0;
+        priorities[strategyName] = nextPriority;
+        payload.strategy_priorities = priorities;
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -1325,35 +1380,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           } else if (type === "scheduler-stop") {
             result = await api("/scheduler/stop", { method: "POST" });
           } else if (type === "scheduler-strategy-save") {
-            const selectedSchedulerStrategies = Array.from(
-              el("scheduler-strategy-select")?.selectedOptions || []
-            ).map((option) => option.value);
-            const selectedDisabledStrategies = Array.from(
-              el("scheduler-disabled-strategy-select")?.selectedOptions || []
-            ).map((option) => option.value);
-            const strategyPriorities = Object.fromEntries(
-              Array.from(document.querySelectorAll("[data-strategy-priority]")).map((input, index) => [
-                input.dataset.strategyPriority,
-                Number.parseInt(input.value || `${index}`, 10),
-              ])
-            );
-            const disabledStrategyNotes = Object.fromEntries(
-              Array.from(document.querySelectorAll("[data-strategy-disabled-note]"))
-                .map((input) => [input.dataset.strategyDisabledNote, input.value.trim()])
-                .filter(([, value]) => value)
-            );
-            const effectiveLimitRaw = el("scheduler-effective-limit-input")?.value?.trim() || "";
             result = await api("/scheduler/strategy", {
               method: "POST",
-              body: JSON.stringify({
-                strategy_names: selectedSchedulerStrategies.length
-                  ? selectedSchedulerStrategies
-                  : ["__DEFAULT_STRATEGY_NAME__"],
-                disabled_strategy_names: selectedDisabledStrategies,
-                strategy_priorities: strategyPriorities,
-                disabled_strategy_notes: disabledStrategyNotes,
-                effective_strategy_limit: effectiveLimitRaw ? Number.parseInt(effectiveLimitRaw, 10) : null,
-              }),
+              body: JSON.stringify(collectSchedulerStrategyPayload()),
             });
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
@@ -1410,6 +1439,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("strategy-summary-board")?.addEventListener("click", (event) => {
+        const promoteButton = event.target.closest("[data-promote-strategy]");
+        if (promoteButton) {
+          promoteStrategyPriority(promoteButton.dataset.promoteStrategy).catch((error) => {
+            el("scheduler-message").textContent = `Error:\n${error.message}`;
+          });
+          return;
+        }
         const card = event.target.closest("[data-strategy-name]");
         if (!card) return;
         const nextStrategy = closedTradesStrategyFilter === card.dataset.strategyName ? "all" : card.dataset.strategyName;
