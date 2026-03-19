@@ -2306,6 +2306,7 @@ def test_admin_page_is_served() -> None:
     assert '<option value="enable_disable">enable/disable</option>' in response.text
     assert "Reset" in response.text
     assert "Scheduler Control Activity" in response.text
+    assert "LATEST" in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "effective order:" in response.text
     assert "limit:" in response.text

@@ -1258,7 +1258,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
-        board.innerHTML = schedulerEvents.map((event) => {
+        board.innerHTML = schedulerEvents.map((event, index) => {
           const action = event.payload?.action || "unknown";
           const preset = event.payload?.preset || "";
           const strategyNames = event.payload?.strategy_names || event.payload?.disabled_strategy_names || [];
@@ -1273,7 +1273,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           ].filter(Boolean);
           return `
             <div class="trade-row">
-              <div><strong>Action</strong>${action}<br>${event.created_at}</div>
+              <div><strong>Action</strong>${action}${index === 0 ? ' <span class="ok">LATEST</span>' : ""}<br>${event.created_at}</div>
               <div><strong>Status</strong><span class="${statusClassName}">${event.status}</span><br>${event.source}</div>
               <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}</div>
             </div>
