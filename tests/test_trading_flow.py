@@ -2266,6 +2266,12 @@ def test_admin_page_is_served() -> None:
     assert 'data-action="scheduler-preset-top1"' in response.text
     assert 'data-action="scheduler-preset-top2"' in response.text
     assert 'data-action="scheduler-preset-all"' in response.text
+    assert 'data-action="scheduler-priority-sequential"' in response.text
+    assert 'Sequential' in response.text
+    assert 'data-action="scheduler-priority-reverse"' in response.text
+    assert 'Reverse' in response.text
+    assert 'data-action="scheduler-priority-active-first"' in response.text
+    assert 'Active first' in response.text
     assert 'data-action="scheduler-reset-priorities"' in response.text
     assert 'Reset priorities' in response.text
     assert 'data-action="scheduler-clear-notes"' in response.text

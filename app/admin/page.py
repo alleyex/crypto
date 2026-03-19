@@ -521,6 +521,9 @@ __STRATEGY_OPTIONS__
             <button class="secondary" type="button" data-action="scheduler-preset-top1">Apply top-1</button>
             <button class="secondary" type="button" data-action="scheduler-preset-top2">Apply top-2</button>
             <button class="secondary" type="button" data-action="scheduler-preset-all">All enabled</button>
+            <button class="secondary" type="button" data-action="scheduler-priority-sequential">Sequential</button>
+            <button class="secondary" type="button" data-action="scheduler-priority-reverse">Reverse</button>
+            <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
             <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset priorities</button>
           </div>
           <div class="button-row">
@@ -1343,6 +1346,40 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         await refreshAll();
       }
 
+      async function applyPriorityPreset(mode) {
+        const payload = collectSchedulerStrategyPayload();
+        const strategyEntries = Array.isArray(window.__schedulerStrategyStatus?.strategy_entries)
+          ? window.__schedulerStrategyStatus.strategy_entries
+          : [];
+        const availableStrategies = strategyEntries.length
+          ? strategyEntries.map((entry) => entry.strategy_name).filter(Boolean)
+          : Array.from(
+              new Set([
+                ...(payload.strategy_names || []),
+                ...(payload.disabled_strategy_names || []),
+                ...Object.keys(payload.strategy_priorities || {}),
+              ])
+            );
+        let orderedNames = availableStrategies;
+        if (mode === "reverse") {
+          orderedNames = [...availableStrategies].reverse();
+        } else if (mode === "active-first") {
+          const activeSet = new Set(payload.strategy_names || []);
+          const active = availableStrategies.filter((strategyName) => activeSet.has(strategyName));
+          const rest = availableStrategies.filter((strategyName) => !activeSet.has(strategyName));
+          orderedNames = [...active, ...rest];
+        }
+        payload.strategy_priorities = Object.fromEntries(
+          orderedNames.map((strategyName, index) => [strategyName, index])
+        );
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
       async function clearDisabledStrategyNotes() {
         document.querySelectorAll("[data-strategy-disabled-note]").forEach((input) => {
           input.value = "";
@@ -1503,6 +1540,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           } else if (type === "scheduler-preset-all") {
             await applySchedulerPreset(null);
+            return;
+          } else if (type === "scheduler-priority-sequential") {
+            await applyPriorityPreset("sequential");
+            return;
+          } else if (type === "scheduler-priority-reverse") {
+            await applyPriorityPreset("reverse");
+            return;
+          } else if (type === "scheduler-priority-active-first") {
+            await applyPriorityPreset("active-first");
             return;
           } else if (type === "scheduler-reset-priorities") {
             await resetStrategyPriorities();
