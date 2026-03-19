@@ -510,6 +510,9 @@ __STRATEGY_OPTIONS__
             <span class="chip">Disabled note: explain why a strategy is turned off.</span>
           </div>
           <div class="inline-controls">
+            <button class="secondary" type="button" data-action="scheduler-clear-notes">Clear notes</button>
+          </div>
+          <div class="inline-controls">
             <label for="scheduler-effective-limit-input">Effective Limit</label>
             <input id="scheduler-effective-limit-input" type="number" step="1" min="1" placeholder="all" />
           </div>
@@ -1340,6 +1343,20 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         await refreshAll();
       }
 
+      async function clearDisabledStrategyNotes() {
+        document.querySelectorAll("[data-strategy-disabled-note]").forEach((input) => {
+          input.value = "";
+        });
+        const payload = collectSchedulerStrategyPayload();
+        payload.disabled_strategy_notes = {};
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
       function updateHeartbeats(health) {
         const heartbeatCheck = health.checks.heartbeats || { components: [] };
         const lines = (heartbeatCheck.components || []).map((item) =>
@@ -1489,6 +1506,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           } else if (type === "scheduler-reset-priorities") {
             await resetStrategyPriorities();
+            return;
+          } else if (type === "scheduler-clear-notes") {
+            await clearDisabledStrategyNotes();
             return;
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
