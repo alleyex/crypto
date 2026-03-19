@@ -2,11 +2,15 @@ from typing import Dict, List, Tuple, Union
 
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
+from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.strategy.registry import list_registered_strategies
 from app.scheduler.runner import LOG_FILE
 from app.scheduler.runner import get_scheduler_log_file
 from app.scheduler.runner import get_scheduler_log_files
 from app.scheduler.runner import RUNTIME_DIR
 from app.scheduler.runner import STOP_FILE
+
+STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy"
 
 
 def set_stop_flag() -> str:
@@ -48,6 +52,42 @@ def get_stop_status() -> Dict[str, Union[str, bool]]:
     return {
         "stopped": STOP_FILE.exists(),
         "stop_file": str(STOP_FILE),
+    }
+
+
+def read_active_strategy() -> str:
+    if not STRATEGY_FILE.exists():
+        return DEFAULT_STRATEGY_NAME
+    strategy_name = STRATEGY_FILE.read_text(encoding="utf-8").strip()
+    if not strategy_name:
+        return DEFAULT_STRATEGY_NAME
+    if strategy_name not in list_registered_strategies():
+        return DEFAULT_STRATEGY_NAME
+    return strategy_name
+
+
+def set_active_strategy(strategy_name: str) -> Dict[str, str]:
+    if strategy_name not in list_registered_strategies():
+        raise ValueError(f"Unknown strategy: {strategy_name}")
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    STRATEGY_FILE.write_text(f"{strategy_name}\n", encoding="utf-8")
+    log_event(
+        event_type="scheduler_control",
+        status="updated",
+        source="scheduler_control",
+        message="Scheduler active strategy updated.",
+        payload={"strategy_name": strategy_name, "strategy_file": str(STRATEGY_FILE)},
+    )
+    return {"strategy_name": strategy_name, "strategy_file": str(STRATEGY_FILE)}
+
+
+def get_strategy_status() -> Dict[str, Union[str, List[str]]]:
+    return {
+        "strategy_name": read_active_strategy(),
+        "default_strategy": DEFAULT_STRATEGY_NAME,
+        "strategy_file": str(STRATEGY_FILE),
+        "available_strategies": list_registered_strategies(),
     }
 
 

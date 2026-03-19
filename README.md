@@ -113,6 +113,15 @@ python scripts/run_strategy_job.py --strategy momentum_3bar
 python scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
 ```
 
+Set the active runtime strategy used by pipeline and strategy-only scheduler loops:
+
+```bash
+curl -s http://127.0.0.1:8000/scheduler/strategy
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar"}'
+```
+
 Run the API locally:
 
 ```bash
@@ -328,8 +337,10 @@ Control endpoints:
 - `POST /positions/rebuild`
 - `POST /pnl/update`
 - `GET /scheduler/status`
+- `GET /scheduler/strategy`
 - `POST /scheduler/stop`
 - `POST /scheduler/start`
+- `POST /scheduler/strategy`
 - `GET /scheduler/logs?lines=20`
 - `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
 - `GET /kill-switch/status`
@@ -345,8 +356,12 @@ curl -s -X POST http://127.0.0.1:8000/signals/test \
   -H "Content-Type: application/json" \
   -d '{"signal_type":"SELL"}'
 curl -s http://127.0.0.1:8000/scheduler/status
+curl -s http://127.0.0.1:8000/scheduler/strategy
 curl -s -X POST http://127.0.0.1:8000/scheduler/stop
 curl -s -X POST http://127.0.0.1:8000/scheduler/start
+curl -s -X POST http://127.0.0.1:8000/scheduler/strategy \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar"}'
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status

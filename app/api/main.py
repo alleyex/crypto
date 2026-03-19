@@ -41,8 +41,10 @@ from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
 from app.query.read_service import get_signals
 from app.scheduler.control import clear_stop_flag
+from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
+from app.scheduler.control import set_active_strategy
 from app.scheduler.control import set_stop_flag
 from app.scheduler.runner import LOG_DIR
 from app.scheduler.runner import LOG_FILE
@@ -303,6 +305,10 @@ class PipelineRunRequest(BaseModel):
     strategy_name: str = DEFAULT_STRATEGY_NAME
 
 
+class SchedulerStrategyRequest(BaseModel):
+    strategy_name: str = DEFAULT_STRATEGY_NAME
+
+
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
@@ -477,6 +483,16 @@ def soak_validation_history(limit: int = Query(default=20, ge=1, le=200)) -> lis
 @app.get("/scheduler/status")
 def scheduler_status() -> dict:
     return get_stop_status()
+
+
+@app.get("/scheduler/strategy")
+def scheduler_strategy_status() -> dict[str, Any]:
+    return get_strategy_status()
+
+
+@app.post("/scheduler/strategy")
+def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, Any]:
+    return set_active_strategy(payload.strategy_name)
 
 
 @app.post("/scheduler/stop")

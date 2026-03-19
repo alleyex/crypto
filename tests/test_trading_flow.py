@@ -2090,6 +2090,9 @@ def test_admin_page_is_served() -> None:
     assert 'id="alerting-runtime-status"' in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
+    assert 'id="scheduler-strategy-select"' in response.text
+    assert 'id="scheduler-detail"' in response.text
+    assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
     assert 'id="pipeline-status"' in response.text
     assert "momentum_3bar" in response.text
@@ -2138,6 +2141,35 @@ def test_strategies_endpoint_lists_registered_strategies() -> None:
     assert payload["default_strategy"] == "ma_cross"
     assert "ma_cross" in payload["strategies"]
     assert "momentum_3bar" in payload["strategies"]
+
+
+def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        "app.api.main.get_strategy_status",
+        lambda: {
+            "strategy_name": "ma_cross",
+            "default_strategy": "ma_cross",
+            "strategy_file": "runtime/scheduler.strategy",
+            "available_strategies": ["ma_cross", "momentum_3bar"],
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.main.set_active_strategy",
+        lambda strategy_name: {
+            "strategy_name": strategy_name,
+            "strategy_file": "runtime/scheduler.strategy",
+        },
+    )
+
+    status_response = client.get("/scheduler/strategy")
+    update_response = client.post("/scheduler/strategy", json={"strategy_name": "momentum_3bar"})
+
+    assert status_response.status_code == 200
+    assert status_response.json()["strategy_name"] == "ma_cross"
+    assert update_response.status_code == 200
+    assert update_response.json()["strategy_name"] == "momentum_3bar"
 
 
 def test_favicon_returns_no_content() -> None:
@@ -2655,7 +2687,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
         "app.scheduler.runner.run_pipeline_collect",
-        lambda: {
+        lambda strategy_name="ma_cross": {
             "steps": [
                 {"step": "generate_signal", "signal_type": "BUY"},
                 {"step": "evaluate_risk", "decision": "APPROVED"},
@@ -2692,6 +2724,7 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_active_strategy", lambda: "momentum_3bar")
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "app.scheduler.runner.run_strategy_job",

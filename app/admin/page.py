@@ -323,6 +323,7 @@ def render_admin_page() -> str:
           <div class="side-stat">
             <label>Scheduler</label>
             <div class="value" id="scheduler-status">Loading</div>
+            <div class="inline-note" id="scheduler-detail">Checking scheduler runtime state...</div>
           </div>
           <div class="side-stat">
             <label>Kill Switch</label>
@@ -378,6 +379,13 @@ __STRATEGY_OPTIONS__
         <div class="panel control-card">
           <h2>Scheduler</h2>
           <p>Pause or resume automatic execution without touching launchd state directly.</p>
+          <div class="inline-controls">
+            <label for="scheduler-strategy-select">Active Strategy</label>
+            <select id="scheduler-strategy-select">
+__STRATEGY_OPTIONS__
+            </select>
+            <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy</button>
+          </div>
           <div class="button-row">
             <button class="secondary" data-action="scheduler-start">Start</button>
             <button class="danger" data-action="scheduler-stop">Stop</button>
@@ -528,6 +536,10 @@ __STRATEGY_OPTIONS__
         const scheduler = health.checks.scheduler;
         el("scheduler-status").textContent = scheduler.stopped ? "STOPPED" : scheduler.status.toUpperCase();
         el("scheduler-status").className = `value ${statusClass(scheduler.status)}`;
+        const schedulerStrategy = window.__schedulerStrategyStatus || null;
+        el("scheduler-detail").textContent = schedulerStrategy
+          ? `active strategy: ${schedulerStrategy.strategy_name}`
+          : "Scheduler strategy not loaded yet.";
 
         const killSwitch = health.checks.kill_switch;
         el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";
@@ -730,7 +742,7 @@ __STRATEGY_OPTIONS__
 
       async function refreshAll() {
         schedulerLogsMode = el("logs-mode-select")?.value || "all";
-        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies] = await Promise.all([
+        const [health, positions, orders, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -741,12 +753,18 @@ __STRATEGY_OPTIONS__
           api("/validation/soak"),
           api("/validation/soak/history?limit=10"),
           api("/strategies"),
+          api("/scheduler/strategy"),
         ]);
 
+        window.__schedulerStrategyStatus = schedulerStrategy;
         const strategySelect = el("pipeline-strategy-select");
         if (strategySelect && strategies?.default_strategy && !strategySelect.dataset.initialized) {
           strategySelect.value = strategies.default_strategy;
           strategySelect.dataset.initialized = "true";
+        }
+        const schedulerStrategySelect = el("scheduler-strategy-select");
+        if (schedulerStrategySelect && schedulerStrategy?.strategy_name) {
+          schedulerStrategySelect.value = schedulerStrategy.strategy_name;
         }
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
@@ -767,6 +785,7 @@ __STRATEGY_OPTIONS__
           "auto-refresh-toggle": "pipeline-message",
           "scheduler-start": "scheduler-message",
           "scheduler-stop": "scheduler-message",
+          "scheduler-strategy-save": "scheduler-message",
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
           "alert-test": "alerts-message",
@@ -796,6 +815,13 @@ __STRATEGY_OPTIONS__
             result = await api("/scheduler/start", { method: "POST" });
           } else if (type === "scheduler-stop") {
             result = await api("/scheduler/stop", { method: "POST" });
+          } else if (type === "scheduler-strategy-save") {
+            result = await api("/scheduler/strategy", {
+              method: "POST",
+              body: JSON.stringify({
+                strategy_name: el("scheduler-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
+              }),
+            });
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
           } else if (type === "kill-disable") {
