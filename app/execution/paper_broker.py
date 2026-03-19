@@ -1,5 +1,5 @@
 import uuid
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
@@ -53,6 +53,30 @@ LIMIT 1;
 """
 
 
+SELECT_RISK_BY_ID_SQL = """
+SELECT
+    re.id,
+    re.signal_id,
+    re.symbol,
+    re.timeframe,
+    re.strategy_name,
+    re.signal_type,
+    re.decision
+FROM risk_events re
+WHERE re.id = ?;
+"""
+
+
+SELECT_PENDING_APPROVED_RISKS_SQL = """
+SELECT re.id
+FROM risk_events re
+LEFT JOIN orders o ON o.risk_event_id = re.id
+WHERE re.decision = 'APPROVED'
+  AND o.id IS NULL
+ORDER BY re.id ASC;
+"""
+
+
 INSERT_ORDER_SQL = """
 INSERT INTO orders (
     client_order_id,
@@ -83,15 +107,16 @@ def ensure_tables(connection: DBConnection) -> None:
     run_migrations(connection)
 
 
-def execute_latest_risk(
+def execute_risk_event_id(
     connection: DBConnection,
+    risk_event_id: int,
     order_qty: float = 0.001,
 ) -> Optional[Dict[str, Union[float, str, int]]]:
-    latest_risk = connection.execute(SELECT_LATEST_RISK_SQL).fetchone()
-    if latest_risk is None:
+    risk_event = connection.execute(SELECT_RISK_BY_ID_SQL, (risk_event_id,)).fetchone()
+    if risk_event is None:
         return None
 
-    risk_event_id, _, symbol, timeframe, strategy_name, signal_type, decision = latest_risk
+    risk_event_id, _, symbol, timeframe, strategy_name, signal_type, decision = risk_event
     if decision != "APPROVED":
         return {"risk_event_id": risk_event_id, "decision": decision}
     if signal_type not in ("BUY", "SELL"):
@@ -140,3 +165,26 @@ def execute_latest_risk(
         "price": latest_close,
         "status": "FILLED",
     }
+
+
+def execute_latest_risk(
+    connection: DBConnection,
+    order_qty: float = 0.001,
+) -> Optional[Dict[str, Union[float, str, int]]]:
+    latest_risk = connection.execute(SELECT_LATEST_RISK_SQL).fetchone()
+    if latest_risk is None:
+        return None
+    return execute_risk_event_id(connection, int(latest_risk[0]), order_qty=order_qty)
+
+
+def execute_pending_approved_risks(
+    connection: DBConnection,
+    order_qty: float = 0.001,
+) -> List[Dict[str, Union[float, str, int]]]:
+    pending_rows = connection.execute(SELECT_PENDING_APPROVED_RISKS_SQL).fetchall()
+    execution_results: List[Dict[str, Union[float, str, int]]] = []
+    for row in pending_rows:
+        execution_result = execute_risk_event_id(connection, int(row[0]), order_qty=order_qty)
+        if execution_result is not None:
+            execution_results.append(execution_result)
+    return execution_results

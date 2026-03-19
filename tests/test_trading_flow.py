@@ -51,6 +51,7 @@ from app.data.binance_client import fetch_klines
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
+from app.execution.paper_broker import execute_pending_approved_risks
 from app.execution.paper_broker import execute_latest_risk
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
@@ -1587,6 +1588,26 @@ def test_evaluate_latest_signal_rejects_duplicate_signal_type() -> None:
         connection.close()
 
 
+def test_evaluate_signal_id_allows_same_signal_type_for_different_symbols() -> None:
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        eth_signal = insert_signal(connection, "BUY", symbol="ETHUSDT", strategy_name="manual_test")
+        btc_risk = evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        eth_risk = evaluate_signal_id(connection, int(eth_signal["id"]), cooldown_seconds=0)
+
+        assert btc_risk is not None
+        assert eth_risk is not None
+        assert btc_risk["decision"] == "APPROVED"
+        assert eth_risk["decision"] == "APPROVED"
+    finally:
+        connection.close()
+
+
 def test_execute_latest_risk_only_creates_one_order_per_risk_event() -> None:
     connection = make_connection()
     try:
@@ -1611,6 +1632,39 @@ def test_execute_latest_risk_only_creates_one_order_per_risk_event() -> None:
         }
         assert len(get_orders(connection, limit=5)) == 1
         assert len(get_fills(connection, limit=5)) == 1
+    finally:
+        connection.close()
+
+
+def test_execute_pending_approved_risks_executes_multiple_symbols() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([20, 21, 22, 23, 24])],
+            symbol="ETHUSDT",
+        )
+
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        eth_signal = insert_signal(connection, "BUY", symbol="ETHUSDT", strategy_name="manual_test")
+        btc_risk = evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        eth_risk = evaluate_signal_id(connection, int(eth_signal["id"]), cooldown_seconds=0)
+
+        execution_results = execute_pending_approved_risks(connection, order_qty=0.25)
+
+        assert btc_risk is not None
+        assert eth_risk is not None
+        assert [result["symbol"] for result in execution_results] == ["BTCUSDT", "ETHUSDT"]
+        assert [result["risk_event_id"] for result in execution_results] == [btc_risk["id"], eth_risk["id"]]
+        assert len(get_orders(connection, limit=5)) == 2
+        assert len(get_fills(connection, limit=5)) == 2
     finally:
         connection.close()
 
@@ -3208,6 +3262,39 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         connection.close()
 
 
+def test_run_execution_job_executes_multiple_pending_risk_events() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, close) for index, close in enumerate([20, 21, 22, 23, 24])],
+            symbol="ETHUSDT",
+        )
+        btc_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        eth_signal = insert_signal(connection, "BUY", symbol="ETHUSDT", strategy_name="manual_test")
+        evaluate_signal_id(connection, int(btc_signal["id"]), cooldown_seconds=0)
+        evaluate_signal_id(connection, int(eth_signal["id"]), cooldown_seconds=0)
+
+        execution_result = run_execution_job(connection)
+
+        assert [step["step"] for step in execution_result["steps"]] == [
+            "paper_execute",
+            "paper_execute",
+            "update_positions",
+            "update_pnl",
+        ]
+        assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
+    finally:
+        connection.close()
+
+
 def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:
@@ -3396,6 +3483,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
     monkeypatch.setattr(
         "app.scheduler.runner.run_pipeline_collect",
         lambda strategy_name="ma_cross": {

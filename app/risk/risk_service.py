@@ -58,7 +58,10 @@ WHERE id = ?;
 SELECT_PREVIOUS_SIGNAL_SQL = """
 SELECT signal_type
 FROM signals
-WHERE id < ?
+WHERE symbol = ?
+  AND timeframe = ?
+  AND strategy_name = ?
+  AND id < ?
 ORDER BY id DESC
 LIMIT 1;
 """
@@ -164,7 +167,7 @@ def _evaluate_signal_row(
             else:
                 previous_signal = connection.execute(
                     SELECT_PREVIOUS_SIGNAL_SQL,
-                    (signal_id,),
+                    (symbol, timeframe, strategy_name, signal_id),
                 ).fetchone()
                 if previous_signal and previous_signal[0] == signal_type:
                     decision = "REJECTED"
@@ -184,7 +187,7 @@ def _evaluate_signal_row(
         else:
             previous_signal = connection.execute(
                 SELECT_PREVIOUS_SIGNAL_SQL,
-                (signal_id,),
+                (symbol, timeframe, strategy_name, signal_id),
             ).fetchone()
             if previous_signal and previous_signal[0] == signal_type:
                 decision = "REJECTED"
