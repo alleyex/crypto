@@ -194,6 +194,9 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ma_cross"]["latest_closed_trade"]["status"] == "loss"
         assert by_name["ma_cross"]["latest_closed_trade"]["closed_at"] == "2026-03-19 10:05:00"
         assert by_name["ma_cross"]["latest_closed_trade"]["realized_pnl"] == -0.002
+        assert by_name["ma_cross"]["latest_activity_at"] == by_name["ma_cross"]["latest_fill_at"]
+        assert by_name["ma_cross"]["latest_order_at"] is not None
+        assert by_name["ma_cross"]["latest_fill_at"] == "2026-03-19 10:05:00"
         assert by_name["ma_cross"]["filled_order_count"] == 2
         assert by_name["ma_cross"]["filled_qty_total"] == 0.002
         assert by_name["ma_cross"]["gross_realized_pnl"] == -0.002
@@ -208,6 +211,9 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["momentum_3bar"]["latest_risk"] is not None
         assert by_name["momentum_3bar"]["latest_fill"] is None
         assert by_name["momentum_3bar"]["latest_closed_trade"] is None
+        assert by_name["momentum_3bar"]["latest_activity_at"] is not None
+        assert by_name["momentum_3bar"]["latest_order_at"] is None
+        assert by_name["momentum_3bar"]["latest_fill_at"] is None
         assert by_name["momentum_3bar"]["filled_order_count"] == 0
         assert by_name["momentum_3bar"]["filled_qty_total"] == 0.0
         assert by_name["momentum_3bar"]["buy_fill_count"] == 0
@@ -2272,6 +2278,9 @@ def test_admin_page_is_served() -> None:
     assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
     assert "Latest Closed PnL" in response.text
+    assert "Latest Activity" in response.text
+    assert "Latest Order At" in response.text
+    assert "Latest Fill At" in response.text
     assert "strategy-card clickable" in response.text
 
 
