@@ -2226,6 +2226,22 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
         evaluate_latest_signal(connection, cooldown_seconds=0)
         execute_latest_risk(connection)
         update_positions(connection)
+        upsert_heartbeat(
+            connection,
+            component="pipeline",
+            status="completed",
+            message="Pipeline run completed.",
+            payload={
+                "step_count": 6,
+                "strategy_name": "ma_cross",
+                "strategy_names": ["ma_cross"],
+                "symbol_names": ["BTCUSDT", "ETHUSDT"],
+                "generated_signal_count": 2,
+                "approved_risk_count": 2,
+                "rejected_risk_count": 0,
+                "filled_execution_count": 2,
+            },
+        )
     finally:
         connection.close()
 
@@ -2257,6 +2273,10 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["database"]["status"] == "ok"
     assert payload["checks"]["candles"]["status"] == "ok"
     assert payload["checks"]["pipeline"]["status"] == "ok"
+    assert payload["checks"]["pipeline"]["latest_run"]["strategy_names"] == ["ma_cross"]
+    assert payload["checks"]["pipeline"]["latest_run"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert payload["checks"]["pipeline"]["latest_run"]["generated_signal_count"] == 2
+    assert payload["checks"]["pipeline"]["latest_run"]["filled_execution_count"] == 2
     assert payload["checks"]["scheduler"]["status"] == "ok"
     assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0

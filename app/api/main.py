@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Optional, Union
@@ -193,14 +194,38 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
         LIMIT 1;
         """
     ).fetchone()
+    pipeline_heartbeat = connection.execute(
+        """
+        SELECT status, message, payload_json, last_seen_at
+        FROM runtime_heartbeats
+        WHERE component = 'pipeline'
+        LIMIT 1;
+        """
+    ).fetchone()
 
-    if latest_signal is None and latest_risk is None and latest_order is None:
+    if latest_signal is None and latest_risk is None and latest_order is None and pipeline_heartbeat is None:
         return {
             "status": "degraded",
             "reason": "No pipeline activity found yet.",
         }
 
     result: dict[str, Any] = {"status": "ok"}
+    if pipeline_heartbeat is not None:
+        heartbeat_payload = json.loads(pipeline_heartbeat[2]) if pipeline_heartbeat[2] else {}
+        result["latest_run"] = {
+            "status": pipeline_heartbeat[0],
+            "message": pipeline_heartbeat[1],
+            "created_at": pipeline_heartbeat[3],
+            "age_seconds": int((_utc_now() - parse_db_timestamp(pipeline_heartbeat[3])).total_seconds()),
+            "step_count": heartbeat_payload.get("step_count"),
+            "strategy_name": heartbeat_payload.get("strategy_name"),
+            "strategy_names": heartbeat_payload.get("strategy_names", []),
+            "symbol_names": heartbeat_payload.get("symbol_names", []),
+            "generated_signal_count": heartbeat_payload.get("generated_signal_count"),
+            "approved_risk_count": heartbeat_payload.get("approved_risk_count"),
+            "rejected_risk_count": heartbeat_payload.get("rejected_risk_count"),
+            "filled_execution_count": heartbeat_payload.get("filled_execution_count"),
+        }
     if latest_signal is not None:
         result["latest_signal"] = {
             "signal_type": latest_signal[0],
