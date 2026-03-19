@@ -2299,6 +2299,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="closed-trades-strategy-select"' in response.text
     assert 'id="closed-trades-reset-button"' in response.text
     assert 'id="scheduler-control-board"' in response.text
+    assert 'id="scheduler-preset-quick-actions"' in response.text
     assert 'id="scheduler-control-filter-select"' in response.text
     assert 'id="scheduler-control-reset-button"' in response.text
     assert '<option value="priority">priority</option>' in response.text
@@ -2311,6 +2312,7 @@ def test_admin_page_is_served() -> None:
     assert 'data-copy-scheduler-action="' in response.text
     assert "Replay Preset" in response.text
     assert 'data-replay-scheduler-preset="' in response.text
+    assert "Recent presets loading..." in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "effective order:" in response.text
     assert "limit:" in response.text

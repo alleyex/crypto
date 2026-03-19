@@ -662,6 +662,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Scheduler Control Activity</h2>
           <p>Recent scheduler strategy operations extracted from structured audit actions.</p>
+          <div class="inline-controls" id="scheduler-preset-quick-actions">
+            <span class="chip">Recent presets loading...</span>
+          </div>
           <div class="inline-controls">
             <label for="scheduler-control-filter-select">Filter</label>
             <select id="scheduler-control-filter-select">
@@ -1231,6 +1234,23 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       function updateSchedulerControlActivity(auditEvents) {
         const board = el("scheduler-control-board");
+        const presetBar = el("scheduler-preset-quick-actions");
+        const presetEvents = (Array.isArray(auditEvents) ? auditEvents : [])
+          .filter((event) => event.event_type === "scheduler_control")
+          .filter((event) => {
+            const action = String(event.payload?.action || "");
+            return action.startsWith("priority_preset:") || action.startsWith("limit_preset:");
+          })
+          .slice(0, 4);
+        if (presetBar) {
+          presetBar.innerHTML = presetEvents.length
+            ? presetEvents.map((event) => {
+                const action = event.payload?.action || "unknown";
+                const preset = event.payload?.preset || "";
+                return `<button type="button" class="secondary" data-replay-scheduler-preset="${preset}" data-replay-scheduler-action="${action}">Replay ${action}</button>`;
+              }).join("")
+            : '<span class="chip">No recent preset actions.</span>';
+        }
         const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
           .filter((event) => event.event_type === "scheduler_control")
           .filter((event) => {
