@@ -269,10 +269,13 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         completed = int(entry["completed"])
         failed = int(entry["failed"])
         attempts = attempt_map.get(job_type, {})
+        type_latest_jobs = [job for job in latest_jobs if str(job.get("job_type")) == job_type]
         entry["success_ratio"] = round(completed / total, 4) if total else 0.0
         entry["failure_ratio"] = round(failed / total, 4) if total else 0.0
         entry["avg_attempt_count"] = round(float(attempts.get("avg_attempt_count") or 0.0), 2)
         entry["max_attempt_count"] = int(attempts.get("max_attempt_count") or 0)
+        entry["latest_failed_job"] = next((job for job in type_latest_jobs if job["status"] == "failed"), None)
+        entry["latest_retry_job"] = next((job for job in type_latest_jobs if int(job.get("attempt_count") or 0) > 1), None)
     retry_jobs = [job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1]
     latest_failed_job = next((job for job in latest_jobs if job["status"] == "failed"), None)
     latest_retry_job = next((job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1), None)

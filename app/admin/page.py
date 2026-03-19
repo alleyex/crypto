@@ -1577,7 +1577,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         ];
         const typeBits = ["market_data", "strategy", "execution"].map((jobType) => {
           const item = byType[jobType] || {};
-          return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0} fail%=${Number(item.failure_ratio || 0) * 100}% avg=${item.avg_attempt_count ?? 0}`;
+          const latestTypeFailed = item.latest_failed_job ? ` latest_failed=#${item.latest_failed_job.id}` : "";
+          const latestTypeRetry = item.latest_retry_job ? ` latest_retry=#${item.latest_retry_job.id}` : "";
+          return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0} fail%=${Number(item.failure_ratio || 0) * 100}% avg=${item.avg_attempt_count ?? 0}${latestTypeFailed}${latestTypeRetry}`;
         });
         const latestFailedBit = latestFailedJob
           ? `Latest failed: #${latestFailedJob.id} ${latestFailedJob.job_type} attempts=${latestFailedJob.attempt_count}${latestFailedJob.error_message ? ` error=${latestFailedJob.error_message}` : ""}`
