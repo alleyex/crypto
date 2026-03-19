@@ -332,6 +332,41 @@ def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, 
     raise ValueError(f"Unsupported job type: {job_type}")
 
 
+def run_next_pipeline_batch(connection: DBConnection) -> dict[str, Any]:
+    ensure_table(connection)
+    queued_jobs = list_jobs(connection, limit=200, status="queued")
+    batch_id = next(
+        (
+            str((job.get("payload") or {}).get("batch_id"))
+            for job in reversed(queued_jobs)
+            if (job.get("payload") or {}).get("batch_id")
+        ),
+        None,
+    )
+    if not batch_id:
+        return {
+            "status": "empty",
+            "message": "No queued pipeline batches available.",
+        }
+
+    batch_jobs = [
+        job
+        for job in reversed(queued_jobs)
+        if str((job.get("payload") or {}).get("batch_id") or "") == batch_id
+    ]
+    if not batch_jobs:
+        return {
+            "status": "empty",
+            "message": "No queued jobs available for next pipeline batch.",
+        }
+
+    next_job = batch_jobs[0]
+    run_result = run_next_queued_job(connection, job_type=str(next_job["job_type"]))
+    run_result["batch_id"] = batch_id
+    run_result["remaining_job_types"] = [str(job["job_type"]) for job in batch_jobs[1:]]
+    return run_result
+
+
 def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None) -> dict[str, Any]:
     leased_job = lease_next_job(connection, job_type=job_type)
     if leased_job is None:

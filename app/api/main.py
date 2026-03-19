@@ -30,6 +30,7 @@ from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import list_jobs as list_queue_jobs
 from app.core.job_queue import retry_job
+from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
@@ -568,6 +569,15 @@ def run_next_queue_job(payload: Optional[QueueRunRequest] = None) -> dict[str, A
     try:
         job_type = payload.job_type if payload is not None else None
         return run_next_queued_job(connection, job_type=job_type)
+    finally:
+        connection.close()
+
+
+@app.post("/queue/jobs/run-next-pipeline")
+def run_next_pipeline_queue_batch() -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        return run_next_pipeline_batch(connection)
     finally:
         connection.close()
 

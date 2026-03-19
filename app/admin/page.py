@@ -710,6 +710,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           </div>
           <div class="button-row" style="margin-bottom: 16px;">
             <button class="secondary" data-action="queue-enqueue-pipeline">Enqueue Pipeline Chain</button>
+            <button class="secondary" data-action="queue-drain-pipeline">Drain Next Pipeline Batch</button>
             <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
             <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
             <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
@@ -1747,6 +1748,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "scheduler-stop": "scheduler-message",
           "scheduler-strategy-save": "scheduler-message",
           "queue-enqueue-pipeline": "queue-message",
+          "queue-drain-pipeline": "queue-message",
           "queue-enqueue-strategy": "queue-message",
           "queue-drain-strategy": "queue-message",
           "queue-drain-execution": "queue-message",
@@ -1831,6 +1833,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 symbol_names: payload.symbol_names,
                 payload: { source: "admin_queue_pipeline" },
               }),
+            });
+          } else if (type === "queue-drain-pipeline") {
+            result = await api("/queue/jobs/run-next-pipeline", {
+              method: "POST",
             });
           } else if (type === "queue-enqueue-strategy") {
             const payload = collectSchedulerStrategyPayload();

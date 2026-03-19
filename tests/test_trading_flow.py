@@ -2702,6 +2702,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="queue-filter-select"' in response.text
     assert 'data-action="queue-enqueue-strategy"' in response.text
     assert 'data-action="queue-enqueue-pipeline"' in response.text
+    assert 'data-action="queue-drain-pipeline"' in response.text
     assert 'data-action="queue-drain-strategy"' in response.text
     assert 'data-action="queue-drain-execution"' in response.text
     assert 'data-action="queue-retry-strategy"' in response.text
@@ -2721,6 +2722,7 @@ def test_admin_page_is_served() -> None:
     assert "Latest retry:" in response.text
     assert "Enqueue Strategy Job" in response.text
     assert "Enqueue Pipeline Chain" in response.text
+    assert "Drain Next Pipeline Batch" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
     assert "Retry Failed Strategy Job" in response.text
@@ -3601,6 +3603,56 @@ def test_enqueue_pipeline_queue_jobs_endpoint(monkeypatch) -> None:
     assert captured["strategy_names"] == ["ma_cross", "momentum_3bar"]
     assert captured["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert captured["payload"] == {"source": "api_test"}
+
+
+def test_run_next_pipeline_batch_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        "app.api.main.run_next_pipeline_batch",
+        lambda connection: {
+            "status": "completed",
+            "batch_id": "batch-1234",
+            "remaining_job_types": ["strategy", "execution"],
+            "job": {"id": 10, "job_type": "market_data"},
+        },
+    )
+
+    response = client.post("/queue/jobs/run-next-pipeline")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["batch_id"] == "batch-1234"
+    assert response.json()["remaining_job_types"] == ["strategy", "execution"]
+
+
+def test_run_next_pipeline_batch_drains_oldest_job_in_batch(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        jobs = __import__("app.core.job_queue", fromlist=["enqueue_pipeline_jobs"]).enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+        )
+
+        def fake_run_next_queued_job(conn, job_type=None):
+            return {
+                "status": "completed",
+                "job": {"id": jobs[0]["job_id"], "job_type": job_type},
+                "result": {"status": "ok"},
+            }
+
+        monkeypatch.setattr("app.core.job_queue.run_next_queued_job", fake_run_next_queued_job)
+
+        result = __import__("app.core.job_queue", fromlist=["run_next_pipeline_batch"]).run_next_pipeline_batch(connection)
+
+        assert result["status"] == "completed"
+        assert result["batch_id"] == jobs[0]["batch_id"]
+        assert result["job"]["job_type"] == "market_data"
+        assert result["remaining_job_types"] == ["strategy", "execution"]
+    finally:
+        connection.close()
 
 
 def test_run_next_queued_job_completes_strategy_job(monkeypatch) -> None:
