@@ -2271,6 +2271,8 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-summary-board"' in response.text
     assert 'data-strategy-name="' in response.text
     assert 'data-promote-strategy="' in response.text
+    assert 'data-demote-strategy="' in response.text
+    assert 'Demote' in response.text
     assert 'data-disable-strategy="' in response.text
     assert 'data-enable-strategy="' in response.text
     assert 'id="strategy-closed-trades-board"' in response.text

@@ -1058,6 +1058,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               : activityState.className;
           const disabledReason = strategyEntry.disabled_reason || "none";
           const canPromote = strategyEntry.active;
+          const canDemote = strategyEntry.active;
 
           return `
             <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
@@ -1065,6 +1066,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <strong>${item.strategy_name}</strong>
                 <div class="strategy-card-actions">
                   ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
+                  ${canDemote ? `<button type="button" class="secondary" data-demote-strategy="${item.strategy_name}">Demote</button>` : ""}
                   ${strategyEntry.enabled !== false
                     ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>`
                     : `<button type="button" class="secondary" data-enable-strategy="${item.strategy_name}">Enable</button>`}
@@ -1246,6 +1248,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const priorities = payload.strategy_priorities || {};
         const currentValues = Object.values(priorities).map((value) => Number(value)).filter((value) => Number.isFinite(value));
         const nextPriority = currentValues.length ? Math.min(...currentValues) - 1 : 0;
+        priorities[strategyName] = nextPriority;
+        payload.strategy_priorities = priorities;
+        const result = await api("/scheduler/strategy", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        el("scheduler-message").textContent = formatJson(result);
+        await refreshAll();
+      }
+
+      async function demoteStrategyPriority(strategyName) {
+        const payload = collectSchedulerStrategyPayload();
+        const priorities = payload.strategy_priorities || {};
+        const currentValues = Object.values(priorities).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+        const nextPriority = currentValues.length ? Math.max(...currentValues) + 1 : 1;
         priorities[strategyName] = nextPriority;
         payload.strategy_priorities = priorities;
         const result = await api("/scheduler/strategy", {
@@ -1531,6 +1548,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const promoteButton = event.target.closest("[data-promote-strategy]");
         if (promoteButton) {
           promoteStrategyPriority(promoteButton.dataset.promoteStrategy).catch((error) => {
+            el("scheduler-message").textContent = `Error:\n${error.message}`;
+          });
+          return;
+        }
+        const demoteButton = event.target.closest("[data-demote-strategy]");
+        if (demoteButton) {
+          demoteStrategyPriority(demoteButton.dataset.demoteStrategy).catch((error) => {
             el("scheduler-message").textContent = `Error:\n${error.message}`;
           });
           return;
