@@ -46,7 +46,7 @@ jobs:
       artifact_dir: ${{ steps.expose-outputs.outputs.artifact_dir }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python Project
         uses: ./.github/actions/setup-python-project

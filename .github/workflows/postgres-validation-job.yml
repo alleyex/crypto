@@ -64,7 +64,7 @@ jobs:
       mode: ${{ steps.expose-outputs.outputs.mode }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python Project
         uses: ./.github/actions/setup-python-project
