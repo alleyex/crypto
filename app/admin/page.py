@@ -557,6 +557,7 @@ __STRATEGY_OPTIONS__
             <select id="closed-trades-strategy-select">
 __CLOSED_TRADE_STRATEGY_OPTIONS__
             </select>
+            <button class="secondary" type="button" id="closed-trades-reset-button">Reset</button>
           </div>
           <div class="trade-list" id="strategy-closed-trades-board">
             <div class="strategy-card">Loading...</div>
@@ -1133,7 +1134,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       el("strategy-summary-board")?.addEventListener("click", (event) => {
         const card = event.target.closest("[data-strategy-name]");
         if (!card) return;
-        applyClosedTradesStrategyFilter(card.dataset.strategyName);
+        const nextStrategy = closedTradesStrategyFilter === card.dataset.strategyName ? "all" : card.dataset.strategyName;
+        applyClosedTradesStrategyFilter(nextStrategy);
       });
 
       el("strategy-summary-board")?.addEventListener("keydown", (event) => {
@@ -1141,7 +1143,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const card = event.target.closest("[data-strategy-name]");
         if (!card) return;
         event.preventDefault();
-        applyClosedTradesStrategyFilter(card.dataset.strategyName);
+        const nextStrategy = closedTradesStrategyFilter === card.dataset.strategyName ? "all" : card.dataset.strategyName;
+        applyClosedTradesStrategyFilter(nextStrategy);
+      });
+
+      el("closed-trades-reset-button")?.addEventListener("click", () => {
+        applyClosedTradesStrategyFilter("all");
       });
 
       updateAutoRefreshStatus();

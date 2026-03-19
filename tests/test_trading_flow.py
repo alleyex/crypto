@@ -2258,6 +2258,7 @@ def test_admin_page_is_served() -> None:
     assert 'id="strategy-sort-select"' in response.text
     assert 'id="strategy-filter-select"' in response.text
     assert 'id="closed-trades-strategy-select"' in response.text
+    assert 'id="closed-trades-reset-button"' in response.text
     assert 'id="scheduler-detail"' in response.text
     assert "/scheduler/strategy" in response.text
     assert 'id="issue-strip"' in response.text
@@ -2271,6 +2272,7 @@ def test_admin_page_is_served() -> None:
     assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
     assert "Latest Closed PnL" in response.text
+    assert "strategy-card clickable" in response.text
 
 
 def test_root_redirects_to_admin() -> None:
