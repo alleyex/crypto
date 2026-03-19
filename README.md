@@ -427,7 +427,7 @@ curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status
 
-Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin queue debug show recent batch status snapshots, and `POST /queue/jobs/run-next-pipeline` drains the next queued step from the oldest pending batch.
+Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin queue debug show recent batch status snapshots plus the latest incomplete batch, and `POST /queue/jobs/run-next-pipeline` drains the next queued step from the oldest pending batch.
 curl -s -X POST http://127.0.0.1:8000/kill-switch/enable
 curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 curl -s http://127.0.0.1:8000/alerts/status

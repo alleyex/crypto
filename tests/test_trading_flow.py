@@ -2717,6 +2717,7 @@ def test_admin_page_is_served() -> None:
     assert "latest_retry=#" in response.text
     assert "trend=" in response.text
     assert "batch=" in response.text
+    assert "Incomplete batch:" in response.text
     assert "Queue Debug" in response.text
     assert "Latest failed:" in response.text
     assert "Latest retry:" in response.text
@@ -2911,6 +2912,17 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "symbol_names": ["BTCUSDT", "ETHUSDT"],
                 }
             ],
+            "latest_incomplete_batch": {
+                "batch_id": "batch-1234",
+                "job_types": ["market_data", "strategy", "execution"],
+                "statuses": {
+                    "market_data": "completed",
+                    "strategy": "queued",
+                    "execution": "queued",
+                },
+                "strategy_names": ["ma_cross", "momentum_3bar"],
+                "symbol_names": ["BTCUSDT", "ETHUSDT"],
+            },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
             "retry_jobs": [{"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2}],
             "latest_failed_job": {
@@ -2949,6 +2961,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["latest_failed_job"]["error_message"] == "strategy failed"
     assert response.json()["latest_retry_job"]["id"] == 8
     assert response.json()["recent_batches"][0]["statuses"]["market_data"] == "completed"
+    assert response.json()["latest_incomplete_batch"]["statuses"]["strategy"] == "queued"
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
 
 
@@ -3013,6 +3026,7 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         assert summary["latest_retry_job"]["id"] == strategy_job_id
         assert summary["latest_retry_job"]["attempt_count"] == 2
         assert summary["recent_batches"] == []
+        assert summary["latest_incomplete_batch"] is None
         assert execution_job_id in [job["id"] for job in summary["latest_jobs"]]
     finally:
         connection.close()

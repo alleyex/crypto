@@ -314,6 +314,14 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
             recent_batches.append(batch_entry)
         batch_entry["job_types"].append(job["job_type"])
         batch_entry["statuses"][job["job_type"]] = job["status"]
+    latest_incomplete_batch = next(
+        (
+            batch
+            for batch in recent_batches
+            if any(status != "completed" for status in (batch.get("statuses") or {}).values())
+        ),
+        None,
+    )
     return {
         "counts": {
             "queued": counts.get("queued", 0),
@@ -338,6 +346,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         "latest_failed_job": latest_failed_job,
         "latest_retry_job": latest_retry_job,
         "recent_batches": recent_batches,
+        "latest_incomplete_batch": latest_incomplete_batch,
         "latest_jobs": latest_jobs,
     }
 
