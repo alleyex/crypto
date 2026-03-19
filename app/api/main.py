@@ -43,6 +43,7 @@ from app.query.read_service import get_strategy_closed_trades
 from app.query.read_service import get_signals
 from app.query.read_service import get_strategy_activity_summary
 from app.scheduler.control import clear_stop_flag
+from app.scheduler.control import build_strategy_priority_preset
 from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
@@ -321,6 +322,10 @@ class SchedulerStrategyRequest(BaseModel):
     effective_strategy_limit: Optional[int] = None
 
 
+class SchedulerStrategyPresetRequest(BaseModel):
+    preset: Literal["sequential", "reverse", "active_first", "reset"]
+
+
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
@@ -547,6 +552,18 @@ def scheduler_strategy_update(payload: SchedulerStrategyRequest) -> dict[str, An
             set_effective_strategy_limit(payload.effective_strategy_limit)
         return get_strategy_status()
     return set_active_strategy(payload.strategy_name)
+
+
+@app.post("/scheduler/strategy/preset")
+def scheduler_strategy_apply_preset(payload: SchedulerStrategyPresetRequest) -> dict[str, Any]:
+    status = get_strategy_status()
+    priorities = build_strategy_priority_preset(
+        payload.preset,
+        available_strategies=status.get("available_strategies"),
+        active_strategy_names=status.get("strategy_names"),
+    )
+    set_strategy_priorities(priorities)
+    return get_strategy_status()
 
 
 @app.post("/scheduler/stop")

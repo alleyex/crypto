@@ -2577,6 +2577,45 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     }
 
 
+def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, object] = {}
+
+    def fake_get_strategy_status():
+        return {
+            "strategy_name": "momentum_3bar",
+            "strategy_names": ["momentum_3bar"],
+            "disabled_strategy_names": [],
+            "effective_strategy_names": ["momentum_3bar"],
+            "effective_strategy_limit": None,
+            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 1},
+            "disabled_strategy_notes": {},
+            "default_strategy": "ma_cross",
+            "strategy_file": "runtime/scheduler.strategy",
+            "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
+            "priority_file": "runtime/scheduler.strategy.priority.json",
+            "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
+            "effective_limit_file": "runtime/scheduler.strategy.limit",
+            "available_strategies": ["ma_cross", "momentum_3bar"],
+        }
+
+    def fake_set_strategy_priorities(strategy_priorities):
+        captured["priorities"] = strategy_priorities
+        return {
+            "strategy_priorities": strategy_priorities,
+            "priority_file": "runtime/scheduler.strategy.priority.json",
+        }
+
+    monkeypatch.setattr("app.api.main.get_strategy_status", fake_get_strategy_status)
+    monkeypatch.setattr("app.api.main.set_strategy_priorities", fake_set_strategy_priorities)
+
+    response = client.post("/scheduler/strategy/preset", json={"preset": "active_first"})
+
+    assert response.status_code == 200
+    assert captured["priorities"] == {"momentum_3bar": 0, "ma_cross": 1}
+    assert response.json()["strategy_names"] == ["momentum_3bar"]
+
+
 def test_favicon_returns_no_content() -> None:
     client = TestClient(app)
 

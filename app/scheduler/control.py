@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
@@ -16,6 +16,7 @@ DISABLED_STRATEGY_FILE = RUNTIME_DIR / "scheduler.strategy.disabled"
 PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
 DISABLED_REASON_FILE = RUNTIME_DIR / "scheduler.strategy.disabled.reason.json"
 EFFECTIVE_LIMIT_FILE = RUNTIME_DIR / "scheduler.strategy.limit"
+StrategyPriorityPreset = Literal["sequential", "reverse", "active_first", "reset"]
 
 
 def set_stop_flag() -> str:
@@ -164,6 +165,28 @@ def read_effective_active_strategies() -> list[str]:
     if effective_limit is not None:
         return ordered_names[:effective_limit]
     return ordered_names
+
+
+def build_strategy_priority_preset(
+    preset: StrategyPriorityPreset,
+    available_strategies: Optional[list[str]] = None,
+    active_strategy_names: Optional[list[str]] = None,
+) -> dict[str, int]:
+    available_names = list(dict.fromkeys(available_strategies or list_registered_strategies()))
+    active_names = list(dict.fromkeys(active_strategy_names or read_active_strategies()))
+
+    if preset in {"sequential", "reset"}:
+        ordered_names = available_names
+    elif preset == "reverse":
+        ordered_names = list(reversed(available_names))
+    elif preset == "active_first":
+        active_set = set(active_names)
+        ordered_names = [name for name in available_names if name in active_set]
+        ordered_names.extend(name for name in available_names if name not in active_set)
+    else:
+        raise ValueError(f"Unknown strategy priority preset: {preset}")
+
+    return {strategy_name: index for index, strategy_name in enumerate(ordered_names)}
 
 
 def set_active_strategy(strategy_name: str) -> Dict[str, str]:
