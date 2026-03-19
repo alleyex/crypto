@@ -2616,6 +2616,38 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
     assert response.json()["strategy_names"] == ["momentum_3bar"]
 
 
+def test_scheduler_strategy_limit_preset_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "app.api.main.get_strategy_status",
+        lambda: {
+            "strategy_name": "ma_cross",
+            "strategy_names": ["ma_cross", "momentum_3bar"],
+            "disabled_strategy_names": [],
+            "effective_strategy_names": ["ma_cross", "momentum_3bar"],
+            "effective_strategy_limit": None,
+            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 1},
+            "disabled_strategy_notes": {},
+            "default_strategy": "ma_cross",
+            "strategy_file": "runtime/scheduler.strategy",
+            "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
+            "priority_file": "runtime/scheduler.strategy.priority.json",
+            "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
+            "effective_limit_file": "runtime/scheduler.strategy.limit",
+            "available_strategies": ["ma_cross", "momentum_3bar"],
+        },
+    )
+    monkeypatch.setattr("app.api.main.set_effective_strategy_limit", lambda limit: captured.setdefault("limit", limit))
+
+    response = client.post("/scheduler/strategy/limit-preset", json={"preset": "top_2"})
+
+    assert response.status_code == 200
+    assert captured["limit"] == 2
+    assert response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
+
+
 def test_favicon_returns_no_content() -> None:
     client = TestClient(app)
 

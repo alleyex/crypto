@@ -326,6 +326,10 @@ class SchedulerStrategyPresetRequest(BaseModel):
     preset: Literal["sequential", "reverse", "active_first", "reset"]
 
 
+class SchedulerStrategyLimitPresetRequest(BaseModel):
+    preset: Literal["top_1", "top_2", "all_enabled"]
+
+
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
@@ -563,6 +567,17 @@ def scheduler_strategy_apply_preset(payload: SchedulerStrategyPresetRequest) -> 
         active_strategy_names=status.get("strategy_names"),
     )
     set_strategy_priorities(priorities)
+    return get_strategy_status()
+
+
+@app.post("/scheduler/strategy/limit-preset")
+def scheduler_strategy_apply_limit_preset(payload: SchedulerStrategyLimitPresetRequest) -> dict[str, Any]:
+    preset_to_limit = {
+        "top_1": 1,
+        "top_2": 2,
+        "all_enabled": None,
+    }
+    set_effective_strategy_limit(preset_to_limit[payload.preset])
     return get_strategy_status()
 
 

@@ -1309,13 +1309,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       async function applySchedulerPreset(limit) {
-        const input = el("scheduler-effective-limit-input");
-        if (input) {
-          input.value = limit === null ? "" : String(limit);
-        }
-        const result = await api("/scheduler/strategy", {
+        const preset = limit === 1 ? "top_1" : limit === 2 ? "top_2" : "all_enabled";
+        const result = await api("/scheduler/strategy/limit-preset", {
           method: "POST",
-          body: JSON.stringify(collectSchedulerStrategyPayload()),
+          body: JSON.stringify({ preset }),
         });
         el("scheduler-message").textContent = formatJson(result);
         await refreshAll();
