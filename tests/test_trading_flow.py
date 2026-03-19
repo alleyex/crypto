@@ -2524,6 +2524,13 @@ def test_admin_page_is_served() -> None:
     assert 'id="alerting-runtime-status"' in response.text
     assert 'id="queue-status"' in response.text
     assert 'id="queue-json"' in response.text
+    assert 'id="queue-message"' in response.text
+    assert 'data-action="queue-enqueue-strategy"' in response.text
+    assert 'data-action="queue-drain-strategy"' in response.text
+    assert 'data-action="queue-drain-execution"' in response.text
+    assert "Enqueue Strategy Job" in response.text
+    assert "Drain Strategy Job" in response.text
+    assert "Drain Execution Job" in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
     assert 'id="scheduler-strategy-select"' in response.text

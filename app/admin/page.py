@@ -697,6 +697,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Queue Summary</h2>
           <p>Queued worker job counts and the latest queue entries.</p>
+          <div class="button-row" style="margin-bottom: 16px;">
+            <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
+            <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
+            <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
+          </div>
+          <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
           <pre id="queue-json">Loading...</pre>
         </article>
         <article class="panel data-card">
@@ -1646,6 +1652,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "scheduler-start": "scheduler-message",
           "scheduler-stop": "scheduler-message",
           "scheduler-strategy-save": "scheduler-message",
+          "queue-enqueue-strategy": "queue-message",
+          "queue-drain-strategy": "queue-message",
+          "queue-drain-execution": "queue-message",
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
           "alert-test": "alerts-message",
@@ -1715,6 +1724,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           } else if (type === "scheduler-clear-notes") {
             await clearDisabledStrategyNotes();
             return;
+          } else if (type === "queue-enqueue-strategy") {
+            const payload = collectSchedulerStrategyPayload();
+            result = await api("/queue/jobs", {
+              method: "POST",
+              body: JSON.stringify({
+                job_type: "strategy",
+                strategy_name: payload.strategy_name,
+                strategy_names: payload.strategy_names,
+                symbol_names: payload.symbol_names,
+                payload: { source: "admin_queue" },
+              }),
+            });
+          } else if (type === "queue-drain-strategy") {
+            result = await api("/queue/jobs/run-next", {
+              method: "POST",
+              body: JSON.stringify({ job_type: "strategy" }),
+            });
+          } else if (type === "queue-drain-execution") {
+            result = await api("/queue/jobs/run-next", {
+              method: "POST",
+              body: JSON.stringify({ job_type: "execution" }),
+            });
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
           } else if (type === "kill-disable") {
