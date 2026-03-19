@@ -189,6 +189,58 @@ def test_run_postgres_smoke_executes_basic_postgres_flow(monkeypatch) -> None:
     assert any("ON CONFLICT (id) DO NOTHING" in query for query, _ in executed)
 
 
+def test_run_postgres_smoke_retries_until_connection_succeeds(monkeypatch) -> None:
+    attempts: list[str] = []
+    sleep_calls: list[float] = []
+    executed: list[str] = []
+
+    class DummyCursor:
+        def execute(self, query: str, params=None) -> None:
+            executed.append(" ".join(query.split()))
+
+        def fetchone(self):
+            if executed[-1] == "SELECT current_database(), current_user;":
+                return ("crypto", "crypto")
+            return (1, "smoke", "smoke")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyPsycopg:
+        class OperationalError(RuntimeError):
+            pass
+
+        def connect(self, database_url: str):
+            attempts.append(database_url)
+            if len(attempts) < 3:
+                raise self.OperationalError("database system is starting up")
+            return DummyConnection()
+
+    monkeypatch.setattr("app.core.postgres_smoke._load_psycopg", lambda: DummyPsycopg())
+    monkeypatch.setattr("app.core.postgres_smoke.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setenv("CRYPTO_POSTGRES_CONNECT_RETRIES", "3")
+    monkeypatch.setenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "0.25")
+
+    result = run_postgres_smoke("postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+
+    assert result["ok"] is True
+    assert len(attempts) == 3
+    assert sleep_calls == [0.25, 0.25]
+
+
 def test_run_postgres_migration_smoke_runs_migrations_and_checks_tables(monkeypatch) -> None:
     executed: list[tuple[str, object]] = []
     run_calls: list[str] = []
@@ -260,6 +312,62 @@ def test_run_postgres_migration_smoke_runs_migrations_and_checks_tables(monkeypa
     assert result["applied_migrations"] == ["001_create_candles_table"]
     assert result["all_expected_tables_present"] is True
     assert run_calls == ["PostgresConnectionAdapter"]
+
+
+def test_run_postgres_migration_smoke_retries_until_connection_succeeds(monkeypatch) -> None:
+    attempts: list[str] = []
+    sleep_calls: list[float] = []
+
+    class DummyRawConnection:
+        def cursor(self):
+            class CursorContext:
+                description = [("tablename",)]
+                _rows = [("schema_migrations",)]
+
+                def execute(self, query: str, params=None):
+                    return None
+
+                def fetchone(self):
+                    return self._rows[0]
+
+                def fetchall(self):
+                    return list(self._rows)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return CursorContext()
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    class DummyPsycopg:
+        class OperationalError(RuntimeError):
+            pass
+
+        def connect(self, database_url: str):
+            attempts.append(database_url)
+            if len(attempts) < 2:
+                raise self.OperationalError("server closed the connection unexpectedly")
+            return DummyRawConnection()
+
+    monkeypatch.setattr("app.core.postgres_smoke._load_psycopg", lambda: DummyPsycopg())
+    monkeypatch.setattr("app.core.postgres_smoke.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr("app.core.postgres_smoke.run_migrations", lambda connection: ["001_create_candles_table"])
+    monkeypatch.setenv("CRYPTO_POSTGRES_CONNECT_RETRIES", "2")
+    monkeypatch.setenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "0.5")
+
+    result = run_postgres_migration_smoke("postgresql://crypto:crypto@127.0.0.1:5432/crypto")
+
+    assert result["ok"] is True
+    assert len(attempts) == 2
+    assert sleep_calls == [0.5]
 
 
 def test_build_override_compose_uses_isolated_mounts_and_api_port(tmp_path: Path) -> None:

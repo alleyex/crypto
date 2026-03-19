@@ -1,4 +1,6 @@
 import importlib
+import os
+import time
 from typing import Any
 
 from app.core.db import PostgresConnectionAdapter
@@ -14,12 +16,30 @@ def _load_psycopg() -> Any:
         ) from exc
 
 
+def _connect_with_retry(database_url: str) -> Any:
+    psycopg = _load_psycopg()
+    retries = max(int(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRIES", "15")), 1)
+    delay_seconds = max(float(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "1")), 0.0)
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg.connect(database_url)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            time.sleep(delay_seconds)
+
+    assert last_error is not None
+    raise last_error
+
+
 def run_postgres_smoke(database_url: str) -> dict[str, Any]:
     if not database_url.strip():
         raise RuntimeError("CRYPTO_DATABASE_URL is required for PostgreSQL smoke testing.")
 
-    psycopg = _load_psycopg()
-    with psycopg.connect(database_url) as connection:
+    with _connect_with_retry(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT current_database(), current_user;")
             database_name, current_user = cursor.fetchone()
@@ -64,8 +84,7 @@ def run_postgres_migration_smoke(database_url: str) -> dict[str, Any]:
     if not database_url.strip():
         raise RuntimeError("CRYPTO_DATABASE_URL is required for PostgreSQL migration smoke testing.")
 
-    psycopg = _load_psycopg()
-    raw_connection = psycopg.connect(database_url)
+    raw_connection = _connect_with_retry(database_url)
     connection = PostgresConnectionAdapter(raw_connection)
     try:
         applied = run_migrations(connection)
