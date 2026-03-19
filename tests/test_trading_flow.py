@@ -2282,6 +2282,10 @@ def test_admin_page_is_served() -> None:
     assert "Latest Order At" in response.text
     assert "Latest Fill At" in response.text
     assert "strategy-card clickable" in response.text
+    assert "STRATEGY_STALE_AFTER_MINUTES" in response.text
+    assert "FRESH" in response.text
+    assert "STALE" in response.text
+    assert "IDLE" in response.text
 
 
 def test_root_redirects_to_admin() -> None:

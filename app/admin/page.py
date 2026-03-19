@@ -627,6 +627,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let strategySortMode = "gross_realized_pnl";
       let strategyFilterMode = "all";
       let closedTradesStrategyFilter = "all";
+      const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
@@ -637,6 +638,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (status === "degraded") return "warn";
         if (status === "error" || status === "blocked") return "bad";
         return "";
+      }
+
+      function parseDashboardTimestamp(value) {
+        if (!value || typeof value !== "string") return null;
+        const normalized = value.includes("T") ? value : value.replace(" ", "T");
+        const parsed = new Date(normalized);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+
+      function classifyStrategyActivity(item) {
+        if (!item.has_activity || !item.latest_activity_at) {
+          return { label: "IDLE", className: "warn" };
+        }
+        const latestActivityAt = parseDashboardTimestamp(item.latest_activity_at);
+        if (!latestActivityAt) {
+          return { label: "ACTIVE", className: "ok" };
+        }
+        const ageMinutes = (Date.now() - latestActivityAt.getTime()) / 60000;
+        if (ageMinutes <= STRATEGY_STALE_AFTER_MINUTES) {
+          return { label: "FRESH", className: "ok" };
+        }
+        return { label: "STALE", className: "warn" };
       }
 
       async function api(path, options = {}) {
@@ -858,6 +881,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
 
         board.innerHTML = sortedStrategies.map((item) => {
+          const activityState = classifyStrategyActivity(item);
           const latestSignal = item.latest_signal?.signal_type || "none";
           const latestRisk = item.latest_risk?.decision || "none";
           const latestOrder = item.latest_order?.status || "none";
@@ -890,7 +914,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
               <div class="strategy-card-header">
                 <strong>${item.strategy_name}</strong>
-                <span class="${item.has_activity ? "ok" : "warn"}">${item.has_activity ? "ACTIVE" : "IDLE"}</span>
+                <span class="${activityState.className}">${activityState.label}</span>
               </div>
               <div class="strategy-card-grid">
                 <div class="strategy-metric"><strong>Signal</strong>${latestSignal}</div>
