@@ -51,3 +51,4 @@ DEFAULT_PIPELINE_ORCHESTRATION = _get_choice(
     "queue_batch",
     ("direct", "queue_dispatch", "queue_drain", "queue_batch"),
 )
+JOB_LEASE_TIMEOUT_SECONDS = _get_int("CRYPTO_JOB_LEASE_TIMEOUT_SECONDS", 300)

@@ -13,12 +13,14 @@ from app.core.job_queue import build_job_payload
 from app.core.job_queue import enqueue_and_run_pipeline_batch
 from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import reclaim_stale_leased_jobs
 from app.core.job_queue import run_pipeline_batch
 from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.core.settings import JOB_LEASE_TIMEOUT_SECONDS
 from app.execution.adapter import get_execution_adapter_name
 from app.system.heartbeat import record_heartbeat
 
@@ -390,6 +392,24 @@ def stop_requested() -> bool:
     return STOP_FILE.exists()
 
 
+def _reclaim_stale_leases(pipeline_orchestration: str, queue_drain: bool) -> int:
+    """Reclaim jobs stuck in 'leased' state from a previous crashed worker.
+
+    Only runs when the scheduler is operating in a queue-consuming mode
+    (queue_drain, queue_batch, or queue_dispatch) — not for direct execution.
+    """
+    if not queue_drain and pipeline_orchestration not in ("queue_drain", "queue_batch", "queue_dispatch"):
+        return 0
+    connection = get_connection()
+    try:
+        reclaimed = reclaim_stale_leased_jobs(connection, JOB_LEASE_TIMEOUT_SECONDS)
+        return reclaimed
+    except Exception:
+        return 0
+    finally:
+        connection.close()
+
+
 def _record_soak_snapshot() -> None:
     try:
         from app.validation.soak_history import record_soak_validation_snapshot
@@ -474,6 +494,9 @@ def run_scheduler(
 
         run_count += 1
         started_at = datetime.now().isoformat(timespec="seconds")
+
+        _reclaim_stale_leases(pipeline_orchestration, queue_drain)
+
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
         active_symbol_names = _resolve_active_symbols(mode)
         if not active_strategy_names:

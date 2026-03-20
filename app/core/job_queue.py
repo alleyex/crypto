@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from typing import Optional
 
@@ -574,3 +575,37 @@ def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None
             "message": "No queued jobs available.",
         }
     return _run_leased_queue_job(connection, leased_job)
+
+
+def reclaim_stale_leased_jobs(
+    connection: DBConnection,
+    lease_timeout_seconds: int = 300,
+) -> int:
+    """Reset leased jobs older than lease_timeout_seconds back to queued for retry.
+
+    Returns the number of jobs reclaimed.  Call this at the start of each
+    worker loop iteration so that jobs left in 'leased' state by a crashed
+    worker are automatically recovered without manual intervention.
+    """
+    ensure_table(connection)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    stale_rows = connection.execute(
+        """
+        SELECT id FROM job_queue
+        WHERE status = 'leased'
+          AND started_at IS NOT NULL
+          AND started_at < ?;
+        """,
+        (cutoff_str,),
+    ).fetchall()
+    if not stale_rows:
+        return 0
+    stale_ids = [int(row[0]) for row in stale_rows]
+    placeholders = ", ".join("?" for _ in stale_ids)
+    connection.execute(
+        f"UPDATE job_queue SET status = 'queued', started_at = NULL WHERE id IN ({placeholders});",
+        tuple(stale_ids),
+    )
+    connection.commit()
+    return len(stale_ids)
