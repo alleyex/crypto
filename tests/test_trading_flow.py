@@ -24,6 +24,7 @@ from app.core.db import table_exists
 from app.core.job_queue import complete_job
 from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import lease_job_by_id
 from app.core.job_queue import fail_batch_jobs
 from app.core.job_queue import fail_job
 from app.core.job_queue import get_job
@@ -4288,6 +4289,50 @@ def test_enqueue_pipeline_jobs_creates_ordered_queue_batch() -> None:
         assert queue_rows[0]["payload"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
         assert queue_rows[0]["payload"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
         assert queue_rows[0]["payload"]["batch_id"] == jobs[0]["batch_id"]
+        # dependency chain: market_data has no dep, strategy depends on market_data, execution depends on strategy
+        md_job = next(j for j in jobs if j["job_type"] == "market_data")
+        st_job = next(j for j in jobs if j["job_type"] == "strategy")
+        ex_job = next(j for j in jobs if j["job_type"] == "execution")
+        assert md_job["depends_on_job_id"] is None
+        assert st_job["depends_on_job_id"] == md_job["job_id"]
+        assert ex_job["depends_on_job_id"] == st_job["job_id"]
+    finally:
+        connection.close()
+
+
+def test_lease_next_job_respects_depends_on_job_id() -> None:
+    """strategy job must not be leasable until its market_data dependency is completed."""
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        jobs = enqueue_pipeline_jobs(connection, strategy_name="ma_cross")
+        md_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "market_data")
+        st_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "strategy")
+        ex_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "execution")
+
+        # only market_data should be leasable before anything is completed
+        leasable = lease_next_job(connection, job_type="strategy")
+        assert leasable is None, "strategy job must not be leasable while market_data is queued"
+
+        leasable = lease_next_job(connection, job_type="execution")
+        assert leasable is None, "execution job must not be leasable while strategy is queued"
+
+        # complete market_data — now strategy becomes leasable
+        lease_job_by_id(connection, md_job_id)
+        complete_job(connection, md_job_id, result={"status": "ok"})
+
+        leasable_st = lease_next_job(connection, job_type="strategy")
+        assert leasable_st is not None
+        assert leasable_st["id"] == st_job_id
+
+        # execution still blocked until strategy is completed
+        leasable_ex = lease_next_job(connection, job_type="execution")
+        assert leasable_ex is None, "execution job must not be leasable while strategy is leased"
+
+        complete_job(connection, st_job_id, result={"status": "ok"})
+        leasable_ex = lease_next_job(connection, job_type="execution")
+        assert leasable_ex is not None
+        assert leasable_ex["id"] == ex_job_id
     finally:
         connection.close()
 

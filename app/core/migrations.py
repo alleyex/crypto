@@ -246,6 +246,11 @@ def _create_job_queue_table(connection: DBConnection) -> None:
     )
 
 
+def _add_job_queue_depends_on(connection: DBConnection) -> None:
+    if table_exists(connection, "job_queue") and "depends_on_job_id" not in get_table_columns(connection, "job_queue"):
+        connection.execute("ALTER TABLE job_queue ADD COLUMN depends_on_job_id INTEGER;")
+
+
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -274,6 +279,7 @@ MIGRATIONS: list[Migration] = [
     ("012_create_runtime_heartbeats_table", _create_runtime_heartbeats_table),
     ("013_alter_candles_epoch_columns_to_bigint", _alter_candles_epoch_columns_to_bigint),
     ("014_create_job_queue_table", _create_job_queue_table),
+    ("015_add_job_queue_depends_on", _add_job_queue_depends_on),
 ]
 
 

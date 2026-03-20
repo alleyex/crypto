@@ -28,8 +28,9 @@ INSERT INTO job_queue (
     status,
     payload_json,
     result_json,
-    error_message
-) VALUES (?, 'queued', ?, NULL, NULL);
+    error_message,
+    depends_on_job_id
+) VALUES (?, 'queued', ?, NULL, NULL, ?);
 """
 
 
@@ -79,6 +80,7 @@ def enqueue_job(
     connection: DBConnection,
     job_type: str,
     payload: Optional[dict[str, Any]] = None,
+    depends_on_job_id: Optional[int] = None,
 ) -> int:
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unsupported job type: {job_type}")
@@ -87,7 +89,7 @@ def enqueue_job(
     job_id = insert_and_get_rowid(
         connection,
         INSERT_JOB_SQL,
-        (job_type, _serialize_payload(normalized_payload)),
+        (job_type, _serialize_payload(normalized_payload), depends_on_job_id),
     )
     connection.commit()
     return job_id
@@ -111,16 +113,19 @@ def enqueue_pipeline_jobs(
     batch_id = str(uuid.uuid4())
     job_payload["batch_id"] = batch_id
     jobs: list[dict[str, Any]] = []
+    prev_job_id: Optional[int] = None
     for job_type in PIPELINE_QUEUE_JOB_TYPES:
-        job_id = enqueue_job(connection, job_type, payload=job_payload or None)
+        job_id = enqueue_job(connection, job_type, payload=job_payload or None, depends_on_job_id=prev_job_id)
         jobs.append(
             {
                 "batch_id": batch_id,
                 "job_id": job_id,
                 "job_type": job_type,
                 "payload": job_payload,
+                "depends_on_job_id": prev_job_id,
             }
         )
+        prev_job_id = job_id
     return jobs
 
 
@@ -152,6 +157,7 @@ def list_jobs(
             result_json,
             error_message,
             attempt_count,
+            depends_on_job_id,
             created_at,
             started_at,
             completed_at
@@ -178,6 +184,7 @@ def get_job(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
             result_json,
             error_message,
             attempt_count,
+            depends_on_job_id,
             created_at,
             started_at,
             completed_at
@@ -193,7 +200,12 @@ def get_job(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
 
 def lease_next_job(connection: DBConnection, job_type: Optional[str] = None) -> Optional[dict[str, Any]]:
     ensure_table(connection)
-    clauses = ["status = 'queued'"]
+    clauses = [
+        "status = 'queued'",
+        "(depends_on_job_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM job_queue dep WHERE dep.id = job_queue.depends_on_job_id AND dep.status = 'completed'"
+        "))",
+    ]
     params: list[Any] = []
     if job_type is not None:
         clauses.append("job_type = ?")
