@@ -25,8 +25,21 @@ What to check:
 - top-level `status`
 - `checks.scheduler.status`
 - `checks.kill_switch.status`
+- `checks.broker_protection.status`
 - `checks.candles.status`
 - `config` values such as risk limits
+
+Broker/order protection can now degrade on:
+
+- execution backend capability mismatches
+- stale non-terminal orders
+- repeated risk rejections
+
+When it degrades, inspect:
+
+- `checks.broker_protection.reason_code`
+- `checks.broker_protection.severity`
+- `checks.broker_protection.recommended_action`
 
 ## 2. Run One Pipeline Cycle
 
@@ -143,6 +156,15 @@ Stop:
 curl -s -X POST http://127.0.0.1:8000/scheduler/stop | python -m json.tool
 ```
 
+Stop with explicit audit metadata:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/scheduler/stop \
+  -H "Content-Type: application/json" \
+  -d '{"audit_action":"broker_protection:pause_scheduler","audit_message":"Scheduler paused from broker protection recommendation."}' \
+  | python -m json.tool
+```
+
 Start again:
 
 ```bash
@@ -167,6 +189,15 @@ Enable:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/kill-switch/enable | python -m json.tool
+```
+
+Enable with broker-protection metadata:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/kill-switch/enable \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Daily loss limit protection triggered.","source":"broker_protection","notify_message":"Crypto alert: broker protection enabled the kill switch."}' \
+  | python -m json.tool
 ```
 
 Disable:
@@ -205,6 +236,67 @@ Suggested acceptance criteria for Stage 1 soak validation:
 5. Confirm no unexpected kill switch activations occur during the run.
 6. Confirm `orders`, `fills`, `positions`, and `pnl` remain logically consistent.
 7. Confirm Telegram alert delivery does not show sustained failures in `alert_delivery` audit events.
+
+## 9. Reconcile Orders and Portfolio State
+
+Use this when `broker_protection.recommended_action=inspect_and_reconcile_orders` or after manual order cleanup.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/orders/reconcile | python -m json.tool
+```
+
+With explicit audit metadata:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/orders/reconcile \
+  -H "Content-Type: application/json" \
+  -d '{"audit_action":"broker_protection:reconcile_orders","audit_message":"Order reconciliation triggered from broker protection recommendation."}' \
+  | python -m json.tool
+```
+
+What it does:
+
+- refreshes positions
+- refreshes pnl snapshots
+- returns latest orders for quick inspection
+- writes an `execution_control` audit event
+
+## 10. Switch Execution Backend
+
+Check current backend:
+
+```bash
+curl -s http://127.0.0.1:8000/execution/backend | python -m json.tool
+```
+
+Switch to `paper`:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"paper"}' | python -m json.tool
+```
+
+With broker-protection audit metadata:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"paper","audit_action":"broker_protection:switch_to_paper_backend","audit_message":"Execution backend switched to paper from broker protection recommendation."}' \
+  | python -m json.tool
+```
+
+## 11. Broker Protection Workflow
+
+Suggested response flow when `/health` reports `checks.broker_protection.status=degraded`:
+
+1. Read `/health` and capture `reason_code`, `severity`, and `recommended_action`.
+2. Inspect `/orders`, `/risk-events`, and `/execution/backend`.
+3. If action is `switch_to_paper_backend`, switch backend first.
+4. If action is `pause_scheduler`, stop scheduler before further investigation.
+5. If action is `enable_kill_switch`, enable the kill switch immediately.
+6. If action is `inspect_and_reconcile_orders`, run `/orders/reconcile`.
+7. Re-check `/health` and confirm broker protection returns to `ok`.
 
 ## Suggested Manual Workflow
 
@@ -247,4 +339,13 @@ Need a clean operational snapshot:
 ```bash
 curl -s http://127.0.0.1:8000/health | python -m json.tool
 python scripts/read_soak_validation.py
+```
+
+Broker protection degraded:
+
+```bash
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+curl -s http://127.0.0.1:8000/orders | python -m json.tool
+curl -s http://127.0.0.1:8000/risk-events | python -m json.tool
+curl -s http://127.0.0.1:8000/execution/backend | python -m json.tool
 ```
