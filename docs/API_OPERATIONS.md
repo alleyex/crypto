@@ -38,11 +38,39 @@ This runs:
 curl -s -X POST http://127.0.0.1:8000/pipeline/run | python -m json.tool
 ```
 
+Queue-native variants:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_batch"}' \
+  | python -m json.tool
+
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_dispatch"}' \
+  | python -m json.tool
+
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_drain"}' \
+  | python -m json.tool
+```
+
 Typical uses:
 
 - verify end-to-end flow after a code change
 - generate fresh paper-trading state
 - check whether kill switch blocks execution
+- test queue-native pipeline orchestration without switching to scheduler mode
+
+Notes:
+
+- `orchestration=queue_batch` is now the default runtime orchestration
+- `orchestration=direct` remains available as a fallback path
+- `orchestration=queue_batch` enqueues and drains a full pipeline batch in one request
+- `orchestration=queue_dispatch` enqueues a full pipeline batch
+- `orchestration=queue_drain` drains the next full queued pipeline batch
 
 ## 3. Insert a Manual Test Signal
 
@@ -149,7 +177,7 @@ curl -s -X POST http://127.0.0.1:8000/kill-switch/disable | python -m json.tool
 
 Behavior:
 
-- when enabled, `POST /pipeline/run` returns a blocked result
+- when enabled, `POST /pipeline/run` with `orchestration=direct` returns a blocked result
 - `/health` will show the kill switch as degraded
 - scheduler may still run, but trading execution is blocked at the pipeline entry
 

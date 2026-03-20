@@ -10,9 +10,14 @@ from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.job_queue import build_job_payload
+from app.core.job_queue import enqueue_and_run_pipeline_batch
+from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import run_pipeline_batch
+from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
+from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_adapter_name
 from app.system.heartbeat import record_heartbeat
@@ -131,8 +136,113 @@ def _run_scheduled_job(
     symbol_names: Optional[list[str]] = None,
     queue_dispatch: bool = False,
     queue_drain: bool = False,
+    pipeline_orchestration: str = "direct",
 ) -> dict:
     if mode == "pipeline":
+        if pipeline_orchestration == "queue_batch":
+            connection = get_connection()
+            try:
+                run_migrations(connection)
+                batch_result = enqueue_and_run_pipeline_batch(
+                    connection,
+                    strategy_name=strategy_name,
+                    strategy_names=strategy_names,
+                    symbol_names=symbol_names,
+                    payload={"source": "scheduler_pipeline", "orchestration": "queue_batch"},
+                )
+                result = dict(batch_result.get("result") or {})
+                result["steps"] = [
+                    {
+                        "step": "enqueue_job",
+                        "status": "queued",
+                        "job_id": int(job["job_id"]),
+                        "job_type": str(job["job_type"]),
+                        "batch_id": job["batch_id"],
+                        "execution_backend": get_execution_adapter_name(),
+                        "strategy_names": strategy_names or [strategy_name],
+                        "symbol_names": symbol_names or [],
+                    }
+                    for job in list(batch_result.get("enqueued_jobs") or [])
+                ] + [
+                    {
+                        "step": "drain_queue",
+                        "status": "completed",
+                        "job_id": int(job["id"]),
+                        "job_type": str(job["job_type"]),
+                        "batch_id": batch_result.get("batch_id"),
+                        "remaining_job_types": [],
+                    }
+                    for job in list(batch_result.get("jobs") or [])
+                ] + list(result.get("steps", []))
+                return result
+            finally:
+                connection.close()
+        connection = get_connection()
+        try:
+            run_migrations(connection)
+            if queue_drain:
+                drain_result = run_pipeline_batch(connection)
+                if drain_result["status"] == "completed":
+                    result = dict(drain_result.get("result") or {})
+                    result["steps"] = [
+                        {
+                            "step": "drain_queue",
+                            "status": "completed",
+                            "job_id": int(job["id"]),
+                            "job_type": str(job["job_type"]),
+                            "batch_id": drain_result.get("batch_id"),
+                            "remaining_job_types": [],
+                        }
+                        for job in list(drain_result.get("jobs") or [])
+                    ] + list(result.get("steps", []))
+                    return result
+                if drain_result["status"] == "empty":
+                    return {
+                        "status": "completed",
+                        "steps": [{"step": "drain_queue", "status": "empty", "job_type": "pipeline"}],
+                    }
+                return {
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step": "drain_queue",
+                            "status": "failed",
+                            "job_id": int(drain_result["job"]["id"]),
+                            "job_type": str(drain_result["job"]["job_type"]),
+                            "batch_id": drain_result.get("batch_id"),
+                            "remaining_job_types": list(drain_result.get("remaining_job_types") or []),
+                            "error": drain_result["error"],
+                            "error_type": drain_result["error_type"],
+                        }
+                    ],
+                }
+            if queue_dispatch:
+                jobs = enqueue_pipeline_jobs(
+                    connection,
+                    strategy_name=strategy_name,
+                    strategy_names=strategy_names,
+                    symbol_names=symbol_names,
+                    payload={"source": "scheduler_pipeline", "orchestration": "queue_dispatch"},
+                )
+                return {
+                    "status": "queued",
+                    "batch_id": jobs[0]["batch_id"] if jobs else None,
+                    "steps": [
+                        {
+                            "step": "enqueue_job",
+                            "status": "queued",
+                            "job_id": int(job["job_id"]),
+                            "job_type": str(job["job_type"]),
+                            "batch_id": job["batch_id"],
+                            "execution_backend": get_execution_adapter_name(),
+                            "strategy_names": strategy_names or [strategy_name],
+                            "symbol_names": symbol_names or [],
+                        }
+                        for job in jobs
+                    ],
+                }
+        finally:
+            connection.close()
         return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
 
     connection = get_connection()
@@ -307,6 +417,7 @@ def run_scheduler(
     strategy_name: str = DEFAULT_STRATEGY_NAME,
     queue_dispatch: bool = False,
     queue_drain: bool = False,
+    pipeline_orchestration_override: Optional[str] = None,
 ) -> None:
     if mode not in SCHEDULER_MODES:
         raise ValueError(
@@ -314,6 +425,24 @@ def run_scheduler(
         )
     if queue_dispatch and queue_drain:
         raise ValueError("queue_dispatch and queue_drain cannot both be enabled.")
+    pipeline_orchestration = "direct"
+    if mode == "pipeline" and not queue_dispatch and not queue_drain:
+        pipeline_orchestration = pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION
+        if DEFAULT_PIPELINE_ORCHESTRATION == "queue_dispatch":
+            queue_dispatch = True
+        elif DEFAULT_PIPELINE_ORCHESTRATION == "queue_drain":
+            queue_drain = True
+        elif (pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION) == "queue_dispatch":
+            queue_dispatch = True
+        elif (pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION) == "queue_drain":
+            queue_drain = True
+    elif mode == "pipeline":
+        if pipeline_orchestration_override is not None:
+            pipeline_orchestration = pipeline_orchestration_override
+        elif queue_dispatch:
+            pipeline_orchestration = "queue_dispatch"
+        elif queue_drain:
+            pipeline_orchestration = "queue_drain"
 
     component = _scheduler_component_name(mode)
     run_count = 0
@@ -338,6 +467,7 @@ def run_scheduler(
                     "mode": mode,
                     "queue_dispatch": queue_dispatch,
                     "queue_drain": queue_drain,
+                    "pipeline_orchestration": pipeline_orchestration,
                 },
             )
             break
@@ -361,6 +491,7 @@ def run_scheduler(
                     "skipped": True,
                     "queue_dispatch": queue_dispatch,
                     "queue_drain": queue_drain,
+                    "pipeline_orchestration": pipeline_orchestration,
                     **_summarize_symbol_payload(active_symbol_names),
                 },
             )
@@ -380,6 +511,7 @@ def run_scheduler(
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
                 "queue_drain": queue_drain,
+                "pipeline_orchestration": pipeline_orchestration,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },
@@ -391,6 +523,7 @@ def run_scheduler(
             symbol_names=active_symbol_names,
             queue_dispatch=queue_dispatch,
             queue_drain=queue_drain,
+            pipeline_orchestration=pipeline_orchestration,
         )
         summary = _summarize_result(result)
         strategy_label = _format_strategy_log_label(active_strategy_names)
@@ -408,6 +541,7 @@ def run_scheduler(
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
                 "queue_drain": queue_drain,
+                "pipeline_orchestration": pipeline_orchestration,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },

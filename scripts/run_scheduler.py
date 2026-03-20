@@ -26,6 +26,7 @@ _ensure_project_venv_python()
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
 from app.scheduler.runner import run_scheduler
 from app.scheduler.runner import SCHEDULER_MODES
 
@@ -58,25 +59,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--queue-dispatch",
         action="store_true",
-        help="Enqueue split worker jobs instead of executing them directly.",
+        help="Enqueue jobs instead of executing them directly. In pipeline mode, enqueue a full pipeline batch.",
     )
     parser.add_argument(
         "--queue-drain",
         action="store_true",
-        help="Drain queued split worker jobs instead of executing direct scheduler jobs.",
+        help="Drain queued jobs instead of executing direct scheduler jobs. In pipeline mode, drain the next pipeline batch step.",
+    )
+    parser.add_argument(
+        "--orchestration",
+        choices=("default", "direct", "queue_dispatch", "queue_drain", "queue_batch"),
+        default="default",
+        help=(
+            "Pipeline orchestration mode override. "
+            f"Default: use CRYPTO_PIPELINE_ORCHESTRATION ({DEFAULT_PIPELINE_ORCHESTRATION})."
+        ),
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    queue_dispatch = args.queue_dispatch
+    queue_drain = args.queue_drain
+    pipeline_orchestration_override = None if args.orchestration == "default" else args.orchestration
+    if args.orchestration != "default":
+        queue_dispatch = args.orchestration == "queue_dispatch"
+        queue_drain = args.orchestration == "queue_drain"
     run_scheduler(
         interval_seconds=args.interval,
         iterations=args.iterations,
         mode=args.mode,
         strategy_name=args.strategy,
-        queue_dispatch=args.queue_dispatch,
-        queue_drain=args.queue_drain,
+        queue_dispatch=queue_dispatch,
+        queue_drain=queue_drain,
+        pipeline_orchestration_override=pipeline_orchestration_override,
     )
 
 

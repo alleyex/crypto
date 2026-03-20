@@ -1,4 +1,5 @@
 def render_admin_page() -> str:
+    from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
     from app.core.settings import DEFAULT_STRATEGY_NAME
     from app.strategy.registry import list_registered_strategies
 
@@ -13,6 +14,14 @@ def render_admin_page() -> str:
     closed_trade_strategy_options = "\n".join(
         ['              <option value="all">all</option>']
         + [f'              <option value="{name}">{name}</option>' for name in list_registered_strategies()]
+    )
+    pipeline_orchestration_options = "\n".join(
+        (
+            f'              <option value="{name}"'
+            + (' selected' if name == DEFAULT_PIPELINE_ORCHESTRATION else '')
+            + f">{name}</option>"
+        )
+        for name in ("direct", "queue_dispatch", "queue_drain", "queue_batch")
     )
     html = """<!DOCTYPE html>
 <html lang="en">
@@ -493,6 +502,12 @@ __STRATEGY_OPTIONS__
             <label for="pipeline-symbol-select">Symbols</label>
             <select id="pipeline-symbol-select" multiple size="3"></select>
           </div>
+          <div class="inline-controls">
+            <label for="pipeline-orchestration-select">Orchestration</label>
+            <select id="pipeline-orchestration-select">
+__PIPELINE_ORCHESTRATION_OPTIONS__
+            </select>
+          </div>
           <div class="button-row">
             <button data-action="pipeline">Run Pipeline</button>
             <button class="secondary" data-refresh="all">Refresh Data</button>
@@ -723,14 +738,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             </select>
           </div>
           <div class="button-row" style="margin-bottom: 16px;">
-            <button class="secondary" data-action="queue-enqueue-pipeline">Enqueue Pipeline Chain</button>
-            <button class="secondary" data-action="queue-drain-pipeline">Drain Next Pipeline Batch</button>
+            <button class="secondary" data-action="queue-recover-pipeline">Recover Stale Pipeline Batch</button>
+            <button class="secondary" data-action="queue-clear-pipeline">Clear Stale Pipeline Batch</button>
             <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
             <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
             <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
             <button class="secondary" data-action="queue-retry-strategy">Retry Failed Strategy Job</button>
             <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
           </div>
+          <div class="inline-note" style="margin-bottom: 12px;">Pipeline dispatch/drain now lives in the Pipeline panel via the orchestration selector.</div>
           <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
           <div class="trade-list" id="queue-board">
             <div class="strategy-card">Loading...</div>
@@ -889,10 +905,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";
         el("kill-switch-status").className = `value ${statusClass(killSwitch.status)}`;
         const queue = health.checks.queue || { status: "degraded", counts: {} };
-        el("queue-status").textContent = String(queue.status || "unknown").toUpperCase();
+        const staleBatch = queue.reason === "Queue contains stale incomplete batches." ? (queue.latest_incomplete_batch || null) : null;
+        el("queue-status").textContent = staleBatch ? "STALE" : String(queue.status || "unknown").toUpperCase();
         el("queue-status").className = `value ${statusClass(queue.status)}`;
         const queueCounts = queue.counts || {};
-        el("queue-detail").textContent = `queued=${queueCounts.queued ?? 0} leased=${queueCounts.leased ?? 0} failed=${queueCounts.failed ?? 0}`;
+        const queueDetail = [`queued=${queueCounts.queued ?? 0}`, `leased=${queueCounts.leased ?? 0}`, `failed=${queueCounts.failed ?? 0}`];
+        if (staleBatch) {
+          queueDetail.push(`stale_batch_age=${staleBatch.age_seconds ?? "n/a"}s`);
+          queueDetail.push(`source=${staleBatch.source || "unknown"}`);
+          queueDetail.push(`orchestration=${staleBatch.orchestration || "n/a"}`);
+        } else if (queue.reason) {
+          queueDetail.push(`reason=${queue.reason}`);
+        }
+        el("queue-detail").textContent = queueDetail.join(" ");
         const executionBackend = health.checks.execution_backend || { status: "degraded" };
         el("execution-backend-status").textContent = String(executionBackend.backend || "unknown").toUpperCase();
         el("execution-backend-status").className = `value ${statusClass(executionBackend.status)}`;
@@ -1627,14 +1652,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               const statuses = Object.entries(batch.statuses || {})
                 .map(([jobType, status]) => `${jobType}=${status}`)
                 .join(",");
-              return `batch=${String(batch.batch_id).slice(0, 8)} backend=${batch.execution_backend || "unknown"} statuses=${statuses}`;
+              return `batch=${String(batch.batch_id).slice(0, 8)} age=${batch.age_seconds ?? "n/a"}s source=${batch.source || "unknown"} orchestration=${batch.orchestration || "n/a"} backend=${batch.execution_backend || "unknown"} statuses=${statuses}`;
             }).join(" | ")
           : "Recent batches: none";
         const incompleteBatchBit = latestIncompleteBatch
-          ? `Incomplete batch: ${String(latestIncompleteBatch.batch_id).slice(0, 8)} backend=${latestIncompleteBatch.execution_backend || "unknown"} statuses=${Object.entries(latestIncompleteBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
+          ? `Incomplete batch: ${String(latestIncompleteBatch.batch_id).slice(0, 8)} age=${latestIncompleteBatch.age_seconds ?? "n/a"}s source=${latestIncompleteBatch.source || "unknown"} orchestration=${latestIncompleteBatch.orchestration || "n/a"} backend=${latestIncompleteBatch.execution_backend || "unknown"} statuses=${Object.entries(latestIncompleteBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
           : "Incomplete batch: none";
         const completedBatchBit = latestCompletedBatch
-          ? `Completed batch: ${String(latestCompletedBatch.batch_id).slice(0, 8)} backend=${latestCompletedBatch.execution_backend || "unknown"} statuses=${Object.entries(latestCompletedBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
+          ? `Completed batch: ${String(latestCompletedBatch.batch_id).slice(0, 8)} age=${latestCompletedBatch.age_seconds ?? "n/a"}s source=${latestCompletedBatch.source || "unknown"} orchestration=${latestCompletedBatch.orchestration || "n/a"} backend=${latestCompletedBatch.execution_backend || "unknown"} statuses=${Object.entries(latestCompletedBatch.statuses || {}).map(([jobType, status]) => `${jobType}=${status}`).join(",")}`
           : "Completed batch: none";
         if (filteredJobs.length === 0) {
           board.innerHTML = `<div class="strategy-card"><strong>Queue</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${completedBatchBit}<br>${batchBits}<br>No queue jobs match the current filter.</div>`;
@@ -1788,8 +1813,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "scheduler-stop": "scheduler-message",
           "scheduler-strategy-save": "scheduler-message",
           "execution-backend-save": "scheduler-message",
-          "queue-enqueue-pipeline": "queue-message",
-          "queue-drain-pipeline": "queue-message",
+          "queue-recover-pipeline": "queue-message",
+          "queue-clear-pipeline": "queue-message",
           "queue-enqueue-strategy": "queue-message",
           "queue-drain-strategy": "queue-message",
           "queue-drain-execution": "queue-message",
@@ -1819,6 +1844,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               body: JSON.stringify({
                 strategy_name: el("pipeline-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
                 symbol_names: selectedSymbols,
+                orchestration: el("pipeline-orchestration-select")?.value || "direct",
               }),
             });
             el("pipeline-json").textContent = formatJson(result);
@@ -1871,19 +1897,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           } else if (type === "scheduler-clear-notes") {
             await clearDisabledStrategyNotes();
             return;
-          } else if (type === "queue-enqueue-pipeline") {
-            const payload = collectSchedulerStrategyPayload();
-            result = await api("/queue/jobs/enqueue-pipeline", {
+          } else if (type === "queue-recover-pipeline") {
+            const staleBatchId = queueSummaryState?.latest_incomplete_batch?.batch_id || null;
+            if (!staleBatchId) {
+              throw new Error("No stale pipeline batch is available to recover.");
+            }
+            result = await api("/pipeline/run", {
               method: "POST",
-              body: JSON.stringify({
-                strategy_name: payload.strategy_name,
-                strategy_names: payload.strategy_names,
-                symbol_names: payload.symbol_names,
-                payload: { source: "admin_queue_pipeline" },
-              }),
+              body: JSON.stringify({ orchestration: "queue_drain", batch_id: staleBatchId }),
             });
-          } else if (type === "queue-drain-pipeline") {
-            result = await api("/queue/jobs/run-next-pipeline", {
+          } else if (type === "queue-clear-pipeline") {
+            const staleBatchId = queueSummaryState?.latest_incomplete_batch?.batch_id || null;
+            if (!staleBatchId) {
+              throw new Error("No stale pipeline batch is available to clear.");
+            }
+            result = await api(`/queue/batches/${encodeURIComponent(staleBatchId)}/clear`, {
               method: "POST",
             });
           } else if (type === "queue-enqueue-strategy") {
@@ -2098,5 +2126,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
     return (
         html.replace("__STRATEGY_OPTIONS__", strategy_options)
         .replace("__CLOSED_TRADE_STRATEGY_OPTIONS__", closed_trade_strategy_options)
+        .replace("__PIPELINE_ORCHESTRATION_OPTIONS__", pipeline_orchestration_options)
         .replace("__DEFAULT_STRATEGY_NAME__", DEFAULT_STRATEGY_NAME)
     )

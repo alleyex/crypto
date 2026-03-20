@@ -1,10 +1,16 @@
 import json
+from datetime import datetime, timezone
 from typing import Any
 from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
+from app.core.db import parse_db_timestamp
 from app.strategy.registry import list_registered_strategies
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _fetch_all(connection: DBConnection, query: str, limit: int = 5) -> list[dict[str, Any]]:
@@ -303,6 +309,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
             continue
         batch_entry = batch_map.get(batch_id)
         if batch_entry is None:
+            created_at = job.get("created_at")
             batch_entry = {
                 "batch_id": batch_id,
                 "job_types": [],
@@ -310,9 +317,19 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
                 "strategy_names": payload.get("strategy_names", []),
                 "symbol_names": payload.get("symbol_names", []),
                 "execution_backend": payload.get("execution_backend"),
+                "source": payload.get("source"),
+                "orchestration": payload.get("orchestration"),
+                "created_at": created_at,
+                "age_seconds": int((_utc_now() - parse_db_timestamp(str(created_at))).total_seconds()) if created_at else None,
             }
             batch_map[batch_id] = batch_entry
             recent_batches.append(batch_entry)
+        elif job.get("created_at") and batch_entry.get("created_at"):
+            current_created_at = parse_db_timestamp(str(batch_entry["created_at"]))
+            candidate_created_at = parse_db_timestamp(str(job["created_at"]))
+            if candidate_created_at < current_created_at:
+                batch_entry["created_at"] = job["created_at"]
+                batch_entry["age_seconds"] = int((_utc_now() - candidate_created_at).total_seconds())
         batch_entry["job_types"].append(job["job_type"])
         batch_entry["statuses"][job["job_type"]] = job["status"]
     latest_incomplete_batch = next(

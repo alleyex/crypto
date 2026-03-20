@@ -421,6 +421,15 @@ curl -s -X POST http://127.0.0.1:8000/pipeline/run
 curl -s -X POST http://127.0.0.1:8000/pipeline/run \
   -H "Content-Type: application/json" \
   -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"]}'
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_batch"}'
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_dispatch"}'
+curl -s -X POST http://127.0.0.1:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy_name":"momentum_3bar","symbol_names":["BTCUSDT","ETHUSDT"],"orchestration":"queue_drain"}'
 curl -s -X POST http://127.0.0.1:8000/signals/test \
   -H "Content-Type: application/json" \
   -d '{"signal_type":"SELL"}'
@@ -461,8 +470,6 @@ curl -s -X POST http://127.0.0.1:8000/queue/jobs/42/retry
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20"
 curl -s "http://127.0.0.1:8000/scheduler/logs?lines=20&mode=execution-only"
 curl -s http://127.0.0.1:8000/kill-switch/status
-
-Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin queue debug show recent batch status snapshots plus the latest incomplete/completed batch, and `POST /queue/jobs/run-next-pipeline` drains the next queued step from the oldest pending batch.
 curl -s -X POST http://127.0.0.1:8000/kill-switch/enable
 curl -s -X POST http://127.0.0.1:8000/kill-switch/disable
 curl -s http://127.0.0.1:8000/alerts/status
@@ -470,6 +477,8 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
   -H "Content-Type: application/json" \
   -d '{"message":"Crypto alert test"}'
 ```
+
+Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin queue debug show recent batch status snapshots plus the latest incomplete/completed batch, `POST /queue/jobs/run-next-pipeline` still drains the next queued step from the oldest pending batch, and `POST /pipeline/run` now supports `orchestration=queue_batch|queue_dispatch|queue_drain`, with `queue_batch` acting as the default queue-native main path.
 
 `GET /health` returns:
 

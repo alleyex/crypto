@@ -3,13 +3,11 @@ from typing import Any, Dict, List, Optional
 from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_label
+from app.core.job_queue import run_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
-from app.pipeline.execution_job import run_execution_job
-from app.pipeline.market_data_job import run_market_data_job
-from app.pipeline.strategy_job import run_strategy_job
 from app.system.heartbeat import record_heartbeat
 from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
@@ -208,10 +206,23 @@ def run_pipeline_collect(
         current_step = "save_klines"
         try:
             run_migrations(connection)
-            result["steps"].append(run_market_data_job(connection, symbol_names=symbol_names))
+            result["steps"].append(
+                run_job(
+                    connection,
+                    "market_data",
+                    payload={"symbol_names": symbol_names},
+                )
+            )
 
             current_step = "generate_signal"
-            strategy_job_result = run_strategy_job(connection, strategy_name=strategy_name, symbol_names=symbol_names)
+            strategy_job_result = run_job(
+                connection,
+                "strategy",
+                payload={
+                    "strategy_name": strategy_name,
+                    "symbol_names": symbol_names,
+                },
+            )
             result["steps"].extend(strategy_job_result["steps"])
             if strategy_job_result.get("status") == "completed":
                 return _finalize_result(
@@ -221,7 +232,14 @@ def run_pipeline_collect(
                 )
 
             current_step = "paper_execute"
-            execution_job_result = run_execution_job(connection, risk_event_ids=strategy_job_result.get("risk_event_ids"))
+            execution_job_result = run_job(
+                connection,
+                "execution",
+                payload={
+                    "risk_event_ids": strategy_job_result.get("risk_event_ids"),
+                    "symbol_names": symbol_names,
+                },
+            )
             result["steps"].extend(execution_job_result["steps"])
         except Exception as exc:
             return _pipeline_failure_result(result, current_step, exc)

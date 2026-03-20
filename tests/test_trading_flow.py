@@ -22,12 +22,16 @@ from app.core.db import parse_db_timestamp
 from app.core.db import _rewrite_query_params
 from app.core.db import table_exists
 from app.core.job_queue import complete_job
+from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import fail_batch_jobs
 from app.core.job_queue import fail_job
 from app.core.job_queue import get_job
 from app.core.job_queue import lease_next_job
 from app.core.job_queue import list_jobs
 from app.core.job_queue import retry_job
+from app.core.job_queue import run_pipeline_batch
+from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import _auto_id_column_sql
 from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
@@ -2097,51 +2101,53 @@ def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> No
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.pipeline.run_pipeline.run_migrations", lambda connection: None)
 
-    def fake_market_data_job(connection, symbol_names=None):
-        captured["market_data_symbols"] = list(symbol_names or [])
-        return {
-            "step": "save_klines",
-            "saved_klines": 10,
-            "symbol_names": symbol_names or [],
-            "symbol_results": [{"symbol": symbol, "saved_klines": 5} for symbol in (symbol_names or [])],
-        }
+    def fake_run_job(connection, job_type, payload=None):
+        payload = payload or {}
+        if job_type == "market_data":
+            captured["market_data_symbols"] = list(payload.get("symbol_names") or [])
+            symbol_names = payload.get("symbol_names") or []
+            return {
+                "step": "save_klines",
+                "saved_klines": 10,
+                "symbol_names": symbol_names,
+                "symbol_results": [{"symbol": symbol, "saved_klines": 5} for symbol in symbol_names],
+            }
+        if job_type == "strategy":
+            captured["strategy_symbols"] = list(payload.get("symbol_names") or [])
+            strategy_name = str(payload.get("strategy_name") or "ma_cross")
+            symbol_names = payload.get("symbol_names") or []
+            return {
+                "status": "ok",
+                "steps": [
+                    {
+                        "step": "generate_signal",
+                        "strategy_name": strategy_name,
+                        "symbol": symbol_names[0],
+                        "signal_type": "BUY",
+                        "short_ma": 2.0,
+                        "long_ma": 1.0,
+                    },
+                    {
+                        "step": "evaluate_risk",
+                        "id": 11,
+                        "signal_id": 7,
+                        "strategy_name": strategy_name,
+                        "symbol": symbol_names[0],
+                        "decision": "APPROVED",
+                        "reason": "Passed basic risk checks.",
+                    },
+                ],
+                "risk_event_ids": [11],
+            }
+        if job_type == "execution":
+            captured["execution_risk_event_ids"] = list(payload.get("risk_event_ids") or [])
+            return {
+                "status": "ok",
+                "steps": [{"step": "paper_execute", "risk_event_id": 11, "symbol": "ETHUSDT", "status": "FILLED", "side": "BUY"}],
+            }
+        raise AssertionError(f"Unexpected job_type: {job_type}")
 
-    def fake_strategy_job(connection, strategy_name="ma_cross", symbol_names=None):
-        captured["strategy_symbols"] = list(symbol_names or [])
-        return {
-            "status": "ok",
-            "steps": [
-                {
-                    "step": "generate_signal",
-                    "strategy_name": strategy_name,
-                    "symbol": symbol_names[0],
-                    "signal_type": "BUY",
-                    "short_ma": 2.0,
-                    "long_ma": 1.0,
-                },
-                {
-                    "step": "evaluate_risk",
-                    "id": 11,
-                    "signal_id": 7,
-                    "strategy_name": strategy_name,
-                    "symbol": symbol_names[0],
-                    "decision": "APPROVED",
-                    "reason": "Passed basic risk checks.",
-                },
-            ],
-            "risk_event_ids": [11],
-        }
-
-    def fake_execution_job(connection, risk_event_ids=None):
-        captured["execution_risk_event_ids"] = list(risk_event_ids or [])
-        return {
-            "status": "ok",
-            "steps": [{"step": "paper_execute", "risk_event_id": 11, "symbol": "ETHUSDT", "status": "FILLED", "side": "BUY"}],
-        }
-
-    monkeypatch.setattr("app.pipeline.run_pipeline.run_market_data_job", fake_market_data_job)
-    monkeypatch.setattr("app.pipeline.run_pipeline.run_strategy_job", fake_strategy_job)
-    monkeypatch.setattr("app.pipeline.run_pipeline.run_execution_job", fake_execution_job)
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_job", fake_run_job)
 
     result = run_pipeline_collect(strategy_name="momentum_3bar", symbol_names=["ETHUSDT"])
 
@@ -2933,6 +2939,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "strategy_names": ["ma_cross", "momentum_3bar"],
                     "symbol_names": ["BTCUSDT", "ETHUSDT"],
                     "execution_backend": "paper",
+                    "source": "api_pipeline",
+                    "orchestration": "queue_batch",
                 }
             ],
             "latest_incomplete_batch": {
@@ -2946,6 +2954,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                 "strategy_names": ["ma_cross", "momentum_3bar"],
                 "symbol_names": ["BTCUSDT", "ETHUSDT"],
                 "execution_backend": "paper",
+                "source": "api_pipeline",
+                "orchestration": "queue_batch",
             },
             "latest_completed_batch": {
                 "batch_id": "batch-0001",
@@ -2958,6 +2968,8 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                 "strategy_names": ["ma_cross"],
                 "symbol_names": ["BTCUSDT"],
                 "execution_backend": "paper",
+                "source": "scheduler_pipeline",
+                "orchestration": "queue_dispatch",
             },
             "failed_jobs": [{"id": 9, "job_type": "strategy", "status": "failed"}],
             "retry_jobs": [{"id": 8, "job_type": "strategy", "status": "completed", "attempt_count": 2}],
@@ -2998,10 +3010,14 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
     assert response.json()["latest_retry_job"]["id"] == 8
     assert response.json()["recent_batches"][0]["statuses"]["market_data"] == "completed"
     assert response.json()["recent_batches"][0]["execution_backend"] == "paper"
+    assert response.json()["recent_batches"][0]["source"] == "api_pipeline"
+    assert response.json()["recent_batches"][0]["orchestration"] == "queue_batch"
     assert response.json()["latest_incomplete_batch"]["statuses"]["strategy"] == "queued"
     assert response.json()["latest_incomplete_batch"]["execution_backend"] == "paper"
+    assert response.json()["latest_incomplete_batch"]["source"] == "api_pipeline"
     assert response.json()["latest_completed_batch"]["statuses"]["execution"] == "completed"
     assert response.json()["latest_completed_batch"]["execution_backend"] == "paper"
+    assert response.json()["latest_completed_batch"]["orchestration"] == "queue_dispatch"
     assert response.json()["latest_jobs"][0]["job_type"] == "strategy"
 
 
@@ -3074,6 +3090,53 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         connection.close()
 
 
+def test_get_job_queue_summary_includes_batch_source_and_orchestration() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+            payload={"source": "api_pipeline", "orchestration": "queue_batch"},
+        )
+
+        summary = get_job_queue_summary(connection)
+
+        assert summary["recent_batches"][0]["source"] == "api_pipeline"
+        assert summary["recent_batches"][0]["orchestration"] == "queue_batch"
+        assert summary["latest_incomplete_batch"]["source"] == "api_pipeline"
+        assert summary["latest_incomplete_batch"]["orchestration"] == "queue_batch"
+    finally:
+        connection.close()
+
+
+def test_get_job_queue_summary_includes_batch_age_seconds(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+            payload={"source": "api_pipeline", "orchestration": "queue_batch"},
+        )
+        connection.execute(
+            "UPDATE job_queue SET created_at = ? WHERE payload_json LIKE ?",
+            ("2026-03-19 10:00:00", '%"batch_id"%'),
+        )
+        connection.commit()
+        monkeypatch.setattr("app.query.read_service._utc_now", lambda: datetime(2026, 3, 19, 10, 5, 0, tzinfo=timezone.utc))
+
+        summary = get_job_queue_summary(connection)
+
+        assert summary["recent_batches"][0]["created_at"] == "2026-03-19 10:00:00"
+        assert summary["recent_batches"][0]["age_seconds"] == 300
+        assert summary["latest_incomplete_batch"]["age_seconds"] == 300
+    finally:
+        connection.close()
+
+
 def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.main.get_connection",
@@ -3113,6 +3176,43 @@ def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
     assert report["checks"]["queue"]["counts"]["failed"] == 1
 
 
+def test_queue_check_marks_stale_incomplete_batch_as_degraded(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.main.QUEUE_BATCH_STALENESS_SECONDS", 300)
+    monkeypatch.setattr(
+        "app.api.main.get_job_queue_summary",
+        lambda connection: {
+            "counts": {"queued": 1, "leased": 0, "completed": 2, "failed": 0, "total": 3},
+            "latest_failed_job": None,
+            "latest_retry_job": None,
+            "latest_jobs": [],
+            "recent_batches": [
+                {
+                    "batch_id": "batch-123",
+                    "age_seconds": 420,
+                    "source": "scheduler_pipeline",
+                    "orchestration": "queue_batch",
+                    "statuses": {"market_data": "completed", "strategy": "queued", "execution": "queued"},
+                }
+            ],
+            "latest_incomplete_batch": {
+                "batch_id": "batch-123",
+                "age_seconds": 420,
+                "source": "scheduler_pipeline",
+                "orchestration": "queue_batch",
+                "statuses": {"market_data": "completed", "strategy": "queued", "execution": "queued"},
+            },
+            "latest_completed_batch": None,
+        },
+    )
+
+    result = __import__("app.api.main", fromlist=["_queue_check"])._queue_check(object())
+
+    assert result["status"] == "degraded"
+    assert result["reason"] == "Queue contains stale incomplete batches."
+    assert result["batch_staleness_threshold_seconds"] == 300
+    assert result["latest_incomplete_batch"]["age_seconds"] == 420
+
+
 def test_heartbeat_check_marks_stale_workers_as_degraded(monkeypatch) -> None:
     fixed_now = datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("app.api.main._utc_now", lambda: fixed_now)
@@ -3149,7 +3249,82 @@ def test_root_redirects_to_admin() -> None:
     assert response.headers["location"] == "/admin"
 
 
-def test_pipeline_run_endpoint_accepts_strategy_name(monkeypatch) -> None:
+def test_render_admin_page_selects_default_pipeline_orchestration(monkeypatch) -> None:
+    monkeypatch.setattr("app.core.settings.DEFAULT_PIPELINE_ORCHESTRATION", "queue_drain")
+
+    html = __import__("app.admin.page", fromlist=["render_admin_page"]).render_admin_page()
+
+    assert '<option value="queue_drain" selected>queue_drain</option>' in html
+
+
+def test_queue_alert_includes_batch_source_and_orchestration(monkeypatch) -> None:
+    sent_messages = []
+    monkeypatch.setattr("app.alerting.queue.send_telegram_message", lambda text: sent_messages.append(text) or {"sent": True})
+    monkeypatch.setattr("app.alerting.queue._read_state", lambda: None)
+    monkeypatch.setattr("app.alerting.queue._write_state", lambda state: None)
+
+    result = __import__("app.alerting.queue", fromlist=["maybe_send_queue_alert"]).maybe_send_queue_alert(
+        {
+            "checks": {
+                "queue": {
+                    "status": "degraded",
+                    "counts": {"failed": 1},
+                    "latest_failed_job": {
+                        "id": 42,
+                        "job_type": "execution",
+                        "attempt_count": 2,
+                        "error_message": "broker unavailable",
+                    },
+                    "latest_incomplete_batch": {
+                        "batch_id": "batch-123",
+                        "source": "api_pipeline",
+                        "orchestration": "queue_batch",
+                        "age_seconds": 42,
+                    },
+                }
+            }
+        }
+    )
+
+    assert result["sent"] is True
+    assert "source=api_pipeline" in sent_messages[0]
+    assert "orchestration=queue_batch" in sent_messages[0]
+    assert "batch_age=42s" in sent_messages[0]
+
+
+def test_queue_alert_sends_for_stale_incomplete_batch_without_failed_jobs(monkeypatch) -> None:
+    sent_messages = []
+    monkeypatch.setattr("app.alerting.queue.send_telegram_message", lambda text: sent_messages.append(text) or {"sent": True})
+    monkeypatch.setattr("app.alerting.queue._read_state", lambda: None)
+    monkeypatch.setattr("app.alerting.queue._write_state", lambda state: None)
+
+    result = __import__("app.alerting.queue", fromlist=["maybe_send_queue_alert"]).maybe_send_queue_alert(
+        {
+            "checks": {
+                "queue": {
+                    "status": "degraded",
+                    "reason": "Queue contains stale incomplete batches.",
+                    "counts": {"failed": 0},
+                    "latest_failed_job": None,
+                    "latest_incomplete_batch": {
+                        "batch_id": "batch-123",
+                        "source": "scheduler_pipeline",
+                        "orchestration": "queue_batch",
+                        "age_seconds": 601,
+                    },
+                }
+            }
+        }
+    )
+
+    assert result["sent"] is True
+    assert "stale incomplete batch" in sent_messages[0]
+    assert "source=scheduler_pipeline" in sent_messages[0]
+    assert "orchestration=queue_batch" in sent_messages[0]
+    assert "batch_age=601s" in sent_messages[0]
+
+
+def test_pipeline_run_endpoint_accepts_strategy_name_for_direct_orchestration(monkeypatch) -> None:
     client = TestClient(app)
     called: list[dict[str, object]] = []
 
@@ -3167,13 +3342,163 @@ def test_pipeline_run_endpoint_accepts_strategy_name(monkeypatch) -> None:
 
     response = client.post(
         "/pipeline/run",
-        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"]},
+        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"], "orchestration": "direct"},
     )
 
     assert response.status_code == 200
     assert response.json()["strategy_name"] == "momentum_3bar"
     assert response.json()["requested_symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert called == [{"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"]}]
+
+
+def test_pipeline_run_endpoint_supports_queue_dispatch(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+
+    def fake_enqueue_pipeline_jobs(connection, **kwargs):
+        captured["kwargs"] = kwargs
+        return [
+            {"batch_id": "batch-123", "job_id": 11, "job_type": "market_data", "payload": {}},
+            {"batch_id": "batch-123", "job_id": 12, "job_type": "strategy", "payload": {}},
+            {"batch_id": "batch-123", "job_id": 13, "job_type": "execution", "payload": {}},
+        ]
+
+    monkeypatch.setattr("app.api.main.enqueue_pipeline_jobs", fake_enqueue_pipeline_jobs)
+
+    response = client.post(
+        "/pipeline/run",
+        json={
+            "strategy_name": "momentum_3bar",
+            "symbol_names": ["BTCUSDT", "ETHUSDT"],
+            "orchestration": "queue_dispatch",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["orchestration"] == "queue_dispatch"
+    assert response.json()["batch_id"] == "batch-123"
+    assert captured["kwargs"] == {
+        "strategy_name": "momentum_3bar",
+        "symbol_names": ["BTCUSDT", "ETHUSDT"],
+    }
+
+
+def test_pipeline_run_endpoint_supports_queue_drain(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+    audit_calls: list[dict[str, Any]] = []
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+    def fake_run_pipeline_batch(connection, batch_id=None):
+        captured["batch_id"] = batch_id
+        return {
+            "status": "completed",
+            "batch_id": "batch-123",
+            "jobs": [
+                {"id": 11, "job_type": "market_data"},
+                {"id": 12, "job_type": "strategy"},
+                {"id": 13, "job_type": "execution"},
+            ],
+            "job": {"id": 13, "job_type": "execution"},
+            "result": {"status": "ok", "steps": [{"step": "paper_execute", "status": "FILLED", "side": "BUY"}]},
+            "remaining_job_types": [],
+        }
+
+    monkeypatch.setattr("app.api.main.run_pipeline_batch", fake_run_pipeline_batch)
+
+    response = client.post(
+        "/pipeline/run",
+        json={
+            "strategy_name": "momentum_3bar",
+            "symbol_names": ["BTCUSDT"],
+            "orchestration": "queue_drain",
+            "batch_id": "batch-stale-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["orchestration"] == "queue_drain"
+    assert response.json()["batch_id"] == "batch-123"
+    assert response.json()["strategy_name"] == "momentum_3bar"
+    assert response.json()["requested_symbol_names"] == ["BTCUSDT"]
+    assert response.json()["requested_batch_id"] == "batch-stale-1"
+    assert captured["batch_id"] == "batch-stale-1"
+    assert audit_calls[0]["event_type"] == "queue_control"
+    assert audit_calls[0]["status"] == "completed"
+    assert audit_calls[0]["payload"]["action"] == "recover_pipeline_batch"
+    assert audit_calls[0]["payload"]["requested_batch_id"] == "batch-stale-1"
+
+
+def test_pipeline_run_endpoint_supports_queue_batch(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.enqueue_and_run_pipeline_batch",
+        lambda connection, **kwargs: {
+            "status": "completed",
+            "batch_id": "batch-123",
+            "jobs": [{"id": 11, "job_type": "market_data"}],
+            "job": {"id": 11, "job_type": "market_data"},
+            "result": {"status": "ok", "steps": [{"step": "save_klines", "saved_klines": 5}]},
+            "remaining_job_types": [],
+        },
+    )
+
+    response = client.post(
+        "/pipeline/run",
+        json={
+            "strategy_name": "momentum_3bar",
+            "symbol_names": ["BTCUSDT"],
+            "orchestration": "queue_batch",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["orchestration"] == "queue_batch"
+    assert response.json()["batch_id"] == "batch-123"
+
+
+def test_pipeline_run_endpoint_uses_default_orchestration_setting(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.DEFAULT_PIPELINE_ORCHESTRATION", "queue_dispatch")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.enqueue_pipeline_jobs",
+        lambda connection, **kwargs: [{"batch_id": "batch-123", "job_id": 11, "job_type": "market_data"}],
+    )
+
+    response = client.post(
+        "/pipeline/run",
+        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["orchestration"] == "queue_dispatch"
 
 
 def test_strategies_endpoint_lists_registered_strategies() -> None:
@@ -3647,6 +3972,37 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
     assert list_response.json()[0]["status"] == "queued"
 
 
+def test_clear_queue_batch_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.fail_batch_jobs",
+        lambda connection, batch_id, **kwargs: [
+            {
+                "id": 11,
+                "job_type": "strategy",
+                "status": "failed",
+                "payload": {"batch_id": batch_id},
+                "result": {"cleared_batch_id": batch_id, "source": "admin_queue_clear"},
+                "error_message": kwargs["error_message"],
+            }
+        ],
+    )
+
+    response = client.post("/queue/batches/batch-123/clear")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cleared"
+    assert response.json()["batch_id"] == "batch-123"
+    assert response.json()["cleared_job_count"] == 1
+    assert response.json()["jobs"][0]["error_message"] == "Queue batch cleared from admin."
+
+
 def test_enqueue_pipeline_queue_jobs_endpoint(monkeypatch) -> None:
     client = TestClient(app)
     captured: dict[str, Any] = {}
@@ -3727,6 +4083,134 @@ def test_run_next_pipeline_batch_drains_oldest_job_in_batch(monkeypatch) -> None
         assert result["batch_id"] == jobs[0]["batch_id"]
         assert result["job"]["job_type"] == "market_data"
         assert result["remaining_job_types"] == ["strategy", "execution"]
+    finally:
+        connection.close()
+
+
+def test_run_next_pipeline_batch_targets_requested_batch(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        older_jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+            payload={"source": "older_batch"},
+        )
+        newer_jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["momentum_3bar"],
+            symbol_names=["ETHUSDT"],
+            payload={"source": "newer_batch"},
+        )
+        leased_job_ids: list[int] = []
+
+        def fake_run_leased_queue_job(conn, leased_job):
+            leased_job_ids.append(int(leased_job["id"]))
+            return {
+                "status": "completed",
+                "job": {"id": int(leased_job["id"]), "job_type": leased_job["job_type"]},
+                "result": {"status": "ok"},
+            }
+
+        monkeypatch.setattr("app.core.job_queue._run_leased_queue_job", fake_run_leased_queue_job)
+
+        result = run_next_pipeline_batch(connection, batch_id=older_jobs[0]["batch_id"])
+
+        assert result["status"] == "completed"
+        assert result["batch_id"] == older_jobs[0]["batch_id"]
+        assert result["job"]["id"] == older_jobs[0]["job_id"]
+        assert result["remaining_job_types"] == ["strategy", "execution"]
+        assert leased_job_ids == [older_jobs[0]["job_id"]]
+        queued_jobs = list_jobs(connection, limit=10, status="queued")
+        assert newer_jobs[0]["job_id"] in [job["id"] for job in queued_jobs]
+    finally:
+        connection.close()
+
+
+def test_fail_batch_jobs_marks_only_requested_batch_as_failed() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        target_jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+        )
+        other_jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["momentum_3bar"],
+            symbol_names=["ETHUSDT"],
+        )
+
+        failed_jobs = fail_batch_jobs(
+            connection,
+            target_jobs[0]["batch_id"],
+            error_message="Queue batch cleared from admin.",
+            result={"source": "admin_queue_clear"},
+        )
+
+        assert [job["id"] for job in failed_jobs] == [item["job_id"] for item in target_jobs]
+        refreshed_target_jobs = [get_job(connection, item["job_id"]) for item in target_jobs]
+        assert all(job is not None and job["status"] == "failed" for job in refreshed_target_jobs)
+        assert all(job is not None and job["error_message"] == "Queue batch cleared from admin." for job in refreshed_target_jobs)
+        refreshed_other_jobs = [get_job(connection, item["job_id"]) for item in other_jobs]
+        assert all(job is not None and job["status"] == "queued" for job in refreshed_other_jobs)
+    finally:
+        connection.close()
+
+
+def test_run_pipeline_batch_drains_full_batch(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        jobs = enqueue_pipeline_jobs(
+            connection,
+            strategy_names=["ma_cross"],
+            symbol_names=["BTCUSDT"],
+        )
+        completed = iter(
+            [
+                {
+                    "status": "completed",
+                    "batch_id": jobs[0]["batch_id"],
+                    "remaining_job_types": ["strategy", "execution"],
+                    "job": {"id": jobs[0]["job_id"], "job_type": "market_data"},
+                    "result": {"steps": [{"step": "save_klines", "saved_klines": 5}]},
+                    "execution_backend_status": {"backend": "paper"},
+                },
+                {
+                    "status": "completed",
+                    "batch_id": jobs[0]["batch_id"],
+                    "remaining_job_types": ["execution"],
+                    "job": {"id": jobs[1]["job_id"], "job_type": "strategy"},
+                    "result": {"steps": [{"step": "generate_signal", "signal_type": "BUY"}]},
+                    "execution_backend_status": {"backend": "paper"},
+                },
+                {
+                    "status": "completed",
+                    "batch_id": jobs[0]["batch_id"],
+                    "remaining_job_types": [],
+                    "job": {"id": jobs[2]["job_id"], "job_type": "execution"},
+                    "result": {"steps": [{"step": "paper_execute", "status": "FILLED", "side": "BUY"}]},
+                    "execution_backend_status": {"backend": "paper"},
+                },
+            ]
+        )
+
+        monkeypatch.setattr("app.core.job_queue.run_next_pipeline_batch", lambda conn: next(completed))
+
+        result = run_pipeline_batch(connection)
+
+        assert result["status"] == "completed"
+        assert result["batch_id"] == jobs[0]["batch_id"]
+        assert [job["job_type"] for job in result["jobs"]] == ["market_data", "strategy", "execution"]
+        assert [step["step"] for step in result["result"]["steps"]] == [
+            "save_klines",
+            "generate_signal",
+            "paper_execute",
+        ]
+        assert result["remaining_job_types"] == []
     finally:
         connection.close()
 
@@ -3826,6 +4310,42 @@ def test_retry_queue_job_endpoint(monkeypatch) -> None:
     assert response.json()["status"] == "queued"
     assert response.json()["job_id"] == 42
     assert response.json()["job"]["status"] == "queued"
+
+
+def test_clear_queue_batch_endpoint_logs_audit_event(monkeypatch) -> None:
+    client = TestClient(app)
+    audit_calls: list[dict[str, Any]] = []
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+    monkeypatch.setattr(
+        "app.api.main.fail_batch_jobs",
+        lambda connection, batch_id, **kwargs: [
+            {
+                "id": 11,
+                "job_type": "strategy",
+                "status": "failed",
+                "payload": {"batch_id": batch_id},
+                "result": {"cleared_batch_id": batch_id, "source": "admin_queue_clear"},
+                "error_message": kwargs["error_message"],
+            }
+        ],
+    )
+
+    response = client.post("/queue/batches/batch-123/clear")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cleared"
+    assert response.json()["batch_id"] == "batch-123"
+    assert response.json()["cleared_job_count"] == 1
+    assert audit_calls[0]["event_type"] == "queue_control"
+    assert audit_calls[0]["status"] == "cleared"
+    assert audit_calls[0]["payload"]["action"] == "clear_pipeline_batch"
+    assert audit_calls[0]["payload"]["batch_id"] == "batch-123"
 
 
 def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:
@@ -4773,6 +5293,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "scheduler-heartbeat.db"
     recorded = []
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "direct")
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
@@ -4805,6 +5326,42 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     finally:
         connection.close()
     assert any(item["component"] == "scheduler" and item["status"] == "ok" for item in heartbeats)
+
+
+def test_run_scheduler_uses_queue_batch_default_for_pipeline_mode(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler.log"
+    db_path = tmp_path / "scheduler-pipeline-queue-batch.db"
+    recorded = []
+
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "queue_batch")
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+    monkeypatch.setattr(
+        "app.scheduler.runner.enqueue_and_run_pipeline_batch",
+        lambda connection, **kwargs: {
+            "status": "completed",
+            "batch_id": "batch-123",
+            "enqueued_jobs": [{"batch_id": "batch-123", "job_id": 101, "job_type": "market_data"}],
+            "jobs": [{"id": 101, "job_type": "market_data"}],
+            "result": {"steps": [{"step": "save_klines", "saved_klines": 5}]},
+        },
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="pipeline")
+
+    assert recorded == [{"status": "ok"}]
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "queued=market_data=queued#101" in log_text
+    assert "drained=market_data=drained#101" in log_text
 
 
 def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> None:
@@ -4915,6 +5472,96 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
     )
 
 
+def test_run_scheduler_supports_queue_dispatch_for_pipeline_mode(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler.log"
+    db_path = tmp_path / "scheduler-pipeline-queue.db"
+    recorded = []
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+
+    def fake_enqueue_pipeline_jobs(connection, **kwargs):
+        captured.update(kwargs)
+        return [
+            {"batch_id": "batch-123", "job_id": 101, "job_type": "market_data"},
+            {"batch_id": "batch-123", "job_id": 102, "job_type": "strategy"},
+            {"batch_id": "batch-123", "job_id": 103, "job_type": "execution"},
+        ]
+
+    monkeypatch.setattr("app.scheduler.runner.enqueue_pipeline_jobs", fake_enqueue_pipeline_jobs)
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="pipeline", queue_dispatch=True)
+
+    assert recorded == [{"status": "ok"}]
+    assert captured == {
+        "strategy_name": "ma_cross",
+        "strategy_names": ["ma_cross", "momentum_3bar"],
+        "symbol_names": ["BTCUSDT", "ETHUSDT"],
+    }
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mode=pipeline" in log_text
+    assert "queued=market_data=queued#101;strategy=queued#102;execution=queued#103" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(
+        item["component"] == "scheduler"
+        and item["status"] == "ok"
+        and json.loads(item["payload_json"] or "{}").get("queue_dispatch") is True
+        for item in heartbeats
+    )
+
+
+def test_run_scheduler_uses_default_pipeline_orchestration_setting(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler.log"
+    db_path = tmp_path / "scheduler-pipeline-default-queue.db"
+    recorded = []
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "queue_dispatch")
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+
+    def fake_enqueue_pipeline_jobs(connection, **kwargs):
+        captured["kwargs"] = kwargs
+        return [{"batch_id": "batch-123", "job_id": 101, "job_type": "market_data"}]
+
+    monkeypatch.setattr("app.scheduler.runner.enqueue_pipeline_jobs", fake_enqueue_pipeline_jobs)
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="pipeline")
+
+    assert recorded == [{"status": "ok"}]
+    assert captured["kwargs"] == {
+        "strategy_name": "ma_cross",
+        "strategy_names": ["ma_cross"],
+        "symbol_names": ["BTCUSDT"],
+    }
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "queued=market_data=queued#101" in log_text
+
+
 def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_path) -> None:
     log_path = tmp_path / "strategy-worker.log"
     db_path = tmp_path / "scheduler-strategy-drain.db"
@@ -4966,6 +5613,70 @@ def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_p
         connection.close()
     assert any(
         item["component"] == "strategy_worker"
+        and item["status"] == "ok"
+        and json.loads(item["payload_json"] or "{}").get("queue_drain") is True
+        for item in heartbeats
+    )
+
+
+def test_run_scheduler_supports_queue_drain_for_pipeline_mode(monkeypatch, tmp_path) -> None:
+    log_path = tmp_path / "scheduler.log"
+    db_path = tmp_path / "scheduler-pipeline-drain.db"
+    recorded = []
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
+    monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
+
+    def fake_run_pipeline_batch(connection):
+        captured["called"] = True
+        return {
+            "status": "completed",
+            "batch_id": "batch-123",
+            "remaining_job_types": [],
+            "job": {"id": 203, "job_type": "execution"},
+            "jobs": [
+                {"id": 201, "job_type": "market_data"},
+                {"id": 202, "job_type": "strategy"},
+                {"id": 203, "job_type": "execution"},
+            ],
+            "result": {
+                "status": "ok",
+                "steps": [
+                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr("app.scheduler.runner.run_pipeline_batch", fake_run_pipeline_batch)
+    monkeypatch.setattr(
+        "app.validation.soak_history.record_soak_validation_snapshot",
+        lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
+    )
+
+    run_scheduler(interval_seconds=0, iterations=1, mode="pipeline", queue_drain=True)
+
+    assert recorded == [{"status": "ok"}]
+    assert captured == {"called": True}
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mode=pipeline" in log_text
+    assert "drained=market_data=drained#201;strategy=drained#202;execution=drained#203" in log_text
+    assert "signal=BTCUSDT=BUY" in log_text
+    assert "risk=BTCUSDT=APPROVED" in log_text
+
+    connection = sqlite3.connect(db_path)
+    try:
+        heartbeats = get_heartbeats(connection)
+    finally:
+        connection.close()
+    assert any(
+        item["component"] == "scheduler"
         and item["status"] == "ok"
         and json.loads(item["payload_json"] or "{}").get("queue_drain") is True
         for item in heartbeats

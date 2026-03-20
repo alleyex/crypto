@@ -228,6 +228,26 @@ def lease_next_job(connection: DBConnection, job_type: Optional[str] = None) -> 
     return get_job(connection, job_id)
 
 
+def lease_job_by_id(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
+    ensure_table(connection)
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET
+            status = 'leased',
+            attempt_count = attempt_count + 1,
+            started_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'queued';
+        """,
+        (job_id,),
+    )
+    connection.commit()
+    job = get_job(connection, job_id)
+    if job is None or job["status"] != "leased":
+        return None
+    return job
+
+
 def complete_job(
     connection: DBConnection,
     job_id: int,
@@ -299,20 +319,52 @@ def retry_job(connection: DBConnection, job_id: int) -> dict[str, Any]:
     return retried_job
 
 
-def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(job.get("payload") or {})
-    job_type = str(job["job_type"])
+def fail_batch_jobs(
+    connection: DBConnection,
+    batch_id: str,
+    *,
+    error_message: str,
+    result: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    ensure_table(connection)
+    rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT id
+        FROM job_queue
+        WHERE
+            status IN ('queued', 'leased')
+            AND payload_json LIKE ?
+        ORDER BY id ASC;
+        """,
+        (f'%"batch_id": "{batch_id}"%',),
+    )
+    failed_jobs: list[dict[str, Any]] = []
+    for row in rows:
+        job_id = int(row["id"])
+        fail_job(connection, job_id, error_message, result=result)
+        failed_job = get_job(connection, job_id)
+        if failed_job is not None:
+            failed_jobs.append(failed_job)
+    return failed_jobs
 
+
+def run_job(
+    connection: DBConnection,
+    job_type: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    normalized_payload = dict(payload or {})
     if job_type == "market_data":
         return run_market_data_job(
             connection,
-            symbol_names=payload.get("symbol_names"),
+            symbol_names=normalized_payload.get("symbol_names"),
         )
 
     if job_type == "strategy":
-        strategy_names = payload.get("strategy_names") or []
-        strategy_name = payload.get("strategy_name")
-        symbol_names = payload.get("symbol_names")
+        strategy_names = normalized_payload.get("strategy_names") or []
+        strategy_name = normalized_payload.get("strategy_name")
+        symbol_names = normalized_payload.get("symbol_names")
         if strategy_names:
             return run_strategy_jobs(
                 connection,
@@ -326,8 +378,8 @@ def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, 
         )
 
     if job_type == "execution":
-        risk_event_ids = payload.get("risk_event_ids")
-        symbol_names = payload.get("symbol_names")
+        risk_event_ids = normalized_payload.get("risk_event_ids")
+        symbol_names = normalized_payload.get("symbol_names")
         normalized_risk_event_ids = [int(item) for item in risk_event_ids] if risk_event_ids else None
         return run_execution_job(
             connection,
@@ -338,10 +390,18 @@ def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, 
     raise ValueError(f"Unsupported job type: {job_type}")
 
 
-def run_next_pipeline_batch(connection: DBConnection) -> dict[str, Any]:
+def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
+    return run_job(
+        connection,
+        job_type=str(job["job_type"]),
+        payload=dict(job.get("payload") or {}),
+    )
+
+
+def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
     ensure_table(connection)
     queued_jobs = list_jobs(connection, limit=200, status="queued")
-    batch_id = next(
+    resolved_batch_id = batch_id or next(
         (
             str((job.get("payload") or {}).get("batch_id"))
             for job in reversed(queued_jobs)
@@ -349,39 +409,128 @@ def run_next_pipeline_batch(connection: DBConnection) -> dict[str, Any]:
         ),
         None,
     )
-    if not batch_id:
+    if not resolved_batch_id:
         return {
             "status": "empty",
-            "message": "No queued pipeline batches available.",
+            "message": "No queued pipeline batches available." if batch_id is None else f"No queued jobs available for pipeline batch {batch_id}.",
         }
 
     batch_jobs = [
         job
         for job in reversed(queued_jobs)
-        if str((job.get("payload") or {}).get("batch_id") or "") == batch_id
+        if str((job.get("payload") or {}).get("batch_id") or "") == resolved_batch_id
     ]
     if not batch_jobs:
         return {
             "status": "empty",
-            "message": "No queued jobs available for next pipeline batch.",
+            "message": f"No queued jobs available for pipeline batch {resolved_batch_id}.",
         }
 
     next_job = batch_jobs[0]
-    run_result = run_next_queued_job(connection, job_type=str(next_job["job_type"]))
-    run_result["batch_id"] = batch_id
+    leased_job = lease_job_by_id(connection, int(next_job["id"]))
+    if leased_job is None:
+        return {
+            "status": "empty",
+            "batch_id": resolved_batch_id,
+            "message": f"Unable to lease queued job {next_job['id']} for pipeline batch {resolved_batch_id}.",
+        }
+    run_result = _run_leased_queue_job(connection, leased_job)
+    run_result["batch_id"] = resolved_batch_id
     run_result["remaining_job_types"] = [str(job["job_type"]) for job in batch_jobs[1:]]
     return run_result
 
 
-def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None) -> dict[str, Any]:
-    leased_job = lease_next_job(connection, job_type=job_type)
-    if leased_job is None:
-        return {
-            "status": "empty",
-            "job_type": job_type,
-            "message": "No queued jobs available.",
-        }
+def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
+    ensure_table(connection)
+    current_result = run_next_pipeline_batch(connection, batch_id=batch_id)
+    if current_result["status"] != "completed":
+        return current_result
 
+    batch_id = current_result.get("batch_id")
+    jobs: list[dict[str, Any]] = [dict(current_result["job"])]
+    steps: list[dict[str, Any]] = list((current_result.get("result") or {}).get("steps") or [])
+    execution_backend_status = current_result.get("execution_backend_status")
+
+    while current_result.get("remaining_job_types"):
+        next_result = run_next_pipeline_batch(connection, batch_id=batch_id)
+        if next_result["status"] != "completed":
+            next_result["batch_id"] = batch_id
+            next_result["completed_jobs"] = jobs
+            next_result["steps"] = steps
+            return next_result
+        if next_result.get("batch_id") != batch_id:
+            raise RuntimeError(
+                f"Pipeline batch changed while draining queued jobs: expected {batch_id}, got {next_result.get('batch_id')}"
+            )
+        jobs.append(dict(next_result["job"]))
+        steps.extend(list((next_result.get("result") or {}).get("steps") or []))
+        execution_backend_status = next_result.get("execution_backend_status", execution_backend_status)
+        current_result = next_result
+
+    return {
+        "status": "completed",
+        "batch_id": batch_id,
+        "jobs": jobs,
+        "job": jobs[-1],
+        "result": {
+            "status": "ok",
+            "steps": steps,
+            "execution_backend_status": execution_backend_status,
+        },
+        "execution_backend_status": execution_backend_status,
+        "remaining_job_types": [],
+    }
+
+
+def enqueue_and_run_pipeline_batch(
+    connection: DBConnection,
+    *,
+    strategy_name: Optional[str] = None,
+    strategy_names: Optional[list[str]] = None,
+    symbol_names: Optional[list[str]] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    jobs = enqueue_pipeline_jobs(
+        connection,
+        strategy_name=strategy_name,
+        strategy_names=strategy_names,
+        symbol_names=symbol_names,
+        payload=payload,
+    )
+    executed_jobs: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]] = []
+    execution_backend_status = None
+    for item in jobs:
+        leased_job = lease_job_by_id(connection, int(item["job_id"]))
+        if leased_job is None:
+            raise RuntimeError(f"Unable to lease queued pipeline job {item['job_id']}.")
+        job_result = _run_leased_queue_job(connection, leased_job)
+        if job_result["status"] != "completed":
+            job_result["batch_id"] = item["batch_id"]
+            job_result["jobs"] = executed_jobs
+            job_result["steps"] = steps
+            job_result["enqueued_jobs"] = jobs
+            return job_result
+        executed_jobs.append(dict(job_result["job"]))
+        steps.extend(list((job_result.get("result") or {}).get("steps") or []))
+        execution_backend_status = job_result.get("execution_backend_status", execution_backend_status)
+    return {
+        "status": "completed",
+        "batch_id": jobs[0]["batch_id"] if jobs else None,
+        "jobs": executed_jobs,
+        "job": executed_jobs[-1] if executed_jobs else None,
+        "result": {
+            "status": "ok",
+            "steps": steps,
+            "execution_backend_status": execution_backend_status,
+        },
+        "execution_backend_status": execution_backend_status,
+        "remaining_job_types": [],
+        "enqueued_jobs": jobs,
+    }
+
+
+def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) -> dict[str, Any]:
     job_id = int(leased_job["id"])
     backend_status = get_execution_backend_status()
     try:
@@ -410,3 +559,14 @@ def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None
             "error_type": exc.__class__.__name__,
             "execution_backend_status": backend_status,
         }
+
+
+def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None) -> dict[str, Any]:
+    leased_job = lease_next_job(connection, job_type=job_type)
+    if leased_job is None:
+        return {
+            "status": "empty",
+            "job_type": job_type,
+            "message": "No queued jobs available.",
+        }
+    return _run_leased_queue_job(connection, leased_job)

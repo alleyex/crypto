@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from app.audit.service import log_event
 from app.alerting.execution import maybe_send_execution_alert
 from app.admin.page import render_admin_page
 from app.alerting.health import maybe_send_health_alert
@@ -28,13 +29,18 @@ from app.core.job_queue import build_job_payload
 from app.core.job_queue import JOB_TYPES
 from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
+from app.core.job_queue import enqueue_and_run_pipeline_batch
+from app.core.job_queue import fail_batch_jobs
 from app.core.job_queue import list_jobs as list_queue_jobs
 from app.core.job_queue import retry_job
+from app.core.job_queue import run_pipeline_batch
 from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
+from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
+from app.core.settings import QUEUE_BATCH_STALENESS_SECONDS
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -283,16 +289,28 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
 def _queue_check(connection: DBConnection) -> dict[str, Any]:
     summary = get_job_queue_summary(connection)
     counts = summary["counts"]
-    status = "degraded" if counts["failed"] > 0 else "ok"
+    latest_incomplete_batch = summary.get("latest_incomplete_batch")
+    stale_batch = bool(
+        latest_incomplete_batch
+        and latest_incomplete_batch.get("age_seconds") is not None
+        and int(latest_incomplete_batch["age_seconds"]) > QUEUE_BATCH_STALENESS_SECONDS
+    )
+    status = "degraded" if counts["failed"] > 0 or stale_batch else "ok"
     result: dict[str, Any] = {
         "status": status,
         "counts": counts,
         "latest_failed_job": summary.get("latest_failed_job"),
         "latest_retry_job": summary.get("latest_retry_job"),
+        "latest_incomplete_batch": latest_incomplete_batch,
+        "latest_completed_batch": summary.get("latest_completed_batch"),
+        "recent_batches": summary.get("recent_batches", []),
         "latest_jobs": summary["latest_jobs"],
+        "batch_staleness_threshold_seconds": QUEUE_BATCH_STALENESS_SECONDS,
     }
     if counts["failed"] > 0:
         result["reason"] = "Queue contains failed jobs."
+    elif stale_batch:
+        result["reason"] = "Queue contains stale incomplete batches."
     return result
 
 
@@ -457,6 +475,13 @@ class QueuePipelineRequest(BaseModel):
     payload: Optional[Dict[str, Any]] = None
 
 
+class PipelineRunRequest(BaseModel):
+    strategy_name: str = DEFAULT_STRATEGY_NAME
+    symbol_names: Optional[List[str]] = None
+    orchestration: Optional[Literal["direct", "queue_dispatch", "queue_drain", "queue_batch"]] = None
+    batch_id: Optional[str] = None
+
+
 class ExecutionBackendRequest(BaseModel):
     backend: str
 
@@ -467,6 +492,22 @@ def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
         strategy_names=payload.strategy_names,
         symbol_names=payload.symbol_names,
         payload=payload.payload,
+    )
+
+
+def _log_queue_control_event(
+    *,
+    status: str,
+    message: str,
+    action: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    log_event(
+        event_type="queue_control",
+        status=status,
+        source="queue_control",
+        message=message,
+        payload={"action": action, **(payload or {})},
     )
 
 
@@ -638,6 +679,37 @@ def retry_queue_job(job_id: int) -> dict[str, Any]:
         connection.close()
 
 
+@app.post("/queue/batches/{batch_id}/clear")
+def clear_queue_batch(batch_id: str) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        jobs = fail_batch_jobs(
+            connection,
+            batch_id,
+            error_message="Queue batch cleared from admin.",
+            result={"cleared_batch_id": batch_id, "source": "admin_queue_clear"},
+        )
+        status = "cleared" if jobs else "empty"
+        _log_queue_control_event(
+            status=status,
+            message="Cleared queued pipeline batch from admin." if jobs else "No queued jobs found for pipeline batch clear request.",
+            action="clear_pipeline_batch",
+            payload={
+                "batch_id": batch_id,
+                "cleared_job_count": len(jobs),
+                "job_ids": [int(job["id"]) for job in jobs],
+            },
+        )
+        return {
+            "status": status,
+            "batch_id": batch_id,
+            "cleared_job_count": len(jobs),
+            "jobs": jobs,
+        }
+    finally:
+        connection.close()
+
+
 @app.get("/signals")
 def signals(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
@@ -725,6 +797,68 @@ def pnl(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
 def run_pipeline_endpoint(payload: Optional[PipelineRunRequest] = None) -> dict:
     strategy_name = payload.strategy_name if payload is not None else DEFAULT_STRATEGY_NAME
     symbol_names = payload.symbol_names if payload is not None else None
+    batch_id = payload.batch_id if payload is not None else None
+    orchestration = payload.orchestration if payload is not None and payload.orchestration is not None else DEFAULT_PIPELINE_ORCHESTRATION
+    if orchestration == "queue_dispatch":
+        connection = get_connection()
+        try:
+            jobs = enqueue_pipeline_jobs(
+                connection,
+                strategy_name=strategy_name,
+                symbol_names=symbol_names,
+                payload={"source": "api_pipeline", "orchestration": orchestration},
+            )
+            return {
+                "status": "queued",
+                "orchestration": orchestration,
+                "strategy_name": strategy_name,
+                "requested_symbol_names": symbol_names,
+                "batch_id": jobs[0]["batch_id"] if jobs else None,
+                "jobs": jobs,
+            }
+        finally:
+            connection.close()
+    if orchestration == "queue_batch":
+        connection = get_connection()
+        try:
+            result = enqueue_and_run_pipeline_batch(
+                connection,
+                strategy_name=strategy_name,
+                symbol_names=symbol_names,
+                payload={"source": "api_pipeline", "orchestration": orchestration},
+            )
+            return {
+                **result,
+                "orchestration": orchestration,
+                "strategy_name": strategy_name,
+                "requested_symbol_names": symbol_names,
+            }
+        finally:
+            connection.close()
+    if orchestration == "queue_drain":
+        connection = get_connection()
+        try:
+            result = run_pipeline_batch(connection, batch_id=batch_id)
+            _log_queue_control_event(
+                status=str(result.get("status") or "unknown"),
+                message="Recovered queued pipeline batch." if batch_id else "Drained next queued pipeline batch.",
+                action="recover_pipeline_batch",
+                payload={
+                    "orchestration": orchestration,
+                    "requested_batch_id": batch_id,
+                    "result_batch_id": result.get("batch_id"),
+                    "result_status": result.get("status"),
+                },
+            )
+            return {
+                **result,
+                "orchestration": orchestration,
+                "strategy_name": strategy_name,
+                "requested_symbol_names": symbol_names,
+                "requested_batch_id": batch_id,
+            }
+        finally:
+            connection.close()
     return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
 
 
