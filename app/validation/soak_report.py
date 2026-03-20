@@ -9,6 +9,7 @@ from app.core.db import table_exists
 from app.core.settings import SOAK_ACTIVITY_STALENESS_SECONDS
 from app.scheduler.control import read_scheduler_log
 from app.system.heartbeat import get_heartbeats
+from app.validation.soak_history import build_soak_history_summary
 
 
 TRACKED_TABLES = (
@@ -155,4 +156,5 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
         "positions": positions,
         "staleness_threshold_seconds": SOAK_ACTIVITY_STALENESS_SECONDS,
         "heartbeats": heartbeats,
+        "history_summary": build_soak_history_summary(),
     }
