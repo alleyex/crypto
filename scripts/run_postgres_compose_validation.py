@@ -181,6 +181,10 @@ def assert_pipeline_validation_success(pipeline: Any) -> None:
 
     steps = pipeline.get("steps")
     if not isinstance(steps, list) or not steps:
+        nested_result = pipeline.get("result")
+        if isinstance(nested_result, dict):
+            steps = nested_result.get("steps")
+    if not isinstance(steps, list) or not steps:
         raise RuntimeError(f"Pipeline validation did not return executable steps: {pipeline!r}")
 
     failed_steps = [

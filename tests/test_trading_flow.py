@@ -718,6 +718,22 @@ def test_assert_pipeline_validation_success_rejects_failed_pipeline() -> None:
         raise AssertionError("Expected pipeline validation failure to raise.")
 
 
+def test_assert_pipeline_validation_success_accepts_nested_queue_batch_steps() -> None:
+    assert_pipeline_validation_success(
+        {
+            "status": "completed",
+            "orchestration": "queue_batch",
+            "result": {
+                "status": "ok",
+                "steps": [
+                    {"step": "generate_signal", "signal_type": "BUY"},
+                    {"step": "paper_execute", "decision": "REJECTED"},
+                ],
+            },
+        }
+    )
+
+
 def test_run_migrations_uses_postgres_advisory_lock(monkeypatch) -> None:
     executed: list[tuple[str, tuple]] = []
 
