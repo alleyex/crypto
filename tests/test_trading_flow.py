@@ -6388,6 +6388,26 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
     assert '"paper_execute"' in outputs[2]
 
 
+def test_check_binance_backend_script_prints_connectivity_result(monkeypatch) -> None:
+    import scripts.check_binance_backend as script
+
+    class FakeClient:
+        def check_account_connectivity(self):
+            return {"status": "ok", "broker": "binance", "balance_count": 2}
+
+    monkeypatch.setattr("scripts.check_binance_backend.BinanceBrokerClient", FakeClient)
+
+    buffer = StringIO()
+    with contextlib.redirect_stdout(buffer):
+        script.main()
+
+    assert json.loads(buffer.getvalue()) == {
+        "status": "ok",
+        "broker": "binance",
+        "balance_count": 2,
+    }
+
+
 def test_paper_execute_sqlite_uses_execution_adapter(monkeypatch) -> None:
     class DummyConnection:
         def close(self) -> None:

@@ -304,6 +304,7 @@ Validate Binance account connectivity:
 
 ```bash
 curl -s http://127.0.0.1:8000/execution/backend/check | python -m json.tool
+python scripts/check_binance_backend.py
 ```
 
 Behavior:

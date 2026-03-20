@@ -161,6 +161,7 @@ curl -s -X POST http://127.0.0.1:8000/execution/backend \
   -H "Content-Type: application/json" \
   -d '{"backend":"binance"}'
 curl -s http://127.0.0.1:8000/execution/backend/check
+python scripts/check_binance_backend.py
 ```
 
 Binance backend configuration:
@@ -171,7 +172,7 @@ export CRYPTO_BINANCE_API_SECRET=your_testnet_api_secret
 export CRYPTO_BINANCE_TESTNET=true
 ```
 
-`GET /execution/backend/check` performs a signed Binance account call when the active backend is `binance`.
+`GET /execution/backend/check` and `python scripts/check_binance_backend.py` perform a signed Binance account call when testnet credentials are configured.
 
 Set the active runtime strategy set used by pipeline and strategy-only scheduler loops:
 
