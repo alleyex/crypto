@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from app.core.db import DBConnection
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
-from app.risk.risk_service import evaluate_signal_id
+from app.risk.risk_service import evaluate_signal_ids
 from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.registry import generate_registered_signal
@@ -47,15 +47,10 @@ def run_strategy_job(
 
     ensure_positions_table(connection)
     ensure_risk_table(connection)
-    risk_steps: list[dict[str, Any]] = []
-    generated_risk_results: list[dict[str, Any]] = []
-    for signal_result in generated_signal_results:
-        risk_result = evaluate_signal_id(connection, int(signal_result["id"]))
-        if risk_result is None:
-            risk_steps.append({"step": "evaluate_risk", "status": "skipped", "reason": "No signal found"})
-            continue
-        generated_risk_results.append(risk_result)
-        risk_steps.append({"step": "evaluate_risk", **risk_result})
+    signal_ids = [int(s["id"]) for s in generated_signal_results]
+    risk_results = evaluate_signal_ids(connection, signal_ids)
+    risk_steps: list[dict[str, Any]] = [{"step": "evaluate_risk", **r} for r in risk_results]
+    generated_risk_results = risk_results
 
     if not generated_risk_results:
         return {

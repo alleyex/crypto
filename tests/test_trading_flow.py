@@ -1608,6 +1608,47 @@ def test_save_klines_does_not_duplicate_existing_candles() -> None:
         connection.close()
 
 
+def test_evaluate_signal_id_rejects_when_kill_switch_enabled(monkeypatch) -> None:
+    monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: True)
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [100.0] * 5)
+        connection.execute(
+            "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
+            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.1, 1.0),
+        )
+        connection.commit()
+        from app.risk.risk_service import evaluate_latest_signal
+        result = evaluate_latest_signal(connection)
+        assert result is not None
+        assert result["decision"] == "REJECTED"
+        assert "Kill switch" in result["reason"]
+    finally:
+        connection.close()
+
+
+def test_evaluate_signal_ids_batch_evaluates_all(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [100.0] * 5)
+        for signal_type in ("BUY", "SELL"):
+            connection.execute(
+                "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
+                ("BTCUSDT", "1m", "ma_cross", signal_type, 1.1, 1.0),
+            )
+        connection.commit()
+        from app.risk.risk_service import evaluate_signal_ids
+        rows = connection.execute("SELECT id FROM signals ORDER BY id").fetchall()
+        signal_ids = [int(r[0]) for r in rows]
+        results = evaluate_signal_ids(connection, signal_ids)
+        assert len(results) == 2
+        assert all("decision" in r for r in results)
+    finally:
+        connection.close()
+
+
 def test_evaluate_latest_signal_rejects_duplicate_signal_type() -> None:
     connection = make_connection()
     try:
@@ -5517,17 +5558,20 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_signal_id",
-            lambda conn, signal_id: {
-                "id": signal_id,
-                "signal_id": signal_id,
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-                "strategy_name": "ma_cross",
-                "signal_type": "BUY",
-                "decision": "APPROVED",
-                "reason": "Passed basic risk checks.",
-            },
+            "app.pipeline.strategy_job.evaluate_signal_ids",
+            lambda conn, signal_ids, **kw: [
+                {
+                    "id": sid,
+                    "signal_id": sid,
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1m",
+                    "strategy_name": "ma_cross",
+                    "signal_type": "BUY",
+                    "decision": "APPROVED",
+                    "reason": "Passed basic risk checks.",
+                }
+                for sid in signal_ids
+            ],
         )
 
         market_result = run_market_data_job(connection)
@@ -6091,17 +6135,20 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_signal_id",
-            lambda conn, signal_id: {
-                "id": 22,
-                "signal_id": signal_id,
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-                "strategy_name": "ma_cross",
-                "signal_type": "BUY",
-                "decision": "APPROVED",
-                "reason": "Passed basic risk checks.",
-            },
+            "app.pipeline.strategy_job.evaluate_signal_ids",
+            lambda conn, signal_ids, **kw: [
+                {
+                    "id": 22,
+                    "signal_id": sid,
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1m",
+                    "strategy_name": "ma_cross",
+                    "signal_type": "BUY",
+                    "decision": "APPROVED",
+                    "reason": "Passed basic risk checks.",
+                }
+                for sid in signal_ids
+            ],
         )
 
         result = run_strategy_job(connection, strategy_name="ma_cross")
@@ -6211,17 +6258,20 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
             },
         )
         monkeypatch.setattr(
-            "app.pipeline.strategy_job.evaluate_signal_id",
-            lambda conn, signal_id: {
-                "id": 22 if signal_id == 12 else 21,
-                "signal_id": signal_id,
-                "symbol": "ETHUSDT" if signal_id == 12 else "BTCUSDT",
-                "timeframe": "1m",
-                "strategy_name": "ma_cross",
-                "signal_type": "BUY",
-                "decision": "APPROVED",
-                "reason": "Passed basic risk checks.",
-            },
+            "app.pipeline.strategy_job.evaluate_signal_ids",
+            lambda conn, signal_ids, **kw: [
+                {
+                    "id": 22 if sid == 12 else 21,
+                    "signal_id": sid,
+                    "symbol": "ETHUSDT" if sid == 12 else "BTCUSDT",
+                    "timeframe": "1m",
+                    "strategy_name": "ma_cross",
+                    "signal_type": "BUY",
+                    "decision": "APPROVED",
+                    "reason": "Passed basic risk checks.",
+                }
+                for sid in signal_ids
+            ],
         )
 
         result = run_strategy_job(connection, strategy_name="ma_cross", symbol_names=["BTCUSDT", "ETHUSDT"])

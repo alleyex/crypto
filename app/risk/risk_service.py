@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from app.audit.service import log_event
 from app.core.db import DBConnection
@@ -13,6 +13,7 @@ from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.system.kill_switch import enable_kill_switch
+from app.system.kill_switch import kill_switch_enabled
 
 
 CREATE_RISK_EVENTS_TABLE_SQL = """
@@ -112,10 +113,6 @@ def ensure_table(connection: DBConnection) -> None:
     run_migrations(connection)
 
 
-def _fills_table_exists(connection: DBConnection) -> bool:
-    return table_exists(connection, "fills")
-
-
 def _get_pending_approved_buy_qty(
     connection: DBConnection,
     symbol: str,
@@ -146,7 +143,13 @@ def _evaluate_signal_row(
 
     daily_realized_pnl: Optional[float] = None
     total_realized_pnl: Optional[float] = None
-    if signal_type == "HOLD":
+
+    # 0. Kill switch — block all risk evaluation when the switch is active.
+    if kill_switch_enabled():
+        decision = "REJECTED"
+        reason = "Kill switch is enabled."
+    elif signal_type == "HOLD":
+        # 1. HOLD signals are never actionable.
         decision = "REJECTED"
         reason = "Signal is HOLD."
     else:
@@ -154,15 +157,8 @@ def _evaluate_signal_row(
         current_qty = float(position_row[0]) if position_row is not None else 0.0
         total_realized_pnl = float(position_row[1]) if position_row is not None else 0.0
         daily_realized_pnl = get_daily_realized_pnl(connection, symbol)
-        latest_fill = None
-        if _fills_table_exists(connection):
-            latest_fill = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
 
-        # Include qty from APPROVED BUY events not yet executed so that a second
-        # strategy signal in the same pipeline cycle cannot double-execute.
-        pending_qty = _get_pending_approved_buy_qty(connection, symbol, order_qty)
-        effective_buy_qty = current_qty + pending_qty
-
+        # 2. Daily loss limit — auto-enable kill switch when breached.
         if daily_realized_pnl <= -abs(max_daily_loss):
             decision = "REJECTED"
             reason = (
@@ -179,56 +175,37 @@ def _evaluate_signal_row(
                     "Crypto alert: kill switch auto-enabled after daily loss limit breach."
                 ),
             )
-        elif latest_fill is not None:
-            last_fill_at = parse_db_timestamp(latest_fill[0])
-            now = datetime.now(timezone.utc)
-            cooldown_elapsed = (now - last_fill_at).total_seconds()
-            if cooldown_elapsed < cooldown_seconds:
-                decision = "REJECTED"
-                reason = (
-                    f"Cooldown active: last fill {int(cooldown_elapsed)} seconds ago, "
-                    f"minimum {cooldown_seconds}."
-                )
-            elif signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
-                decision = "REJECTED"
-                reason = f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
-            elif signal_type == "BUY" and effective_buy_qty > 0:
-                decision = "REJECTED"
-                reason = f"Existing long position already open (pending_qty={pending_qty})."
-            elif signal_type == "SELL" and current_qty <= 0:
-                decision = "REJECTED"
-                reason = "No position available to sell."
-            else:
-                previous_signal = connection.execute(
-                    SELECT_PREVIOUS_SIGNAL_SQL,
-                    (symbol, timeframe, strategy_name, signal_id),
-                ).fetchone()
-                if previous_signal and previous_signal[0] == signal_type:
-                    decision = "REJECTED"
-                    reason = "Duplicate signal type."
-                else:
-                    decision = "APPROVED"
-                    reason = "Passed basic risk checks."
-        elif signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
-            decision = "REJECTED"
-            reason = f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
-        elif signal_type == "BUY" and effective_buy_qty > 0:
-            decision = "REJECTED"
-            reason = f"Existing long position already open (pending_qty={pending_qty})."
-        elif signal_type == "SELL" and current_qty <= 0:
-            decision = "REJECTED"
-            reason = "No position available to sell."
         else:
-            previous_signal = connection.execute(
-                SELECT_PREVIOUS_SIGNAL_SQL,
-                (symbol, timeframe, strategy_name, signal_id),
-            ).fetchone()
-            if previous_signal and previous_signal[0] == signal_type:
-                decision = "REJECTED"
-                reason = "Duplicate signal type."
+            # 3. Cooldown — check time since last fill.
+            latest_fill_at: Optional[datetime] = None
+            if table_exists(connection, "fills"):
+                fill_row = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
+                if fill_row is not None:
+                    latest_fill_at = parse_db_timestamp(fill_row[0])
+
+            pending_qty = _get_pending_approved_buy_qty(connection, symbol, order_qty)
+            effective_buy_qty = current_qty + pending_qty
+
+            if latest_fill_at is not None:
+                cooldown_elapsed = (datetime.now(timezone.utc) - latest_fill_at).total_seconds()
+                if cooldown_elapsed < cooldown_seconds:
+                    decision = "REJECTED"
+                    reason = (
+                        f"Cooldown active: last fill {int(cooldown_elapsed)} seconds ago, "
+                        f"minimum {cooldown_seconds}."
+                    )
+                else:
+                    decision, reason = _apply_position_and_duplicate_rules(
+                        connection, signal_id, symbol, timeframe, strategy_name,
+                        signal_type, current_qty, effective_buy_qty, order_qty,
+                        max_position_qty, pending_qty,
+                    )
             else:
-                decision = "APPROVED"
-                reason = "Passed basic risk checks."
+                decision, reason = _apply_position_and_duplicate_rules(
+                    connection, signal_id, symbol, timeframe, strategy_name,
+                    signal_type, current_qty, effective_buy_qty, order_qty,
+                    max_position_qty, pending_qty,
+                )
 
     risk_event_id = insert_and_get_rowid(
         connection,
@@ -247,8 +224,8 @@ def _evaluate_signal_row(
             "symbol": symbol,
             "signal_type": signal_type,
             "decision": decision,
-            "daily_realized_pnl": daily_realized_pnl if signal_type != "HOLD" else None,
-            "total_realized_pnl": total_realized_pnl if signal_type != "HOLD" else None,
+            "daily_realized_pnl": daily_realized_pnl if signal_type not in ("HOLD",) else None,
+            "total_realized_pnl": total_realized_pnl if signal_type not in ("HOLD",) else None,
         },
     )
 
@@ -262,6 +239,35 @@ def _evaluate_signal_row(
         "decision": decision,
         "reason": reason,
     }
+
+
+def _apply_position_and_duplicate_rules(
+    connection: DBConnection,
+    signal_id: int,
+    symbol: str,
+    timeframe: str,
+    strategy_name: str,
+    signal_type: str,
+    current_qty: float,
+    effective_buy_qty: float,
+    order_qty: float,
+    max_position_qty: float,
+    pending_qty: float,
+) -> tuple:
+    """Apply position-limit and duplicate-signal rules. Returns (decision, reason)."""
+    if signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
+        return "REJECTED", f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
+    if signal_type == "BUY" and effective_buy_qty > 0:
+        return "REJECTED", f"Existing long position already open (pending_qty={pending_qty})."
+    if signal_type == "SELL" and current_qty <= 0:
+        return "REJECTED", "No position available to sell."
+    previous_signal = connection.execute(
+        SELECT_PREVIOUS_SIGNAL_SQL,
+        (symbol, timeframe, strategy_name, signal_id),
+    ).fetchone()
+    if previous_signal and previous_signal[0] == signal_type:
+        return "REJECTED", "Duplicate signal type."
+    return "APPROVED", "Passed basic risk checks."
 
 
 def evaluate_latest_signal(
@@ -285,7 +291,6 @@ def evaluate_latest_signal(
     )
 
 
-
 def evaluate_signal_id(
     connection: DBConnection,
     signal_id: int,
@@ -306,3 +311,27 @@ def evaluate_signal_id(
         cooldown_seconds=cooldown_seconds,
         max_daily_loss=max_daily_loss,
     )
+
+
+def evaluate_signal_ids(
+    connection: DBConnection,
+    signal_ids: List[int],
+    order_qty: float = DEFAULT_ORDER_QTY,
+    max_position_qty: float = MAX_POSITION_QTY,
+    cooldown_seconds: int = COOLDOWN_SECONDS,
+    max_daily_loss: float = MAX_DAILY_LOSS,
+) -> List[Dict[str, Union[int, str]]]:
+    """Evaluate a batch of signal IDs and return all non-None results."""
+    results: List[Dict[str, Union[int, str]]] = []
+    for sid in signal_ids:
+        result = evaluate_signal_id(
+            connection,
+            sid,
+            order_qty=order_qty,
+            max_position_qty=max_position_qty,
+            cooldown_seconds=cooldown_seconds,
+            max_daily_loss=max_daily_loss,
+        )
+        if result is not None:
+            results.append(result)
+    return results
