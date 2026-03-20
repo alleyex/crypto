@@ -93,6 +93,7 @@ from app.system.kill_switch import disable_kill_switch
 from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
+from app.metrics.metrics_service import build_metrics
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_history import build_soak_history_summary
@@ -1078,6 +1079,15 @@ def update_pnl() -> dict[str, int]:
         ensure_pnl_table(connection)
         snapshot_count = update_pnl_snapshots(connection)
         return {"snapshot_count": snapshot_count}
+    finally:
+        connection.close()
+
+
+@app.get("/metrics")
+def metrics(period_hours: int = Query(default=24, ge=1, le=168)) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        return build_metrics(connection, period_hours=period_hours)
     finally:
         connection.close()
 

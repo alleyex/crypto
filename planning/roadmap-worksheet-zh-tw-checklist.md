@@ -76,40 +76,40 @@
 
 ## Stage 2 Growth
 
-- [~] 分離 API 與 worker
+- [x] 分離 API 與 worker
   目標：降低彼此干擾。
   交付物：可獨立部署的 API 與 worker。
-  備註：已拆出 `data-worker`、`strategy-worker`、`execution-worker` Compose services，job module / entrypoint / scheduler mode / heartbeat / log 已分離；pipeline 已支援 queue-native orchestration 與 batch control，但尚未完全收斂成純事件驅動 worker runtime。
+  備註：已拆出 `data-worker`、`strategy-worker`、`execution-worker` Compose services；split-workers double execution bug 已修（`--queue-drain` + `queue_dispatch`）；`depends_on_job_id` 確保 market_data → strategy → execution 依序執行；stale lease 自動回收；`depends_on: api` false coupling 已移除。（2026-03-20）
 
-- [~] 建立市場資料 worker
+- [x] 建立市場資料 worker
   目標：將行情接入獨立處理。
   交付物：data worker。
-  備註：`market-data-only` mode 與 `data-worker` 已可獨立執行，且已支援 runtime active symbols；尚未做 queue / backpressure / 更完整 market universe 管理。
+  備註：`market-data-only` mode 與 `data-worker` 可獨立執行，支援 runtime active symbols，queue_drain 模式下依賴鏈保證在 strategy job 前完成。backpressure / 更廣商品集為 Stage 3 議題。（2026-03-20）
 
-- [~] 建立策略 worker
+- [x] 建立策略 worker
   目標：支援多策略排程。
   交付物：strategy worker。
-  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 都已可跑，且 pipeline / queue path 已可共用 dispatcher；尚未做更完整的 worker isolation 與 strategy group orchestration。
+  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 可跑；per-strategy error isolation 已完成（一個 crash 不影響其他）；multi-strategy double-execution 已透過 pending approved BUY qty 修復。（2026-03-20）
 
-- [~] 建立 execution worker
+- [x] 建立 execution worker
   目標：將重試與同步邏輯獨立。
   交付物：execution worker。
-  備註：`execution-only` mode 與 `execution-worker` 已可獨立執行，並可依 active symbols 過濾 pending risks；已補 queue retry / stale batch recover / clear 與 audit trail，尚未做更完整的 reconciliation worker 化。
+  備註：`execution-only` mode 可獨立執行；queue retry / stale batch recover / clear / audit trail 已完成；orphan order 偵測（`check_orphan_orders` step）已加入每次 execution job。（2026-03-20）
 
 - [x] 引入 Redis 或簡易 queue
   目標：支援非同步任務分派。
   交付物：初版 queue。
   備註：已完成 persistent `job_queue`、enqueue/list、`run-next`、pipeline batch dispatch / drain / queue_batch、health/admin queue summary、retry / recover / clear controls、stale batch detection、queue alerting 與 queue control audit trail。
 
-- [~] 支援多商品
+- [x] 支援多商品
   目標：從單一資產擴展。
   交付物：symbol 設定與執行能力。
-  備註：目前已支援 runtime active symbols、targeted pipeline symbols、multi-symbol market data / strategy / risk / execution、health/admin/runtime summary；尚未完成更廣泛商品集與更完整 portfolio/risk orchestration。
+  備註：runtime active symbols、targeted pipeline symbols、multi-symbol market data / strategy / risk / execution、health/admin/runtime summary 均已完成。新增交易對需修改 `app/data/symbols.py`，屬 Stage 3 動態商品管理議題。（2026-03-20）
 
-- [~] 支援多策略
+- [x] 支援多策略
   目標：可同時運行多個策略。
   交付物：strategy registry。
-  備註：目前已有 strategy registry、runtime strategy control、priority/limit/enable-disable、leaderboard、closed trade reporting；風控與 execution 雖已能配合多策略運作，但集中化治理仍可再加強。
+  備註：strategy registry、runtime control、priority/limit/enable-disable、leaderboard、closed trade reporting 均已完成；per-strategy error isolation 已完成；同一 pipeline cycle 雙重執行 bug 已透過 pending approved BUY qty 修復；風控集中化治理為 Stage 3 議題。（2026-03-20）
 
 - [x] 建立告警通知
   目標：異常時可即時通知。
@@ -118,10 +118,10 @@
 
 ## Stage 3 Production
 
-- [ ] 抽象化 broker adapter
+- [~] 抽象化 broker adapter
   目標：支援多交易所。
   交付物：adapter interface。
-  備註：避免綁死單一 broker。
+  備註：`BrokerClient` Protocol、`SimulatedBrokerClient`、`live_broker` 執行模組已完成（groundwork 2026-03-20）；`SimulatedLiveExecutionAdapter` 已接入真實 execution path；待實作真實交易所 adapter（如 Binance）。
 
 - [ ] 風控服務獨立化
   目標：提高風控一致性。
@@ -209,19 +209,19 @@
   目標：關閉 Stage 1 驗證缺口。
   備註：目前已有 soak validation 與摘要，但尚未累積完整一週紀錄。
 
-- [ ] 推進 broker adapter groundwork
+- [x] 推進 broker adapter groundwork
   目標：讓 `simulated_live` 不再只是 placeholder。
-  備註：這是 Stage 3 最自然的起點，也最能承接目前的 execution backend abstraction。
+  備註：已完成 `BrokerClient` Protocol、`SimulatedBrokerClient`、`live_broker` 執行模組，`SimulatedLiveExecutionAdapter` 已路由至真實 execution path，`is_live`/`placeholder` 屬性已加入所有 adapter。（2026-03-20）
 
-- [ ] 補 broker / order-level alerting 與保護機制
+- [x] 補 broker / order-level alerting 與保護機制
   目標：讓 operational alerts 從 queue / worker 層延伸到下單與 broker 層。
-  備註：目前 health、queue、execution alert 已有骨架，可在此基礎上擴充。
+  備註：已完成 `unfilled_order_count`、`latest_fill` 進入 `_pipeline_check`，`_broker_protection_check` 加入 unfilled order degraded 條件，alert message 含 unfilled_orders/latest_fill_price。（2026-03-20）
 
 ## 里程碑
 
 - [x] M1：市場資料可穩定落庫，策略可產生 signals。
 - [x] M2：paper broker 可執行，且 `orders`、`fills`、`positions` 狀態一致。
-- [ ] M3：風控、pause、kill switch 可用，系統可連跑數天。
-  備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；目前主要缺口是更長時間的多日連跑驗證。
+- [~] M3：風控、pause、kill switch 可用，系統可連跑數天。
+  備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；multi-strategy double-execution 修復；剩餘缺口為一週連跑 soak validation 驗收。
 - [~] M4：API 與監控可用，系統可進入小額實盤準備階段。
-  備註：API、admin runtime view、queue observability、split worker status、multi-symbol / multi-strategy controls、PostgreSQL validation 與 CI 已完成；尚未完成 broker adapter、風控服務獨立化、投組服務與更完整 production monitoring。
+  備註：Stage 2 全部項目已完成（API、worker 分離、queue、multi-symbol、multi-strategy、alerting）；`BrokerClient` Protocol groundwork 完成；待完成真實交易所 adapter、風控服務獨立化、投組服務。

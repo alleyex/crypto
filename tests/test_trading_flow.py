@@ -7044,3 +7044,79 @@ def test_kill_switch_enable_endpoint_accepts_custom_source(monkeypatch) -> None:
     assert response.status_code == 200
     assert captured["source"] == "broker_protection"
     assert captured["reason"] == "Kill switch enabled from broker protection recommendation."
+    assert captured["reason"] == "Kill switch enabled from broker protection recommendation."
+
+
+# ---------------------------------------------------------------------------
+# /metrics endpoint
+# ---------------------------------------------------------------------------
+
+def test_metrics_endpoint_returns_all_sections() -> None:
+    client = TestClient(app)
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    data = response.json()
+    assert "period_hours" in data
+    assert "signals" in data
+    assert "risk" in data
+    assert "execution" in data
+    assert "pnl" in data
+    assert "queue" in data
+    assert data["period_hours"] == 24
+
+
+def test_metrics_endpoint_accepts_period_hours_param() -> None:
+    client = TestClient(app)
+    response = client.get("/metrics?period_hours=48")
+    assert response.status_code == 200
+    assert response.json()["period_hours"] == 48
+
+
+def test_metrics_service_risk_summary_counts_correctly() -> None:
+    from app.metrics.metrics_service import build_metrics
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        # Insert 3 risk events: 2 REJECTED, 1 APPROVED
+        for decision, reason in [
+            ("REJECTED", "Cooldown active"),
+            ("REJECTED", "Cooldown active"),
+            ("APPROVED", "Passed basic risk checks."),
+        ]:
+            connection.execute(
+                "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?);",
+                (1, "BTCUSDT", "1m", "ma_cross", "BUY", decision, reason),
+            )
+        connection.commit()
+
+        result = build_metrics(connection, period_hours=24)
+
+        assert result["risk"]["total"] == 3
+        assert result["risk"]["approved"] == 1
+        assert result["risk"]["rejected"] == 2
+        assert result["risk"]["reject_rate"] == round(2 / 3, 4)
+        assert result["risk"]["top_rejection_reasons"][0]["reason"] == "Cooldown active"
+        assert result["risk"]["top_rejection_reasons"][0]["count"] == 2
+    finally:
+        connection.close()
+
+
+def test_metrics_service_returns_zeros_on_empty_db() -> None:
+    from app.metrics.metrics_service import build_metrics
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        result = build_metrics(connection, period_hours=24)
+
+        assert result["signals"]["total"] == 0
+        assert result["risk"]["total"] == 0
+        assert result["execution"]["fills"] == 0
+        assert result["pnl"]["today"] is None
+        assert result["queue"]["completed"] == 0
+    finally:
+        connection.close()
