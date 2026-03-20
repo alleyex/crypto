@@ -1,5 +1,6 @@
 from typing import Dict, Optional, Union
 
+from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
@@ -59,6 +60,23 @@ def insert_signal(
         (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma),
     )
     connection.commit()
+    if signal_type in ("BUY", "SELL"):
+        insert_event(
+            connection,
+            event_type="signal",
+            status=signal_type.lower(),
+            source="strategy",
+            message=f"{strategy_name} generated {signal_type} signal for {symbol}.",
+            payload={
+                "signal_id": signal_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy_name": strategy_name,
+                "signal_type": signal_type,
+                "short_ma": round(short_ma, 6),
+                "long_ma": round(long_ma, 6),
+            },
+        )
     return {
         "id": signal_id,
         "symbol": symbol,

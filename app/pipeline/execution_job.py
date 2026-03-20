@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 
+from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.execution.adapter import get_execution_adapter
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -74,6 +75,14 @@ def run_execution_job(
     if orphans:
         orphan_step["status"] = "warning"
         orphan_step["order_ids"] = [o["order_id"] for o in orphans]
+        insert_event(
+            connection,
+            event_type="orphan_orders",
+            status="warning",
+            source="execution_job",
+            message=f"{len(orphans)} order(s) detected without fills.",
+            payload={"order_ids": [o["order_id"] for o in orphans], "orders": orphans},
+        )
     else:
         orphan_step["status"] = "ok"
 

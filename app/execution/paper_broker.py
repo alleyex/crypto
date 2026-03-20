@@ -1,6 +1,7 @@
 import uuid
 from typing import Dict, List, Optional, Union
 
+from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
@@ -170,6 +171,22 @@ def execute_risk_event_id(
     # Keep persisted daily realized PnL in sync with newly written fills.
     rebuild_daily_realized_pnl(connection)
     connection.commit()
+    insert_event(
+        connection,
+        event_type="order",
+        status="filled",
+        source="paper_broker",
+        message=f"{signal_type} order filled for {symbol} at {latest_close}.",
+        payload={
+            "order_id": order_id,
+            "risk_event_id": risk_event_id,
+            "symbol": symbol,
+            "side": signal_type,
+            "qty": order_qty,
+            "price": latest_close,
+            "strategy_name": strategy_name,
+        },
+    )
 
     return {
         "risk_event_id": risk_event_id,

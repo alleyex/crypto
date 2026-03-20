@@ -3114,6 +3114,100 @@ def test_maybe_send_broker_alert_includes_latest_fill_price(monkeypatch, tmp_pat
     assert "latest_fill_price=48500.5" in sent_messages[0]
 
 
+def test_insert_signal_writes_audit_event_for_buy_sell() -> None:
+    from app.strategy.ma_cross import insert_signal
+    import app.strategy.ma_cross as ma_cross_mod
+
+    connection = make_connection()
+    run_migrations(connection)
+    captured: list[dict] = []
+
+    original = ma_cross_mod.insert_event
+    ma_cross_mod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured.append(
+        {"event_type": event_type, "status": status, "source": source, "payload": payload}
+    ) or 1
+    try:
+        insert_signal(connection, signal_type="BUY", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=100.1, long_ma=99.9)
+        insert_signal(connection, signal_type="HOLD", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=100.0, long_ma=100.0)
+        insert_signal(connection, signal_type="SELL", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=99.8, long_ma=100.0)
+    finally:
+        ma_cross_mod.insert_event = original
+        connection.close()
+
+    assert len(captured) == 2, "Only BUY and SELL should produce audit events"
+    assert captured[0]["event_type"] == "signal"
+    assert captured[0]["status"] == "buy"
+    assert captured[0]["source"] == "strategy"
+    assert captured[0]["payload"]["signal_type"] == "BUY"
+    assert captured[1]["status"] == "sell"
+
+
+def test_execute_risk_event_id_writes_audit_event_on_fill() -> None:
+    import app.execution.paper_broker as paper_broker_mod
+
+    connection = make_connection()
+    run_migrations(connection)
+    captured: list[dict] = []
+
+    original = paper_broker_mod.insert_event
+    paper_broker_mod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured.append(
+        {"event_type": event_type, "status": status, "source": source, "payload": payload}
+    ) or 1
+    try:
+        seed_candles(connection, [50000.0] * 5)
+        connection.execute(
+            "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
+            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 0.9),
+        )
+        connection.execute(
+            "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "ok"),
+        )
+        connection.commit()
+        from app.execution.paper_broker import execute_risk_event_id
+        execute_risk_event_id(connection, 1, order_qty=0.001)
+    finally:
+        paper_broker_mod.insert_event = original
+        connection.close()
+
+    assert len(captured) == 1
+    assert captured[0]["event_type"] == "order"
+    assert captured[0]["status"] == "filled"
+    assert captured[0]["source"] == "paper_broker"
+    assert captured[0]["payload"]["symbol"] == "BTCUSDT"
+    assert captured[0]["payload"]["price"] == 50000.0
+
+
+def test_execution_job_writes_audit_event_for_orphan_orders() -> None:
+    import app.pipeline.execution_job as execution_job_mod
+
+    connection = make_connection()
+    run_migrations(connection)
+    captured: list[dict] = []
+
+    original = execution_job_mod.insert_event
+    execution_job_mod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured.append(
+        {"event_type": event_type, "status": status, "source": source, "payload": payload}
+    ) or 1
+    try:
+        connection.execute(
+            "INSERT INTO orders (client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("cid-1", None, "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "NEW"),
+        )
+        connection.commit()
+        from app.pipeline.execution_job import run_execution_job
+        run_execution_job(connection)
+    finally:
+        execution_job_mod.insert_event = original
+        connection.close()
+
+    orphan_events = [e for e in captured if e["event_type"] == "orphan_orders"]
+    assert len(orphan_events) == 1
+    assert orphan_events[0]["status"] == "warning"
+    assert orphan_events[0]["source"] == "execution_job"
+    assert len(orphan_events[0]["payload"]["order_ids"]) == 1
+
+
 def test_admin_page_is_served() -> None:
     client = TestClient(app)
 
