@@ -5282,6 +5282,38 @@ def test_kill_switch_api_can_enable_and_disable(monkeypatch, tmp_path) -> None:
     assert response.json()["enabled"] is False
 
 
+def test_scheduler_blocks_when_kill_switch_enabled(monkeypatch) -> None:
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.scheduler.runner.get_kill_switch_status",
+        lambda: {"enabled": True, "kill_switch_file": "runtime/kill.switch"},
+    )
+
+    from app.scheduler.runner import _run_scheduled_job
+
+    for mode in ("pipeline", "market-data-only", "strategy-only", "execution-only"):
+        result = _run_scheduled_job(mode)
+        assert result["status"] == "blocked", f"mode={mode} should be blocked"
+        assert result["steps"][0]["step"] == "kill_switch"
+        assert result["steps"][0]["status"] == "blocked"
+        assert result["steps"][0]["enabled"] is True
+
+
+def test_scheduler_proceeds_when_kill_switch_disabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
+    ran = []
+    monkeypatch.setattr(
+        "app.scheduler.runner.run_pipeline_collect",
+        lambda **kwargs: ran.append("pipeline") or {"status": "ok", "steps": []},
+    )
+
+    from app.scheduler.runner import _run_scheduled_job
+
+    result = _run_scheduled_job("pipeline")
+    assert result["status"] == "ok"
+    assert ran == ["pipeline"]
+
+
 def test_enable_kill_switch_marks_repeat_enable_without_duplicate_alert(monkeypatch, tmp_path) -> None:
     kill_switch_path = tmp_path / "kill.switch"
     monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", kill_switch_path)
@@ -6213,6 +6245,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "direct")
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
@@ -6254,6 +6287,7 @@ def test_run_scheduler_uses_queue_batch_default_for_pipeline_mode(monkeypatch, t
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "queue_batch")
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
@@ -6289,6 +6323,7 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
 
     monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
@@ -6338,6 +6373,7 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
 
     monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
@@ -6399,6 +6435,7 @@ def test_run_scheduler_supports_queue_dispatch_for_pipeline_mode(monkeypatch, tm
 
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
@@ -6454,6 +6491,7 @@ def test_run_scheduler_uses_default_pipeline_orchestration_setting(monkeypatch, 
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.DEFAULT_PIPELINE_ORCHESTRATION", "queue_dispatch")
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
@@ -6491,6 +6529,7 @@ def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_p
 
     monkeypatch.setattr("app.scheduler.runner.STRATEGY_WORKER_LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
@@ -6548,6 +6587,7 @@ def test_run_scheduler_supports_queue_drain_for_pipeline_mode(monkeypatch, tmp_p
 
     monkeypatch.setattr("app.scheduler.runner.LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
@@ -6620,6 +6660,7 @@ def test_run_scheduler_supports_execution_only_mode_with_symbols(monkeypatch, tm
 
     monkeypatch.setattr("app.scheduler.runner.EXECUTION_WORKER_LOG_FILE", log_path)
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
+    monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])

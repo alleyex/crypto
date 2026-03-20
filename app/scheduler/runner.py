@@ -23,6 +23,8 @@ from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.core.settings import JOB_LEASE_TIMEOUT_SECONDS
 from app.execution.adapter import get_execution_adapter_name
 from app.system.heartbeat import record_heartbeat
+from app.system.kill_switch import get_kill_switch_status
+from app.system.kill_switch import kill_switch_enabled
 
 
 LOG_DIR = Path("logs")
@@ -140,6 +142,19 @@ def _run_scheduled_job(
     queue_drain: bool = False,
     pipeline_orchestration: str = "direct",
 ) -> dict:
+    if kill_switch_enabled():
+        return {
+            "status": "blocked",
+            "steps": [
+                {
+                    "step": "kill_switch",
+                    "status": "blocked",
+                    **get_kill_switch_status(),
+                    "reason": "Kill switch is enabled.",
+                }
+            ],
+        }
+
     if mode == "pipeline":
         if pipeline_orchestration == "queue_batch":
             connection = get_connection()
