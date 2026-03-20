@@ -20,7 +20,7 @@ def _connect_with_retry(database_url: str) -> Any:
     psycopg = _load_psycopg()
     retries = max(int(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRIES", "15")), 1)
     delay_seconds = max(float(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "1")), 0.0)
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
 
     for attempt in range(1, retries + 1):
         try:

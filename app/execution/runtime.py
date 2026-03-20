@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from app.audit.service import log_event
 from app.core.settings import EXECUTION_BACKEND
@@ -51,7 +51,7 @@ def set_execution_backend(
     }
 
 
-def get_execution_backend_runtime_status() -> Dict[str, str | List[str]]:
+def get_execution_backend_runtime_status() -> Dict[str, Union[str, List[str]]]:
     return {
         "backend": read_configured_execution_backend(),
         "default_backend": EXECUTION_BACKEND,

@@ -150,7 +150,7 @@ def get_connection() -> DBConnection:
         if not DATABASE_URL:
             raise RuntimeError("CRYPTO_DATABASE_URL is required when CRYPTO_DB_BACKEND=postgres.")
         psycopg = _load_psycopg()
-        last_error: Exception | None = None
+        last_error: Optional[Exception] = None
         for attempt in range(POSTGRES_CONNECT_RETRIES):
             try:
                 return PostgresConnectionAdapter(psycopg.connect(DATABASE_URL))

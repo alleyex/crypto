@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -150,7 +150,7 @@ def request_json(method: str, url: str) -> Any:
 
 
 def request_json_with_retry(method: str, url: str, attempts: int = 5, delay_seconds: float = 1.0) -> Any:
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     for attempt in range(1, attempts + 1):
         try:
             return request_json(method, url)
@@ -197,7 +197,7 @@ def assert_pipeline_validation_success(pipeline: Any) -> None:
 
 def wait_for_api(base_url: str, timeout_seconds: float) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     while time.time() < deadline:
         try:
             payload = request_json("GET", f"{base_url}/health")
