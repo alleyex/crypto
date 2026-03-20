@@ -70,6 +70,9 @@ def maybe_send_broker_alert(report: dict[str, Any]) -> dict[str, Any]:
         message += f", latest_order_age={latest_order['age_seconds']}s"
     if broker_check.get("unfilled_order_count"):
         message += f", unfilled_orders={broker_check['unfilled_order_count']}"
+    latest_fill = broker_check.get("latest_fill") or {}
+    if latest_fill.get("price") is not None:
+        message += f", latest_fill_price={latest_fill['price']}"
     if broker_check.get("approved_risk_count") is not None:
         message += f", approved_risk_count={broker_check['approved_risk_count']}"
     if broker_check.get("rejected_risk_streak") is not None:

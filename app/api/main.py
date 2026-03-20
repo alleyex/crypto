@@ -226,6 +226,9 @@ def _broker_protection_check(
     }
     if isinstance(latest_order, dict):
         result["latest_order"] = latest_order
+    latest_fill = pipeline_check.get("latest_fill") if isinstance(pipeline_check, dict) else None
+    if isinstance(latest_fill, dict):
+        result["latest_fill"] = latest_fill
     latest_risk = pipeline_check.get("latest_risk") if isinstance(pipeline_check, dict) else None
     if isinstance(latest_risk, dict):
         result["latest_risk"] = latest_risk

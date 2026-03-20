@@ -3069,6 +3069,51 @@ def test_maybe_send_broker_alert_includes_unfilled_orders_in_message(monkeypatch
     assert "unfilled_orders=2" in sent_messages[0]
 
 
+def test_broker_protection_check_propagates_latest_fill() -> None:
+    result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+        make_connection(),
+        {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+        {
+            "unfilled_order_count": 1,
+            "latest_fill": {"symbol": "BTCUSDT", "side": "BUY", "qty": 0.001, "price": 50000.0, "created_at": "2026-01-01 10:00:00", "age_seconds": 30},
+        },
+    )
+    assert result.get("latest_fill", {}).get("price") == 50000.0
+
+
+def test_maybe_send_broker_alert_includes_latest_fill_price(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "broker_alert_state.json"
+    sent_messages: list[str] = []
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.broker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    report = {
+        "checks": {
+            "broker_protection": {
+                "status": "degraded",
+                "backend": "paper",
+                "reason": "1 order(s) have no corresponding fill.",
+                "reason_code": "unfilled_orders_detected",
+                "severity": "high",
+                "recommended_action": "inspect_and_reconcile_orders",
+                "unfilled_order_count": 1,
+                "latest_fill": {"symbol": "BTCUSDT", "side": "BUY", "qty": 0.001, "price": 48500.5},
+            }
+        }
+    }
+
+    result = maybe_send_broker_alert(report)
+
+    assert result["sent"] is True
+    assert "unfilled_orders=1" in sent_messages[0]
+    assert "latest_fill_price=48500.5" in sent_messages[0]
+
+
 def test_admin_page_is_served() -> None:
     client = TestClient(app)
 
