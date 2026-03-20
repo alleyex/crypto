@@ -2068,6 +2068,7 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         "paper_execute",
         "update_positions",
         "update_pnl",
+        "check_orphan_orders",
     ]
 
     connection = sqlite3.connect(db_path)
@@ -5304,7 +5305,7 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
             "symbol_results": [{"symbol": "BTCUSDT", "saved_klines": 5}],
         }
         assert [step["step"] for step in strategy_result["steps"]] == ["generate_signal", "evaluate_risk"]
-        assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl"]
+        assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl", "check_orphan_orders"]
     finally:
         connection.close()
 
@@ -5336,6 +5337,7 @@ def test_run_execution_job_executes_multiple_pending_risk_events() -> None:
             "paper_execute",
             "update_positions",
             "update_pnl",
+            "check_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
     finally:
@@ -5381,6 +5383,7 @@ def test_run_execution_job_with_selected_risk_events_only_executes_current_run()
             "paper_execute",
             "update_positions",
             "update_pnl",
+            "check_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
         order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
@@ -5424,6 +5427,7 @@ def test_run_execution_job_with_selected_symbols_only_executes_matching_pending_
             "paper_execute",
             "update_positions",
             "update_pnl",
+            "check_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
         order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
@@ -5470,7 +5474,81 @@ def test_run_execution_job_uses_execution_adapter(monkeypatch) -> None:
             {"step": "paper_execute", "status": "FILLED", "symbol": "BTCUSDT", "risk_event_id": 1, "order_id": 7},
             {"step": "update_positions", "updated_symbols": ["BTCUSDT"]},
             {"step": "update_pnl", "snapshot_count": 1},
+            {"step": "check_orphan_orders", "status": "ok", "unfilled_order_count": 0},
         ]
+    finally:
+        connection.close()
+
+
+def test_scan_orphan_orders_detects_unfilled_order() -> None:
+    """scan_orphan_orders returns orders that have no fill and are not terminal."""
+    from app.pipeline.execution_job import scan_orphan_orders
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            ("test-coid-1", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+        )
+        connection.commit()
+
+        orphans = scan_orphan_orders(connection)
+
+        assert len(orphans) == 1
+        assert orphans[0]["symbol"] == "BTCUSDT"
+        assert orphans[0]["side"] == "BUY"
+        assert orphans[0]["status"] == "FILLED"
+    finally:
+        connection.close()
+
+
+def test_scan_orphan_orders_ignores_terminal_orders() -> None:
+    """Orders with CANCELLED/REJECTED/EXPIRED status must not appear as orphans."""
+    from app.pipeline.execution_job import scan_orphan_orders
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        for idx, status in enumerate(("CANCELLED", "REJECTED", "EXPIRED")):
+            connection.execute(
+                "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                (f"test-coid-{idx}", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, status, idx + 1),
+            )
+        connection.commit()
+
+        orphans = scan_orphan_orders(connection)
+
+        assert orphans == []
+    finally:
+        connection.close()
+
+
+def test_execution_job_check_orphan_orders_step_warns_when_orphan_present() -> None:
+    """run_execution_job step check_orphan_orders has status=warning when orphans exist."""
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            ("test-coid-orphan", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+        )
+        connection.commit()
+
+        result = run_execution_job(connection)
+
+        orphan_step = next(s for s in result["steps"] if s["step"] == "check_orphan_orders")
+        assert orphan_step["status"] == "warning"
+        assert orphan_step["unfilled_order_count"] == 1
+        order_id = connection.execute("SELECT id FROM orders").fetchone()[0]
+        assert order_id in orphan_step["order_ids"]
     finally:
         connection.close()
 
