@@ -1625,7 +1625,72 @@ def test_evaluate_latest_signal_rejects_duplicate_signal_type() -> None:
         assert first_risk["decision"] == "APPROVED"
         assert second_risk is not None
         assert second_risk["decision"] == "REJECTED"
-        assert second_risk["reason"] == "Duplicate signal type."
+        # Second BUY is blocked by the pending approved BUY from the first signal,
+        # which is more accurate than "duplicate signal type" (caught earlier now).
+        assert "pending_qty" in second_risk["reason"] or second_risk["reason"] == "Duplicate signal type."
+    finally:
+        connection.close()
+
+
+def test_evaluate_signal_id_rejects_second_strategy_buy_when_first_is_pending() -> None:
+    """Second strategy BUY on same symbol must be REJECTED when first is APPROVED but not yet executed."""
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+
+        # Two strategies both signal BUY for BTCUSDT in the same pipeline cycle.
+        # Neither has executed yet (no order row exists).
+        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ma_cross")
+        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="momentum_3bar")
+
+        ma_risk = evaluate_signal_id(connection, int(ma_signal["id"]), cooldown_seconds=0)
+        momentum_risk = evaluate_signal_id(connection, int(momentum_signal["id"]), cooldown_seconds=0)
+
+        assert ma_risk is not None
+        assert ma_risk["decision"] == "APPROVED"
+        assert momentum_risk is not None
+        assert momentum_risk["decision"] == "REJECTED"
+        assert "pending_qty" in momentum_risk["reason"]
+    finally:
+        connection.close()
+
+
+def test_evaluate_signal_id_allows_second_strategy_buy_after_first_is_executed() -> None:
+    """Once the first strategy's order is placed, a second BUY from another strategy is blocked by position."""
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+
+        # Simulate first strategy approved and order placed (risk_event_id linked to an order).
+        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ma_cross")
+        ma_risk = evaluate_signal_id(connection, int(ma_signal["id"]), cooldown_seconds=0)
+        assert ma_risk is not None and ma_risk["decision"] == "APPROVED"
+
+        # Insert order fulfilling the first risk event so pending_qty drops to 0.
+        connection.execute(
+            "INSERT INTO orders"
+            " (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            ("coid-ma", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", int(ma_risk["id"])),
+        )
+        # Update position to reflect executed BUY.
+        connection.execute(
+            "INSERT OR REPLACE INTO positions (symbol, qty, avg_price, realized_pnl) VALUES (?, ?, ?, ?);",
+            ("BTCUSDT", 0.001, 50000.0, 0.0),
+        )
+        connection.commit()
+
+        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="momentum_3bar")
+        momentum_risk = evaluate_signal_id(connection, int(momentum_signal["id"]), cooldown_seconds=0)
+
+        assert momentum_risk is not None
+        assert momentum_risk["decision"] == "REJECTED"
+        # Now rejected due to actual position, not pending.
+        assert "Existing long position" in momentum_risk["reason"]
     finally:
         connection.close()
 

@@ -75,6 +75,17 @@ LIMIT 1;
 """
 
 
+SELECT_PENDING_APPROVED_BUY_COUNT_SQL = """
+SELECT COUNT(*)
+FROM risk_events re
+LEFT JOIN orders o ON o.risk_event_id = re.id
+WHERE re.symbol = ?
+  AND re.signal_type = 'BUY'
+  AND re.decision = 'APPROVED'
+  AND o.id IS NULL;
+"""
+
+
 SELECT_LATEST_FILL_SQL = """
 SELECT created_at
 FROM fills
@@ -105,6 +116,24 @@ def _fills_table_exists(connection: DBConnection) -> bool:
     return table_exists(connection, "fills")
 
 
+def _get_pending_approved_buy_qty(
+    connection: DBConnection,
+    symbol: str,
+    order_qty: float,
+) -> float:
+    """Return the virtual qty committed by APPROVED BUY risk events not yet executed.
+
+    Queries risk_events LEFT JOIN orders; rows where orders.id IS NULL represent
+    approvals that have not been fulfilled by an order yet.  Returns 0.0 if the
+    orders table does not exist (pre-migration state).
+    """
+    if not table_exists(connection, "orders"):
+        return 0.0
+    row = connection.execute(SELECT_PENDING_APPROVED_BUY_COUNT_SQL, (symbol,)).fetchone()
+    count = int(row[0]) if row else 0
+    return count * order_qty
+
+
 def _evaluate_signal_row(
     connection: DBConnection,
     signal_row,
@@ -128,6 +157,11 @@ def _evaluate_signal_row(
         latest_fill = None
         if _fills_table_exists(connection):
             latest_fill = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
+
+        # Include qty from APPROVED BUY events not yet executed so that a second
+        # strategy signal in the same pipeline cycle cannot double-execute.
+        pending_qty = _get_pending_approved_buy_qty(connection, symbol, order_qty)
+        effective_buy_qty = current_qty + pending_qty
 
         if daily_realized_pnl <= -abs(max_daily_loss):
             decision = "REJECTED"
@@ -155,12 +189,12 @@ def _evaluate_signal_row(
                     f"Cooldown active: last fill {int(cooldown_elapsed)} seconds ago, "
                     f"minimum {cooldown_seconds}."
                 )
-            elif signal_type == "BUY" and current_qty + order_qty > max_position_qty:
+            elif signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
                 decision = "REJECTED"
-                reason = f"Max position exceeded: current={current_qty}, limit={max_position_qty}."
-            elif signal_type == "BUY" and current_qty > 0:
+                reason = f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
+            elif signal_type == "BUY" and effective_buy_qty > 0:
                 decision = "REJECTED"
-                reason = "Existing long position already open."
+                reason = f"Existing long position already open (pending_qty={pending_qty})."
             elif signal_type == "SELL" and current_qty <= 0:
                 decision = "REJECTED"
                 reason = "No position available to sell."
@@ -175,12 +209,12 @@ def _evaluate_signal_row(
                 else:
                     decision = "APPROVED"
                     reason = "Passed basic risk checks."
-        elif signal_type == "BUY" and current_qty + order_qty > max_position_qty:
+        elif signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
             decision = "REJECTED"
-            reason = f"Max position exceeded: current={current_qty}, limit={max_position_qty}."
-        elif signal_type == "BUY" and current_qty > 0:
+            reason = f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
+        elif signal_type == "BUY" and effective_buy_qty > 0:
             decision = "REJECTED"
-            reason = "Existing long position already open."
+            reason = f"Existing long position already open (pending_qty={pending_qty})."
         elif signal_type == "SELL" and current_qty <= 0:
             decision = "REJECTED"
             reason = "No position available to sell."
