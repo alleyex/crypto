@@ -5702,6 +5702,58 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
         connection.close()
 
 
+def test_run_strategy_jobs_continues_after_one_strategy_crashes(monkeypatch) -> None:
+    """A crashing strategy must not prevent subsequent strategies from running."""
+    connection = make_connection()
+    try:
+
+        def fake_run_strategy_job(conn, strategy_name="ma_cross", symbol_names=None):
+            if strategy_name == "bad_strategy":
+                raise RuntimeError("simulated strategy crash")
+            return {
+                "status": "ok",
+                "steps": [
+                    {"step": "generate_signal", "strategy_name": strategy_name, "signal_type": "BUY"},
+                ],
+            }
+
+        monkeypatch.setattr("app.pipeline.strategy_job.run_strategy_job", fake_run_strategy_job)
+
+        result = run_strategy_jobs(connection, ["bad_strategy", "ma_cross"])
+
+        assert result["status"] == "partial_error"
+        assert result["strategy_names"] == ["bad_strategy", "ma_cross"]
+        error_result = next(r for r in result["results"] if r["strategy_name"] == "bad_strategy")
+        assert error_result["status"] == "error"
+        assert "simulated strategy crash" in error_result["error"]
+        ok_result = next(r for r in result["results"] if r.get("status") == "ok")
+        assert ok_result is not None
+    finally:
+        connection.close()
+
+
+def test_run_strategy_jobs_all_errors_returns_partial_error(monkeypatch) -> None:
+    """When every strategy crashes the aggregate status is partial_error."""
+    connection = make_connection()
+    try:
+        call_count = {"n": 0}
+
+        def always_crash(conn, strategy_name="ma_cross", symbol_names=None):
+            call_count["n"] += 1
+            raise ValueError(f"crash in {strategy_name}")
+
+        monkeypatch.setattr("app.pipeline.strategy_job.run_strategy_job", always_crash)
+
+        result = run_strategy_jobs(connection, ["ma_cross", "momentum_3bar"])
+
+        assert result["status"] == "partial_error"
+        assert call_count["n"] == 2
+        assert all(r["status"] == "error" for r in result["results"])
+        assert {r["error_type"] for r in result["results"]} == {"ValueError"}
+    finally:
+        connection.close()
+
+
 def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
     connection = make_connection()
     try:

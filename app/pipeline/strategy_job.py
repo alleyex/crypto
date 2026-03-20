@@ -78,9 +78,34 @@ def run_strategy_jobs(
     symbol_names: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     normalized_names = list(dict.fromkeys(strategy_names or [DEFAULT_STRATEGY_NAME]))
-    results = [run_strategy_job(connection, strategy_name=name, symbol_names=symbol_names) for name in normalized_names]
+    results = []
+    for name in normalized_names:
+        try:
+            results.append(run_strategy_job(connection, strategy_name=name, symbol_names=symbol_names))
+        except Exception as exc:
+            results.append(
+                {
+                    "status": "error",
+                    "strategy_name": name,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "steps": [
+                        {
+                            "step": "run_strategy_job",
+                            "status": "error",
+                            "strategy_name": name,
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        }
+                    ],
+                }
+            )
 
-    if any(result.get("status") == "ok" for result in results):
+    has_error = any(result.get("status") == "error" for result in results)
+    has_ok = any(result.get("status") == "ok" for result in results)
+    if has_error:
+        status = "partial_error"
+    elif has_ok:
         status = "ok"
     else:
         status = "completed"
