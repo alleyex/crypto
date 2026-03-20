@@ -67,6 +67,10 @@ from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
+from app.risk.risk_config import delete_risk_config
+from app.risk.risk_config import get_risk_config
+from app.risk.risk_config import list_risk_configs
+from app.risk.risk_config import set_risk_config
 from app.query.read_service import get_strategy_closed_trades
 from app.query.read_service import get_signals
 from app.query.read_service import get_strategy_activity_summary
@@ -547,6 +551,7 @@ def build_health_report() -> dict[str, Any]:
             "cooldown_seconds": COOLDOWN_SECONDS,
             "candle_staleness_seconds": CANDLE_STALENESS_SECONDS,
             "max_daily_loss": MAX_DAILY_LOSS,
+            "risk_config_overrides": "see /risk-config",
         },
         "checks": checks,
     }
@@ -908,6 +913,78 @@ def risk_events(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
     try:
         return get_risk_events(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+class RiskConfigUpdateRequest(BaseModel):
+    order_qty: Optional[float] = None
+    max_position_qty: Optional[float] = None
+    cooldown_seconds: Optional[int] = None
+    max_daily_loss: Optional[float] = None
+
+
+@app.get("/risk-config")
+def list_risk_config() -> dict:
+    """List all per-strategy risk configs and the global defaults."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        overrides = list_risk_configs(connection)
+        return {
+            "global_defaults": {
+                "order_qty": DEFAULT_ORDER_QTY,
+                "max_position_qty": MAX_POSITION_QTY,
+                "cooldown_seconds": COOLDOWN_SECONDS,
+                "max_daily_loss": MAX_DAILY_LOSS,
+            },
+            "overrides": overrides,
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/risk-config/{strategy_name}")
+def get_risk_config_for_strategy(strategy_name: str) -> dict:
+    """Return the effective risk config for a strategy (per-strategy or global defaults)."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        cfg, is_default = get_risk_config(connection, strategy_name)
+        result = cfg.to_dict()
+        result["is_default"] = is_default
+        return result
+    finally:
+        connection.close()
+
+
+@app.post("/risk-config/{strategy_name}")
+def update_risk_config_for_strategy(strategy_name: str, body: RiskConfigUpdateRequest) -> dict:
+    """Set or update per-strategy risk config.  Only provided fields are changed."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        cfg = set_risk_config(
+            connection,
+            strategy_name,
+            order_qty=body.order_qty,
+            max_position_qty=body.max_position_qty,
+            cooldown_seconds=body.cooldown_seconds,
+            max_daily_loss=body.max_daily_loss,
+        )
+        return {"status": "ok", "config": cfg.to_dict()}
+    finally:
+        connection.close()
+
+
+@app.delete("/risk-config/{strategy_name}")
+def reset_risk_config_for_strategy(strategy_name: str) -> dict:
+    """Remove per-strategy override; the strategy reverts to global defaults."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        deleted = delete_risk_config(connection, strategy_name)
+        return {"status": "ok", "deleted": deleted}
     finally:
         connection.close()
 

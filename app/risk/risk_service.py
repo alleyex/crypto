@@ -12,6 +12,7 @@ from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
+from app.risk.risk_config import get_risk_config
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import kill_switch_enabled
 
@@ -272,56 +273,63 @@ def _apply_position_and_duplicate_rules(
 
 def evaluate_latest_signal(
     connection: DBConnection,
-    order_qty: float = DEFAULT_ORDER_QTY,
-    max_position_qty: float = MAX_POSITION_QTY,
-    cooldown_seconds: int = COOLDOWN_SECONDS,
-    max_daily_loss: float = MAX_DAILY_LOSS,
+    order_qty: Optional[float] = None,
+    max_position_qty: Optional[float] = None,
+    cooldown_seconds: Optional[int] = None,
+    max_daily_loss: Optional[float] = None,
 ) -> Optional[Dict[str, Union[int, str]]]:
     latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
     if latest_signal is None:
         return None
 
+    strategy_name = latest_signal[3]
+    cfg, _ = get_risk_config(connection, strategy_name)
+
     return _evaluate_signal_row(
         connection,
         latest_signal,
-        order_qty=order_qty,
-        max_position_qty=max_position_qty,
-        cooldown_seconds=cooldown_seconds,
-        max_daily_loss=max_daily_loss,
+        order_qty=order_qty if order_qty is not None else cfg.order_qty,
+        max_position_qty=max_position_qty if max_position_qty is not None else cfg.max_position_qty,
+        cooldown_seconds=cooldown_seconds if cooldown_seconds is not None else cfg.cooldown_seconds,
+        max_daily_loss=max_daily_loss if max_daily_loss is not None else cfg.max_daily_loss,
     )
 
 
 def evaluate_signal_id(
     connection: DBConnection,
     signal_id: int,
-    order_qty: float = DEFAULT_ORDER_QTY,
-    max_position_qty: float = MAX_POSITION_QTY,
-    cooldown_seconds: int = COOLDOWN_SECONDS,
-    max_daily_loss: float = MAX_DAILY_LOSS,
+    order_qty: Optional[float] = None,
+    max_position_qty: Optional[float] = None,
+    cooldown_seconds: Optional[int] = None,
+    max_daily_loss: Optional[float] = None,
 ) -> Optional[Dict[str, Union[int, str]]]:
     signal_row = connection.execute(SELECT_SIGNAL_BY_ID_SQL, (signal_id,)).fetchone()
     if signal_row is None:
         return None
 
+    # Load per-strategy config; falls back to global defaults if no DB row exists.
+    strategy_name = signal_row[3]
+    cfg, _ = get_risk_config(connection, strategy_name)
+
     return _evaluate_signal_row(
         connection,
         signal_row,
-        order_qty=order_qty,
-        max_position_qty=max_position_qty,
-        cooldown_seconds=cooldown_seconds,
-        max_daily_loss=max_daily_loss,
+        order_qty=order_qty if order_qty is not None else cfg.order_qty,
+        max_position_qty=max_position_qty if max_position_qty is not None else cfg.max_position_qty,
+        cooldown_seconds=cooldown_seconds if cooldown_seconds is not None else cfg.cooldown_seconds,
+        max_daily_loss=max_daily_loss if max_daily_loss is not None else cfg.max_daily_loss,
     )
 
 
 def evaluate_signal_ids(
     connection: DBConnection,
     signal_ids: List[int],
-    order_qty: float = DEFAULT_ORDER_QTY,
-    max_position_qty: float = MAX_POSITION_QTY,
-    cooldown_seconds: int = COOLDOWN_SECONDS,
-    max_daily_loss: float = MAX_DAILY_LOSS,
+    order_qty: Optional[float] = None,
+    max_position_qty: Optional[float] = None,
+    cooldown_seconds: Optional[int] = None,
+    max_daily_loss: Optional[float] = None,
 ) -> List[Dict[str, Union[int, str]]]:
-    """Evaluate a batch of signal IDs and return all non-None results."""
+    """Evaluate a batch of signal IDs, loading per-strategy risk config for each."""
     results: List[Dict[str, Union[int, str]]] = []
     for sid in signal_ids:
         result = evaluate_signal_id(

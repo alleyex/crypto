@@ -251,6 +251,21 @@ def _add_job_queue_depends_on(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE job_queue ADD COLUMN depends_on_job_id INTEGER;")
 
 
+def _create_risk_configs_table(connection: DBConnection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS risk_configs (
+            strategy_name TEXT PRIMARY KEY,
+            order_qty REAL NOT NULL,
+            max_position_qty REAL NOT NULL,
+            cooldown_seconds INTEGER NOT NULL,
+            max_daily_loss REAL NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -280,6 +295,7 @@ MIGRATIONS: list[Migration] = [
     ("013_alter_candles_epoch_columns_to_bigint", _alter_candles_epoch_columns_to_bigint),
     ("014_create_job_queue_table", _create_job_queue_table),
     ("015_add_job_queue_depends_on", _add_job_queue_depends_on),
+    ("016_create_risk_configs_table", _create_risk_configs_table),
 ]
 
 

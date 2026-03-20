@@ -7356,3 +7356,141 @@ def test_metrics_service_returns_zeros_on_empty_db() -> None:
         assert result["queue"]["completed"] == 0
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Risk config tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_risk_config_returns_global_defaults_when_no_row() -> None:
+    from app.core.migrations import run_migrations
+    from app.risk.risk_config import get_risk_config
+    from app.core.settings import DEFAULT_ORDER_QTY, MAX_POSITION_QTY, COOLDOWN_SECONDS, MAX_DAILY_LOSS
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        cfg, is_default = get_risk_config(connection, "ma_cross")
+        assert is_default is True
+        assert cfg.order_qty == DEFAULT_ORDER_QTY
+        assert cfg.max_position_qty == MAX_POSITION_QTY
+        assert cfg.cooldown_seconds == COOLDOWN_SECONDS
+        assert cfg.max_daily_loss == MAX_DAILY_LOSS
+    finally:
+        connection.close()
+
+
+def test_set_and_get_risk_config_per_strategy() -> None:
+    from app.core.migrations import run_migrations
+    from app.risk.risk_config import get_risk_config, set_risk_config
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        set_risk_config(connection, "ma_cross", order_qty=0.005, cooldown_seconds=600)
+        cfg, is_default = get_risk_config(connection, "ma_cross")
+        assert is_default is False
+        assert cfg.order_qty == 0.005
+        assert cfg.cooldown_seconds == 600
+        # Unset fields fall back to global defaults
+        from app.core.settings import MAX_POSITION_QTY, MAX_DAILY_LOSS
+        assert cfg.max_position_qty == MAX_POSITION_QTY
+        assert cfg.max_daily_loss == MAX_DAILY_LOSS
+    finally:
+        connection.close()
+
+
+def test_delete_risk_config_reverts_to_defaults() -> None:
+    from app.core.migrations import run_migrations
+    from app.risk.risk_config import get_risk_config, set_risk_config, delete_risk_config
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        set_risk_config(connection, "ma_cross", order_qty=0.005)
+        _, is_default_before = get_risk_config(connection, "ma_cross")
+        assert is_default_before is False
+
+        deleted = delete_risk_config(connection, "ma_cross")
+        assert deleted is True
+
+        _, is_default_after = get_risk_config(connection, "ma_cross")
+        assert is_default_after is True
+    finally:
+        connection.close()
+
+
+def test_evaluate_signal_id_uses_per_strategy_risk_config() -> None:
+    """A per-strategy max_position_qty=0 should reject every BUY signal."""
+    from app.core.migrations import run_migrations
+    from app.risk.risk_config import set_risk_config
+    from app.risk.risk_service import evaluate_signal_id
+    from app.strategy.ma_cross import ensure_table as ensure_signals_table, insert_signal
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        ensure_signals_table(connection)
+        seed_candles(connection, [50000.0] * 5)
+
+        # Insert a BUY signal directly
+        signal_id = insert_and_get_rowid(
+            connection,
+            "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?,?,?,?,?,?);",
+            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 0.9),
+        )
+        connection.commit()
+
+        # Set per-strategy config with max_position_qty=0 — every BUY should be rejected
+        set_risk_config(connection, "ma_cross", max_position_qty=0.0, order_qty=0.001)
+
+        result = evaluate_signal_id(connection, signal_id)
+        assert result is not None
+        assert result["decision"] == "REJECTED"
+        assert "Max position" in result["reason"]
+    finally:
+        connection.close()
+
+
+def test_risk_config_api_list_and_crud() -> None:
+    client = TestClient(app)
+
+    # List — initially empty overrides
+    resp = client.get("/risk-config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "global_defaults" in data
+    assert "overrides" in data
+    assert isinstance(data["overrides"], list)
+
+    # Get — returns defaults when no override
+    resp = client.get("/risk-config/ma_cross")
+    assert resp.status_code == 200
+    cfg = resp.json()
+    assert cfg["is_default"] is True
+    assert cfg["strategy_name"] == "ma_cross"
+
+    # Post — set override
+    resp = client.post("/risk-config/ma_cross", json={"order_qty": 0.005, "cooldown_seconds": 600})
+    assert resp.status_code == 200
+    saved = resp.json()
+    assert saved["status"] == "ok"
+    assert saved["config"]["order_qty"] == 0.005
+    assert saved["config"]["cooldown_seconds"] == 600
+
+    # Get — now returns non-default
+    resp = client.get("/risk-config/ma_cross")
+    assert resp.status_code == 200
+    assert resp.json()["is_default"] is False
+    assert resp.json()["order_qty"] == 0.005
+
+    # Delete — revert to defaults
+    resp = client.delete("/risk-config/ma_cross")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+
+    # Get — back to defaults
+    resp = client.get("/risk-config/ma_cross")
+    assert resp.status_code == 200
+    assert resp.json()["is_default"] is True
