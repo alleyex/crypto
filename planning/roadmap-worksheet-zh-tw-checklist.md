@@ -133,15 +133,15 @@
   交付物：portfolio service。
   備註：多帳戶前應先完成。
 
-- [ ] 建立監控能力
+- [x] 建立監控能力
   目標：提高可觀測性。
   交付物：metrics 與 dashboard。
-  備註：至少看 latency、reject rate、PnL。
+  備註：`GET /metrics` endpoint 已完成（2026-03-20）；aggregates signals、risk reject rate、fill volume、realized PnL、queue latency，period_hours 可設定（1–168h）。
 
-- [ ] 建立 kill switch
+- [x] 建立 kill switch
   目標：異常時可強制停止交易。
   交付物：手動與自動停機控制。
-  備註：實盤必備。
+  備註：`app/system/kill_switch.py` 完整 state management；`POST /kill-switch/enable|disable`、`GET /kill-switch/status`；admin UI 顯示狀態與按鈕；risk service 在 daily loss breach 時自動觸發；pipeline 與所有 scheduler modes（direct / queue_batch / queue_drain / queue_dispatch / split-workers）均檢查 kill switch；Telegram alert on enable（2026-03-20）。
 
 - [ ] 擴充 audit log
   目標：追蹤所有關鍵事件。

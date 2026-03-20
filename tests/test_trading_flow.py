@@ -7132,8 +7132,14 @@ def test_build_soak_history_summary_reports_progress(monkeypatch, tmp_path) -> N
     assert summary["degraded_count"] == 1
     assert summary["error_count"] == 0
     assert summary["continuous_span_hours"] == 60.0
-    assert summary["remaining_hours_to_target"] == 108.0
+    assert summary["remaining_span_hours"] == 108.0
     assert summary["meets_weekly_target"] is False
+    # New metrics
+    assert summary["accumulated_ok_hours"] == round(2 * 60 / 3600, 2)
+    assert summary["longest_ok_streak_hours"] == round(1 * 60 / 3600, 2)
+    assert summary["ok_rate"] == round(2 / 3, 4)
+    assert summary["meets_accumulated_target"] is False
+    assert "remaining_accumulated_hours" in summary
 
 
 def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_path) -> None:
