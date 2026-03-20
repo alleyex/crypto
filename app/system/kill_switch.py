@@ -13,18 +13,25 @@ def enable_kill_switch(
     reason: str = "Kill switch enabled.",
     source: str = "kill_switch",
     notify_message: Optional[str] = "Crypto alert: kill switch has been enabled.",
+    payload_extra: Optional[Dict[str, object]] = None,
 ) -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     already_enabled = KILL_SWITCH_FILE.exists()
     KILL_SWITCH_FILE.write_text("kill\n", encoding="utf-8")
     if notify_message and not already_enabled:
         send_telegram_message(notify_message)
+    payload: Dict[str, object] = {
+        "kill_switch_file": str(KILL_SWITCH_FILE),
+        "already_enabled": already_enabled,
+    }
+    if payload_extra:
+        payload.update(payload_extra)
     log_event(
         event_type="kill_switch",
         status="enabled" if not already_enabled else "already_enabled",
         source=source,
         message=reason,
-        payload={"kill_switch_file": str(KILL_SWITCH_FILE), "already_enabled": already_enabled},
+        payload=payload,
     )
     return str(KILL_SWITCH_FILE)
 

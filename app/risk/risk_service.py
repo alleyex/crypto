@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
+from app.audit.service import insert_event
 from app.audit.service import log_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
@@ -167,6 +168,21 @@ def _evaluate_signal_row(
                 f"Daily loss limit breached: daily_realized_pnl={daily_realized_pnl}, "
                 f"limit=-{abs(max_daily_loss)}."
             )
+            breach_payload = {
+                "symbol": symbol,
+                "strategy_name": strategy_name,
+                "daily_realized_pnl": daily_realized_pnl,
+                "max_daily_loss": max_daily_loss,
+                "limit": -abs(max_daily_loss),
+            }
+            insert_event(
+                connection,
+                event_type="daily_loss_breach",
+                status="triggered",
+                source="risk_service",
+                message=reason,
+                payload=breach_payload,
+            )
             enable_kill_switch(
                 reason=(
                     "Kill switch auto-enabled by risk service after daily loss limit breach. "
@@ -176,6 +192,7 @@ def _evaluate_signal_row(
                 notify_message=(
                     "Crypto alert: kill switch auto-enabled after daily loss limit breach."
                 ),
+                payload_extra=breach_payload,
             )
         else:
             # 3. Cooldown — check time since last fill.

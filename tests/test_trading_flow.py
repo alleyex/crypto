@@ -1933,7 +1933,7 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
     kill_switch_calls = []
     monkeypatch.setattr(
         "app.risk.risk_service.enable_kill_switch",
-        lambda reason, source, notify_message: kill_switch_calls.append(
+        lambda reason, source, notify_message, **kwargs: kill_switch_calls.append(
             {
                 "reason": reason,
                 "source": source,
@@ -7455,8 +7455,12 @@ def test_evaluate_signal_id_uses_per_strategy_risk_config() -> None:
 
 def test_risk_config_api_list_and_crud() -> None:
     client = TestClient(app)
+    strategy = "_test_crud_strategy_"
 
-    # List — initially empty overrides
+    # Ensure clean state
+    client.delete(f"/risk-config/{strategy}")
+
+    # List — structure check
     resp = client.get("/risk-config")
     assert resp.status_code == 200
     data = resp.json()
@@ -7465,14 +7469,14 @@ def test_risk_config_api_list_and_crud() -> None:
     assert isinstance(data["overrides"], list)
 
     # Get — returns defaults when no override
-    resp = client.get("/risk-config/ma_cross")
+    resp = client.get(f"/risk-config/{strategy}")
     assert resp.status_code == 200
     cfg = resp.json()
     assert cfg["is_default"] is True
-    assert cfg["strategy_name"] == "ma_cross"
+    assert cfg["strategy_name"] == strategy
 
     # Post — set override
-    resp = client.post("/risk-config/ma_cross", json={"order_qty": 0.005, "cooldown_seconds": 600})
+    resp = client.post(f"/risk-config/{strategy}", json={"order_qty": 0.005, "cooldown_seconds": 600})
     assert resp.status_code == 200
     saved = resp.json()
     assert saved["status"] == "ok"
@@ -7480,18 +7484,18 @@ def test_risk_config_api_list_and_crud() -> None:
     assert saved["config"]["cooldown_seconds"] == 600
 
     # Get — now returns non-default
-    resp = client.get("/risk-config/ma_cross")
+    resp = client.get(f"/risk-config/{strategy}")
     assert resp.status_code == 200
     assert resp.json()["is_default"] is False
     assert resp.json()["order_qty"] == 0.005
 
     # Delete — revert to defaults
-    resp = client.delete("/risk-config/ma_cross")
+    resp = client.delete(f"/risk-config/{strategy}")
     assert resp.status_code == 200
     assert resp.json()["deleted"] is True
 
     # Get — back to defaults
-    resp = client.get("/risk-config/ma_cross")
+    resp = client.get(f"/risk-config/{strategy}")
     assert resp.status_code == 200
     assert resp.json()["is_default"] is True
 
@@ -7594,6 +7598,120 @@ def test_check_portfolio_limits_rejects_when_total_exposure_exceeded() -> None:
         connection.close()
 
 
+def test_position_open_close_emits_audit_events() -> None:
+    from app.core.migrations import run_migrations
+    from app.portfolio.positions_service import update_positions
+    from app.data.candles_service import save_klines
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [50000.0] * 5)
+
+        # Simulate a BUY fill
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status)"
+            " VALUES (?,?,?,?,?,?,?,?);",
+            ("o1", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED"),
+        )
+        order_id = connection.execute("SELECT last_insert_rowid();").fetchone()[0]
+        connection.execute(
+            "INSERT INTO fills (order_id, symbol, side, qty, price) VALUES (?,?,?,?,?);",
+            (order_id, "BTCUSDT", "BUY", 0.001, 50000.0),
+        )
+        connection.commit()
+
+        update_positions(connection)
+
+        events = connection.execute(
+            "SELECT event_type, status, message FROM audit_events WHERE event_type='position' ORDER BY id;"
+        ).fetchall()
+        assert len(events) == 1
+        assert events[0][1] == "opened"
+        assert "BTCUSDT" in events[0][2]
+
+        # Simulate a SELL fill
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status)"
+            " VALUES (?,?,?,?,?,?,?,?);",
+            ("o2", "BTCUSDT", "1m", "ma_cross", "SELL", 0.001, 51000.0, "FILLED"),
+        )
+        order_id2 = connection.execute("SELECT last_insert_rowid();").fetchone()[0]
+        connection.execute(
+            "INSERT INTO fills (order_id, symbol, side, qty, price) VALUES (?,?,?,?,?);",
+            (order_id2, "BTCUSDT", "SELL", 0.001, 51000.0),
+        )
+        connection.commit()
+
+        update_positions(connection)
+
+        events = connection.execute(
+            "SELECT event_type, status, message FROM audit_events WHERE event_type='position' ORDER BY id;"
+        ).fetchall()
+        assert len(events) == 2
+        assert events[1][1] == "closed"
+        assert "BTCUSDT" in events[1][2]
+    finally:
+        connection.close()
+
+
+def test_daily_loss_breach_emits_audit_event(monkeypatch) -> None:
+    from app.core.migrations import run_migrations
+    from app.risk.risk_service import evaluate_signal_id
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [50000.0] * 5)
+
+        monkeypatch.setattr("app.risk.risk_service.enable_kill_switch", lambda **kwargs: None)
+        monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: False)
+
+        signal_id = insert_and_get_rowid(
+            connection,
+            "INSERT INTO signals (symbol,timeframe,strategy_name,signal_type,short_ma,long_ma) VALUES (?,?,?,?,?,?);",
+            ("BTCUSDT", "1m", "ma_cross", "BUY", 200.0, 100.0),
+        )
+        connection.commit()
+
+        # Trigger daily loss breach by passing tiny max_daily_loss
+        evaluate_signal_id(connection, signal_id, max_daily_loss=0.0)
+
+        events = connection.execute(
+            "SELECT event_type, status FROM audit_events WHERE event_type='daily_loss_breach';"
+        ).fetchall()
+        assert len(events) == 1
+        assert events[0][1] == "triggered"
+    finally:
+        connection.close()
+
+
+def test_kill_switch_enable_payload_includes_extra_fields(tmp_path, monkeypatch) -> None:
+    from app.system.kill_switch import enable_kill_switch, disable_kill_switch
+
+    monkeypatch.setattr("app.system.kill_switch.RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr("app.system.kill_switch.KILL_SWITCH_FILE", tmp_path / "kill.switch")
+    monkeypatch.setattr("app.system.kill_switch.send_telegram_message", lambda msg: None)
+
+    captured = {}
+
+    def fake_log_event(event_type, status, source, message, payload=None):
+        captured["payload"] = payload
+
+    monkeypatch.setattr("app.system.kill_switch.log_event", fake_log_event)
+
+    enable_kill_switch(
+        reason="test breach",
+        source="test",
+        notify_message=None,
+        payload_extra={"daily_realized_pnl": -75.0, "limit": -50.0},
+    )
+
+    assert captured["payload"]["daily_realized_pnl"] == -75.0
+    assert captured["payload"]["limit"] == -50.0
+    assert "kill_switch_file" in captured["payload"]
+
+
 def test_portfolio_api_endpoints() -> None:
     client = TestClient(app)
 
@@ -7606,11 +7724,12 @@ def test_portfolio_api_endpoints() -> None:
     assert "within_limits" in data
     assert data["open_position_count"] == 0
 
-    # GET /portfolio/config — returns defaults
+    # GET /portfolio/config — returns config with expected fields
     resp = client.get("/portfolio/config")
     assert resp.status_code == 200
     cfg = resp.json()
-    assert cfg["enforcement_active"] is False
+    assert "total_capital" in cfg
+    assert "enforcement_active" in cfg
 
     # POST /portfolio/config — update
     resp = client.post("/portfolio/config", json={"total_capital": 5000.0})

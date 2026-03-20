@@ -1,3 +1,4 @@
+from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.migrations import run_migrations
 
@@ -67,6 +68,11 @@ def update_positions(connection: DBConnection) -> int:
             positions[symbol]["cost"] -= sell_qty * avg_price
             positions[symbol]["realized_pnl"] += (price - avg_price) * sell_qty
 
+    # Read existing positions before overwriting so we can detect state transitions.
+    existing: dict[str, float] = {}
+    for row in connection.execute("SELECT symbol, qty FROM positions;").fetchall():
+        existing[row[0]] = float(row[1])
+
     for symbol, position in positions.items():
         qty = position["qty"]
         realized_pnl = position["realized_pnl"]
@@ -76,6 +82,27 @@ def update_positions(connection: DBConnection) -> int:
         else:
             avg_price = position["cost"] / qty
         connection.execute(UPSERT_POSITION_SQL, (symbol, qty, avg_price, realized_pnl))
+
+        # Emit audit event when position opens or closes.
+        old_qty = existing.get(symbol, 0.0)
+        if old_qty <= 0 and qty > 0:
+            insert_event(
+                connection,
+                event_type="position",
+                status="opened",
+                source="positions_service",
+                message=f"Position opened for {symbol}: qty={qty}, avg_price={round(avg_price, 4)}.",
+                payload={"symbol": symbol, "qty": qty, "avg_price": round(avg_price, 4)},
+            )
+        elif old_qty > 0 and qty <= 0:
+            insert_event(
+                connection,
+                event_type="position",
+                status="closed",
+                source="positions_service",
+                message=f"Position closed for {symbol}: realized_pnl={round(realized_pnl, 4)}.",
+                payload={"symbol": symbol, "realized_pnl": round(realized_pnl, 4), "prev_qty": old_qty},
+            )
 
     connection.commit()
     return len(positions)
