@@ -266,6 +266,20 @@ def _create_risk_configs_table(connection: DBConnection) -> None:
     )
 
 
+def _create_portfolio_config_table(connection: DBConnection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_config (
+            id INTEGER PRIMARY KEY,
+            total_capital REAL NOT NULL DEFAULT 0,
+            max_strategy_allocation_pct REAL NOT NULL DEFAULT 0.5,
+            max_total_exposure_pct REAL NOT NULL DEFAULT 0.8,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -296,6 +310,7 @@ MIGRATIONS: list[Migration] = [
     ("014_create_job_queue_table", _create_job_queue_table),
     ("015_add_job_queue_depends_on", _add_job_queue_depends_on),
     ("016_create_risk_configs_table", _create_risk_configs_table),
+    ("017_create_portfolio_config_table", _create_portfolio_config_table),
 ]
 
 

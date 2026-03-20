@@ -12,6 +12,7 @@ from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
+from app.portfolio.portfolio_service import check_portfolio_limits
 from app.risk.risk_config import get_risk_config
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import kill_switch_enabled
@@ -268,6 +269,10 @@ def _apply_position_and_duplicate_rules(
     ).fetchone()
     if previous_signal and previous_signal[0] == signal_type:
         return "REJECTED", "Duplicate signal type."
+    if signal_type == "BUY":
+        approved, portfolio_reason = check_portfolio_limits(connection, strategy_name, symbol, order_qty)
+        if not approved:
+            return "REJECTED", portfolio_reason
     return "APPROVED", "Passed basic risk checks."
 
 

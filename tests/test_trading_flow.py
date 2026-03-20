@@ -7494,3 +7494,131 @@ def test_risk_config_api_list_and_crud() -> None:
     resp = client.get("/risk-config/ma_cross")
     assert resp.status_code == 200
     assert resp.json()["is_default"] is True
+
+
+# ---------------------------------------------------------------------------
+# Portfolio service tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_portfolio_config_returns_defaults_when_no_row() -> None:
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import get_portfolio_config, DEFAULT_TOTAL_CAPITAL
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        cfg = get_portfolio_config(connection)
+        assert cfg.total_capital == DEFAULT_TOTAL_CAPITAL
+        assert cfg.enforcement_active is False
+    finally:
+        connection.close()
+
+
+def test_set_and_get_portfolio_config() -> None:
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import get_portfolio_config, set_portfolio_config
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        set_portfolio_config(connection, total_capital=10000.0, max_strategy_allocation_pct=0.4)
+        cfg = get_portfolio_config(connection)
+        assert cfg.total_capital == 10000.0
+        assert cfg.max_strategy_allocation_pct == 0.4
+        assert cfg.enforcement_active is True
+        assert cfg.max_strategy_notional == 4000.0
+    finally:
+        connection.close()
+
+
+def test_get_portfolio_summary_empty_db() -> None:
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import get_portfolio_summary
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        summary = get_portfolio_summary(connection)
+        assert summary["open_position_count"] == 0
+        assert summary["total_open_notional"] == 0.0
+        assert summary["within_limits"] is True
+        assert summary["violations"] == []
+    finally:
+        connection.close()
+
+
+def test_check_portfolio_limits_no_enforcement_when_capital_zero() -> None:
+    """When total_capital=0, limits are never enforced."""
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import check_portfolio_limits
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        assert approved is True
+        assert reason == ""
+    finally:
+        connection.close()
+
+
+def test_check_portfolio_limits_rejects_when_total_exposure_exceeded() -> None:
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import set_portfolio_config, check_portfolio_limits
+    from app.portfolio.positions_service import ensure_table as ensure_positions_table
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        ensure_positions_table(connection)
+
+        # Seed BTCUSDT candles at price 9.0 so latest price = 9.0
+        seed_candles(connection, [9.0] * 5)
+
+        # Set total_capital=10, max_total_exposure_pct=0.8 → limit = 8.0 USDT
+        set_portfolio_config(connection, total_capital=10.0, max_total_exposure_pct=0.8)
+
+        # Open position: 1.0 BTC at 9.0 → current notional = 9.0 (already over limit)
+        connection.execute(
+            "INSERT INTO positions (symbol, qty, avg_price, realized_pnl) VALUES (?,?,?,?);",
+            ("BTCUSDT", 1.0, 9.0, 0.0),
+        )
+        connection.commit()
+
+        # Any additional BUY should be rejected: 9.0 + 0.001*9.0 > 8.0
+        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 0.001)
+        assert approved is False
+        assert "Portfolio total exposure limit" in reason
+    finally:
+        connection.close()
+
+
+def test_portfolio_api_endpoints() -> None:
+    client = TestClient(app)
+
+    # GET /portfolio — works on empty DB
+    resp = client.get("/portfolio")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "open_positions" in data
+    assert "per_strategy" in data
+    assert "within_limits" in data
+    assert data["open_position_count"] == 0
+
+    # GET /portfolio/config — returns defaults
+    resp = client.get("/portfolio/config")
+    assert resp.status_code == 200
+    cfg = resp.json()
+    assert cfg["enforcement_active"] is False
+
+    # POST /portfolio/config — update
+    resp = client.post("/portfolio/config", json={"total_capital": 5000.0})
+    assert resp.status_code == 200
+    assert resp.json()["config"]["total_capital"] == 5000.0
+    assert resp.json()["config"]["enforcement_active"] is True
+
+    # GET /portfolio/config — reflects new value
+    resp = client.get("/portfolio/config")
+    assert resp.status_code == 200
+    assert resp.json()["total_capital"] == 5000.0
