@@ -2368,6 +2368,10 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     )
     called = []
     monkeypatch.setattr(
+        "app.api.main.maybe_send_broker_alert",
+        lambda report: called.append(("broker", report)) or {"sent": False},
+    )
+    monkeypatch.setattr(
         "app.api.main.maybe_send_execution_alert",
         lambda report: called.append(("execution", report)) or {"sent": False},
     )
@@ -2406,7 +2410,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["scheduler"]["status"] == "ok"
     assert payload["checks"]["kill_switch"]["status"] == "ok"
     assert payload["config"]["max_daily_loss"] == 50.0
-    assert len(called) == 4
+    assert len(called) == 5
 
 
 def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(monkeypatch, tmp_path) -> None:
@@ -2430,6 +2434,10 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     )
     monkeypatch.setattr("app.api.main.read_scheduler_log", lambda lines=1: [])
     called = []
+    monkeypatch.setattr(
+        "app.api.main.maybe_send_broker_alert",
+        lambda report: called.append(("broker", report)) or {"sent": False},
+    )
     monkeypatch.setattr(
         "app.api.main.maybe_send_execution_alert",
         lambda report: called.append(("execution", report)) or {"sent": False},
@@ -2458,7 +2466,7 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     assert payload["checks"]["pipeline"]["status"] == "degraded"
     assert payload["checks"]["scheduler"]["status"] == "degraded"
     assert payload["checks"]["kill_switch"]["status"] == "degraded"
-    assert len(called) == 4
+    assert len(called) == 5
 
 
 def test_maybe_send_health_alert_deduplicates_same_degraded_state(monkeypatch, tmp_path) -> None:
@@ -2701,6 +2709,125 @@ def test_maybe_send_execution_alert_clears_state_when_execution_recovers(monkeyp
     result = maybe_send_execution_alert({"status": "ok", "checks": {"queue": {"status": "ok", "latest_failed_job": None}}})
 
     assert result == {"sent": False, "reason": "No failed execution queue job."}
+    assert not state_file.exists()
+
+
+def test_broker_protection_check_degrades_when_backend_cannot_execute_approved_orders() -> None:
+    result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+        make_connection(),
+        {"backend": "noop", "can_execute_orders": False, "dry_run": True, "placeholder": False},
+        {"latest_run": {"approved_risk_count": 2}},
+    )
+
+    assert result["status"] == "degraded"
+    assert result["backend"] == "noop"
+    assert result["approved_risk_count"] == 2
+    assert result["severity"] == "critical"
+    assert result["reason_code"] == "backend_cannot_execute"
+    assert result["recommended_action"] == "switch_to_paper_backend"
+    assert result["reason"] == "Execution backend cannot execute approved orders."
+
+
+def test_broker_protection_check_degrades_on_stale_non_terminal_order(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.main.ORDER_STALENESS_SECONDS", 300)
+    result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+        make_connection(),
+        {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+        {"latest_order": {"status": "PENDING", "age_seconds": 420}},
+    )
+
+    assert result["status"] == "degraded"
+    assert result["severity"] == "medium"
+    assert result["reason_code"] == "stale_order_pending"
+    assert result["recommended_action"] == "inspect_and_reconcile_orders"
+    assert result["reason"] == "Latest order is stale and still not terminal."
+
+
+def test_broker_protection_check_degrades_on_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "BUY",
+                    "REJECTED",
+                    "Cooldown active: last fill 10 seconds ago, minimum 300.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "Cooldown active: last fill 10 seconds ago, minimum 300."}},
+        )
+
+        assert result["status"] == "degraded"
+        assert result["reason"] == "Recent risk evaluations are repeatedly rejected."
+        assert result["reason_code"] == "risk_reject_cooldown_streak"
+        assert result["severity"] == "medium"
+        assert result["recommended_action"] == "pause_scheduler"
+        assert result["rejected_risk_streak"] == 3
+    finally:
+        connection.close()
+
+
+def test_maybe_send_broker_alert_deduplicates_same_protected_state(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "broker_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.broker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    report = {
+        "checks": {
+            "broker_protection": {
+                "status": "degraded",
+                "backend": "noop",
+                "reason": "Execution backend cannot execute approved orders.",
+                "reason_code": "backend_cannot_execute",
+                "severity": "critical",
+                "recommended_action": "switch_to_paper_backend",
+                "approved_risk_count": 2,
+            }
+        }
+    }
+
+    first = maybe_send_broker_alert(report)
+    second = maybe_send_broker_alert(report)
+
+    assert first["sent"] is True
+    assert second == {"sent": False, "reason": "Broker alert already sent for current protected state."}
+    assert len(sent_messages) == 1
+
+
+def test_maybe_send_broker_alert_clears_state_when_protection_recovers(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "broker_alert_state.json"
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    state_file.write_text('{"fingerprint":"x","backend":"noop"}', encoding="utf-8")
+    result = maybe_send_broker_alert({"checks": {"broker_protection": {"status": "ok"}}})
+
+    assert result == {"sent": False, "reason": "Broker protection status is ok."}
     assert not state_file.exists()
 
 
@@ -4363,6 +4490,41 @@ def test_clear_queue_batch_endpoint_logs_audit_event(monkeypatch) -> None:
     assert audit_calls[0]["status"] == "cleared"
     assert audit_calls[0]["payload"]["action"] == "clear_pipeline_batch"
     assert audit_calls[0]["payload"]["batch_id"] == "batch-123"
+
+
+def test_reconcile_orders_endpoint(monkeypatch) -> None:
+    client = TestClient(app)
+    audit_calls: list[dict[str, Any]] = []
+
+    class DummyConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("app.api.main.ensure_positions_table", lambda connection: None)
+    monkeypatch.setattr("app.api.main.update_positions", lambda connection: 2)
+    monkeypatch.setattr("app.api.main.ensure_pnl_table", lambda connection: None)
+    monkeypatch.setattr("app.api.main.update_pnl_snapshots", lambda connection: 3)
+    monkeypatch.setattr("app.api.main.get_orders", lambda connection, limit=5: [{"id": 11, "status": "PENDING"}])
+    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+
+    response = client.post(
+        "/orders/reconcile",
+        json={
+            "audit_action": "broker_protection:reconcile_orders",
+            "audit_message": "Order reconciliation triggered from broker protection recommendation.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reconciled"
+    assert response.json()["updated_symbols"] == 2
+    assert response.json()["snapshot_count"] == 3
+    assert response.json()["orders"] == [{"id": 11, "status": "PENDING"}]
+    assert audit_calls[0]["event_type"] == "execution_control"
+    assert audit_calls[0]["status"] == "reconciled"
+    assert audit_calls[0]["payload"]["action"] == "broker_protection:reconcile_orders"
+    assert audit_calls[0]["message"] == "Order reconciliation triggered from broker protection recommendation."
 
 
 def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:
@@ -6075,7 +6237,7 @@ def test_execution_backend_update_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "app.api.main.set_execution_backend",
-        lambda backend, **kwargs: captured.update({"backend": backend}) or {"backend": backend, "execution_backend_file": "runtime/execution.backend"},
+        lambda backend, **kwargs: captured.update({"backend": backend, "audit_action": kwargs.get("audit_action"), "audit_message": kwargs.get("audit_message")}) or {"backend": backend, "execution_backend_file": "runtime/execution.backend"},
     )
     monkeypatch.setattr(
         "app.api.main.get_execution_backend_status",
@@ -6102,5 +6264,51 @@ def test_execution_backend_update_endpoint(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert captured["backend"] == "noop"
+    assert captured["audit_action"] == "set_execution_backend:noop"
     assert response.json()["backend"] == "noop"
     assert response.json()["dry_run"] is True
+
+
+def test_scheduler_stop_endpoint_accepts_custom_audit_metadata(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "app.api.main.set_stop_flag",
+        lambda **kwargs: captured.update(kwargs) or "runtime/scheduler.stop",
+    )
+
+    response = client.post(
+        "/scheduler/stop",
+        json={
+            "audit_action": "broker_protection:pause_scheduler",
+            "audit_message": "Scheduler paused from broker protection recommendation.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["audit_action"] == "broker_protection:pause_scheduler"
+    assert captured["audit_message"] == "Scheduler paused from broker protection recommendation."
+
+
+def test_kill_switch_enable_endpoint_accepts_custom_source(monkeypatch) -> None:
+    client = TestClient(app)
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "app.api.main.enable_kill_switch",
+        lambda **kwargs: captured.update(kwargs) or "runtime/kill.switch",
+    )
+
+    response = client.post(
+        "/kill-switch/enable",
+        json={
+            "reason": "Kill switch enabled from broker protection recommendation.",
+            "source": "broker_protection",
+            "notify_message": "Crypto alert: kill switch enabled from broker protection recommendation.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["source"] == "broker_protection"
+    assert captured["reason"] == "Kill switch enabled from broker protection recommendation."

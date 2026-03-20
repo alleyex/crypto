@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.audit.service import log_event
+from app.alerting.broker import maybe_send_broker_alert
 from app.alerting.execution import maybe_send_execution_alert
 from app.admin.page import render_admin_page
 from app.alerting.health import maybe_send_health_alert
@@ -40,7 +41,9 @@ from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
+from app.core.settings import ORDER_STALENESS_SECONDS
 from app.core.settings import QUEUE_BATCH_STALENESS_SECONDS
+from app.core.settings import RISK_REJECTION_STREAK_THRESHOLD
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -193,7 +196,94 @@ def _execution_backend_check() -> dict[str, Any]:
         "backend": backend_status["backend"],
         "dry_run": backend_status["dry_run"],
         "can_execute_orders": backend_status["can_execute_orders"],
+        "placeholder": backend_status.get("placeholder", False),
     }
+
+
+def _broker_protection_check(
+    connection: DBConnection,
+    execution_backend_check: dict[str, Any],
+    pipeline_check: dict[str, Any],
+) -> dict[str, Any]:
+    latest_run = pipeline_check.get("latest_run", {}) if isinstance(pipeline_check, dict) else {}
+    latest_order = pipeline_check.get("latest_order") if isinstance(pipeline_check, dict) else None
+    approved_risk_count = int(latest_run.get("approved_risk_count") or 0) if isinstance(latest_run, dict) else 0
+    result: dict[str, Any] = {
+        "status": "ok",
+        "backend": execution_backend_check.get("backend"),
+        "can_execute_orders": bool(execution_backend_check.get("can_execute_orders")),
+        "dry_run": bool(execution_backend_check.get("dry_run")),
+        "placeholder": bool(execution_backend_check.get("placeholder")),
+        "approved_risk_count": approved_risk_count,
+        "order_staleness_threshold_seconds": ORDER_STALENESS_SECONDS,
+        "risk_rejection_streak_threshold": RISK_REJECTION_STREAK_THRESHOLD,
+        "severity": "info",
+        "reason_code": None,
+        "recommended_action": None,
+    }
+    if isinstance(latest_order, dict):
+        result["latest_order"] = latest_order
+    latest_risk = pipeline_check.get("latest_risk") if isinstance(pipeline_check, dict) else None
+    if isinstance(latest_risk, dict):
+        result["latest_risk"] = latest_risk
+
+    if not result["can_execute_orders"] and approved_risk_count > 0:
+        result["status"] = "degraded"
+        result["severity"] = "critical"
+        result["reason_code"] = "backend_cannot_execute"
+        result["reason"] = "Execution backend cannot execute approved orders."
+        result["recommended_action"] = "switch_to_paper_backend"
+        return result
+
+    if result["placeholder"] and approved_risk_count > 0:
+        result["status"] = "degraded"
+        result["severity"] = "high"
+        result["reason_code"] = "placeholder_backend_pending_orders"
+        result["reason"] = "Execution backend is placeholder while approved orders are pending."
+        result["recommended_action"] = "switch_to_paper_backend"
+        return result
+
+    if isinstance(latest_order, dict):
+        latest_order_status = str(latest_order.get("status") or "").upper()
+        latest_order_age = latest_order.get("age_seconds")
+        if latest_order_status in {"NEW", "PENDING", "SUBMITTED", "PARTIALLY_FILLED"} and latest_order_age is not None and int(latest_order_age) > ORDER_STALENESS_SECONDS:
+            result["status"] = "degraded"
+            result["severity"] = "high" if latest_order_status == "PARTIALLY_FILLED" else "medium"
+            result["reason_code"] = f"stale_order_{latest_order_status.lower()}"
+            result["reason"] = "Latest order is stale and still not terminal."
+            result["recommended_action"] = "inspect_and_reconcile_orders"
+            return result
+
+    rejection_rows = connection.execute(
+        """
+        SELECT decision, reason
+        FROM risk_events
+        ORDER BY id DESC
+        LIMIT ?;
+        """,
+        (RISK_REJECTION_STREAK_THRESHOLD,),
+    ).fetchall()
+    if len(rejection_rows) >= RISK_REJECTION_STREAK_THRESHOLD and all(str(row[0]).upper() == "REJECTED" for row in rejection_rows):
+        latest_rejection_reason = str(rejection_rows[0][1] or "")
+        result["status"] = "degraded"
+        result["rejected_risk_streak"] = len(rejection_rows)
+        result["latest_rejection_reason"] = latest_rejection_reason
+        if "Daily loss limit breached" in latest_rejection_reason:
+            result["severity"] = "critical"
+            result["reason_code"] = "risk_reject_daily_loss_limit"
+            result["recommended_action"] = "enable_kill_switch"
+        elif "Cooldown active" in latest_rejection_reason:
+            result["severity"] = "medium"
+            result["reason_code"] = "risk_reject_cooldown_streak"
+            result["recommended_action"] = "pause_scheduler"
+        else:
+            result["severity"] = "medium"
+            result["reason_code"] = "risk_reject_streak"
+            result["recommended_action"] = "inspect_risk_rules"
+        result["reason"] = "Recent risk evaluations are repeatedly rejected."
+        return result
+
+    return result
 
 
 def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
@@ -379,6 +469,7 @@ def build_health_report() -> dict[str, Any]:
         checks["queue"] = _queue_check(connection)
         checks["heartbeats"] = _heartbeat_check(connection)
         checks["execution_backend"] = _execution_backend_check()
+        checks["broker_protection"] = _broker_protection_check(connection, checks["execution_backend"], checks["pipeline"])
     except DBError as exc:
         checks["database"] = {
             "status": "error",
@@ -425,6 +516,22 @@ class TestSignalRequest(BaseModel):
 
 class AlertTestRequest(BaseModel):
     message: str = "Crypto alert test message."
+
+
+class SchedulerControlRequest(BaseModel):
+    audit_action: Optional[str] = None
+    audit_message: Optional[str] = None
+
+
+class KillSwitchControlRequest(BaseModel):
+    reason: Optional[str] = None
+    source: Optional[str] = None
+    notify_message: Optional[str] = None
+
+
+class ReconcileOrdersRequest(BaseModel):
+    audit_action: Optional[str] = None
+    audit_message: Optional[str] = None
 
 
 class PipelineRunRequest(BaseModel):
@@ -484,6 +591,8 @@ class PipelineRunRequest(BaseModel):
 
 class ExecutionBackendRequest(BaseModel):
     backend: str
+    audit_action: Optional[str] = None
+    audit_message: Optional[str] = None
 
 
 def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
@@ -514,6 +623,7 @@ def _log_queue_control_event(
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
     report = build_health_report()
+    background_tasks.add_task(maybe_send_broker_alert, report)
     background_tasks.add_task(maybe_send_execution_alert, report)
     background_tasks.add_task(maybe_send_health_alert, report)
     background_tasks.add_task(maybe_send_queue_alert, report)
@@ -553,8 +663,8 @@ def execution_backend() -> dict[str, Union[bool, str, list[str]]]:
 def execution_backend_update(payload: ExecutionBackendRequest) -> dict[str, Union[bool, str, list[str]]]:
     set_execution_backend(
         payload.backend,
-        audit_action=f"set_execution_backend:{payload.backend}",
-        audit_message=f"Execution backend set to {payload.backend}.",
+        audit_action=payload.audit_action or f"set_execution_backend:{payload.backend}",
+        audit_message=payload.audit_message or f"Execution backend set to {payload.backend}.",
     )
     return {
         **get_execution_backend_status(),
@@ -889,6 +999,37 @@ def rebuild_positions() -> dict[str, int]:
         connection.close()
 
 
+@app.post("/orders/reconcile")
+def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        ensure_positions_table(connection)
+        updated_symbols = update_positions(connection)
+        ensure_pnl_table(connection)
+        snapshot_count = update_pnl_snapshots(connection)
+        latest_orders = get_orders(connection, limit=5)
+        log_event(
+            event_type="execution_control",
+            status="reconciled",
+            source="execution_control",
+            message=payload.audit_message if payload is not None and payload.audit_message is not None else "Order reconciliation completed.",
+            payload={
+                "action": payload.audit_action if payload is not None and payload.audit_action is not None else "reconcile_orders",
+                "updated_symbols": updated_symbols,
+                "snapshot_count": snapshot_count,
+                "latest_order_count": len(latest_orders),
+            },
+        )
+        return {
+            "status": "reconciled",
+            "updated_symbols": updated_symbols,
+            "snapshot_count": snapshot_count,
+            "orders": latest_orders,
+        }
+    finally:
+        connection.close()
+
+
 @app.post("/pnl/update")
 def update_pnl() -> dict[str, int]:
     connection = get_connection()
@@ -1022,14 +1163,20 @@ def scheduler_strategy_apply_limit_preset(payload: SchedulerStrategyLimitPresetR
 
 
 @app.post("/scheduler/stop")
-def scheduler_stop() -> Dict[str, Union[str, bool]]:
-    stop_file = set_stop_flag()
+def scheduler_stop(payload: Optional[SchedulerControlRequest] = None) -> Dict[str, Union[str, bool]]:
+    stop_file = set_stop_flag(
+        audit_action=payload.audit_action if payload is not None and payload.audit_action is not None else "stop",
+        audit_message=payload.audit_message if payload is not None and payload.audit_message is not None else "Scheduler stop flag set.",
+    )
     return {"stopped": True, "stop_file": stop_file}
 
 
 @app.post("/scheduler/start")
-def scheduler_start() -> Dict[str, Union[str, bool]]:
-    removed, stop_file = clear_stop_flag()
+def scheduler_start(payload: Optional[SchedulerControlRequest] = None) -> Dict[str, Union[str, bool]]:
+    removed, stop_file = clear_stop_flag(
+        audit_action=payload.audit_action if payload is not None and payload.audit_action is not None else "start",
+        audit_message=payload.audit_message if payload is not None and payload.audit_message is not None else "Scheduler stop flag cleared.",
+    )
     return {"stopped": False, "stop_file": stop_file, "flag_removed": removed}
 
 
@@ -1047,8 +1194,12 @@ def kill_switch_status() -> dict:
 
 
 @app.post("/kill-switch/enable")
-def kill_switch_enable() -> Dict[str, Union[str, bool]]:
-    kill_switch_file = enable_kill_switch()
+def kill_switch_enable(payload: Optional[KillSwitchControlRequest] = None) -> Dict[str, Union[str, bool]]:
+    kill_switch_file = enable_kill_switch(
+        reason=payload.reason if payload is not None and payload.reason is not None else "Kill switch enabled.",
+        source=payload.source if payload is not None and payload.source is not None else "kill_switch",
+        notify_message=payload.notify_message if payload is not None else "Crypto alert: kill switch has been enabled.",
+    )
     return {"enabled": True, "kill_switch_file": kill_switch_file}
 
 

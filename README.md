@@ -81,6 +81,8 @@ export CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS=1
 export CRYPTO_USE_FAKE_KLINES=
 export CRYPTO_FAKE_KLINE_CLOSES=
 export CRYPTO_EXECUTION_BACKEND=paper
+export CRYPTO_ORDER_STALENESS_SECONDS=300
+export CRYPTO_RISK_REJECTION_STREAK_THRESHOLD=3
 export TELEGRAM_BOT_TOKEN=
 export TELEGRAM_CHAT_ID=8703043602
 ```
@@ -247,6 +249,9 @@ Docker Compose runtime validation status:
 - admin now exposes queue controls for enqueueing strategy jobs and draining strategy/execution jobs
 - admin queue controls also support retrying the latest failed strategy or execution job
 - admin queue summary now exposes per-job-type counts, failure/attempt metrics, retry counts, failure streaks, per-job-type latest failed/retried markers, recent terminal status trends/trend strings, overall latest failed/retried job details, and filterable recent jobs
+- health/admin now also expose `broker_protection`, which can degrade on execution-backend capability mismatches, stale non-terminal orders, and repeated risk rejections
+- broker protection now emits `reason_code`, `severity`, and `recommended_action` so alerts and admin can distinguish backend, stale-order, and reject-streak cases
+- admin issue chips now expose one-click broker-protection actions for switching back to `paper`, pausing the scheduler, enabling the kill switch, and reconciling orders
 - `curl http://127.0.0.1:8000/health` returns `status: ok` under Compose
 - PostgreSQL Compose startup now tolerates database boot lag via application-level connection retry
 - GitHub Actions now uses two workflows: `CI` for the core test suite and `Postgres Validation` for PostgreSQL smoke/runtime/readability checks
@@ -391,6 +396,7 @@ Control endpoints:
 - `POST /signals/test`
 - `POST /positions/rebuild`
 - `POST /pnl/update`
+- `POST /orders/reconcile`
 - `GET /scheduler/status`
 - `GET /scheduler/strategy`
 - `POST /scheduler/stop`
@@ -456,6 +462,7 @@ curl -s http://127.0.0.1:8000/execution/backend
 curl -s -X POST http://127.0.0.1:8000/execution/backend \
   -H "Content-Type: application/json" \
   -d '{"backend":"simulated_live"}'
+curl -s -X POST http://127.0.0.1:8000/orders/reconcile
 curl -s -X POST http://127.0.0.1:8000/queue/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_type":"strategy","strategy_names":["ma_cross","momentum_3bar"],"symbol_names":["BTCUSDT","ETHUSDT"]}'
@@ -485,6 +492,7 @@ Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin 
 - database table status
 - latest candle freshness
 - latest pipeline activity, including multi-symbol pipeline summary counts when available
+- broker/order protection status, including `reason_code`, `severity`, and `recommended_action` when protection is triggered
 - scheduler stop flag and latest log line
 - active runtime config values
 - kill switch status
@@ -497,10 +505,12 @@ Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin 
 - buttons for targeted pipeline runs, scheduler control, and kill switch control
 - runtime strategy and symbol controls for split workers
 - runtime execution backend control for `paper`, `noop`, and `simulated_live`
+- broker protection issue chips with direct actions for `switch_to_paper_backend`, `pause_scheduler`, `enable_kill_switch`, and `inspect_and_reconcile_orders`
 
 `GET /audit-events` provides:
 
 - recent structured audit records for pipeline, risk, scheduler, and kill switch actions
+- broker-protection-triggered control actions are now distinguishable in audit payloads, for example `broker_protection:switch_to_paper_backend`, `broker_protection:pause_scheduler`, and `broker_protection:reconcile_orders`
 
 `GET /alerts/status` provides:
 
@@ -591,6 +601,7 @@ Current event sources:
 - risk evaluations
 - scheduler start / stop control
 - kill switch enable / disable control
+- execution backend changes and order reconciliation
 
 ## Telegram Alerts
 
@@ -600,6 +611,7 @@ Current Telegram alert triggers:
 - kill switch enabled
 - health becomes degraded or error
 - queue contains failed jobs
+- broker protection becomes degraded
 - split worker heartbeats become stale
 - execution queue jobs fail
 

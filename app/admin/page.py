@@ -919,10 +919,33 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
         el("queue-detail").textContent = queueDetail.join(" ");
         const executionBackend = health.checks.execution_backend || { status: "degraded" };
+        const brokerProtection = health.checks.broker_protection || { status: "ok" };
         el("execution-backend-status").textContent = String(executionBackend.backend || "unknown").toUpperCase();
         el("execution-backend-status").className = `value ${statusClass(executionBackend.status)}`;
-        el("execution-backend-detail").textContent =
-          `${executionBackend.description || "unknown backend"} | dry_run=${Boolean(executionBackend.dry_run)} | can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`;
+        const executionDetail = [
+          `${executionBackend.description || "unknown backend"}`,
+          `dry_run=${Boolean(executionBackend.dry_run)}`,
+          `can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`,
+        ];
+          if (brokerProtection.status === "degraded") {
+          executionDetail.push(`broker_protection=${brokerProtection.reason || "degraded"}`);
+          if (brokerProtection.reason_code) {
+            executionDetail.push(`code=${brokerProtection.reason_code}`);
+          }
+          if (brokerProtection.severity) {
+            executionDetail.push(`severity=${brokerProtection.severity}`);
+          }
+          if (brokerProtection.recommended_action) {
+            executionDetail.push(`action=${brokerProtection.recommended_action}`);
+          }
+          if (brokerProtection.rejected_risk_streak !== undefined) {
+            executionDetail.push(`reject_streak=${brokerProtection.rejected_risk_streak}`);
+          }
+          if (brokerProtection.latest_order?.status) {
+            executionDetail.push(`latest_order_status=${brokerProtection.latest_order.status}`);
+          }
+        }
+        el("execution-backend-detail").textContent = executionDetail.join(" | ");
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 
@@ -935,6 +958,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           ["db", health.checks.database.status],
           ["candles", health.checks.candles.status],
           ["execution", health.checks.execution_backend?.backend || "unknown"],
+          ["broker", brokerProtection.status || "unknown"],
         ];
         for (const [label, value] of chips) {
           const chip = document.createElement("div");
@@ -963,10 +987,32 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         for (const issue of issues) {
           const chip = document.createElement("div");
+          const detailBits = [];
+          let issueActionButton = "";
+          if (issue.name === "broker_protection") {
+            const brokerCheck = health.checks.broker_protection || {};
+            if (brokerCheck.backend) detailBits.push(`backend=${brokerCheck.backend}`);
+            if (brokerCheck.reason_code) detailBits.push(`code=${brokerCheck.reason_code}`);
+            if (brokerCheck.severity) detailBits.push(`severity=${brokerCheck.severity}`);
+            if (brokerCheck.recommended_action) detailBits.push(`action=${brokerCheck.recommended_action}`);
+            if (brokerCheck.approved_risk_count !== undefined) detailBits.push(`approved=${brokerCheck.approved_risk_count}`);
+            if (brokerCheck.rejected_risk_streak !== undefined) detailBits.push(`reject_streak=${brokerCheck.rejected_risk_streak}`);
+            if (brokerCheck.latest_order?.status) detailBits.push(`latest_order=${brokerCheck.latest_order.status}`);
+            if (brokerCheck.latest_order?.age_seconds !== undefined) detailBits.push(`latest_order_age=${brokerCheck.latest_order.age_seconds}s`);
+            if (brokerCheck.recommended_action === "switch_to_paper_backend") {
+              issueActionButton = ' <button type="button" class="secondary" data-action="broker-switch-paper">Switch to paper</button>';
+            } else if (brokerCheck.recommended_action === "pause_scheduler") {
+              issueActionButton = ' <button type="button" class="secondary" data-action="broker-pause-scheduler">Pause scheduler</button>';
+            } else if (brokerCheck.recommended_action === "enable_kill_switch") {
+              issueActionButton = ' <button type="button" class="danger" data-action="broker-enable-kill">Enable kill switch</button>';
+            } else if (brokerCheck.recommended_action === "inspect_and_reconcile_orders") {
+              issueActionButton = ' <button type="button" class="secondary" data-action="broker-reconcile-orders">Reconcile orders</button>';
+            }
+          }
           chip.className = "chip";
           chip.innerHTML =
             `<strong>${issue.name}</strong>: ` +
-            `<span class="${statusClass(issue.status)}">${issue.reason}</span>`;
+            `<span class="${statusClass(issue.status)}">${issue.reason}${detailBits.length ? ` | ${detailBits.join(" | ")}` : ""}</span>${issueActionButton}`;
           issueStrip.appendChild(chip);
         }
 
@@ -1380,9 +1426,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : '<span class="chip">No recent preset actions.</span>';
         }
         const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
-          .filter((event) => event.event_type === "scheduler_control" || event.event_type === "execution_control")
+          .filter((event) => event.event_type === "scheduler_control" || event.event_type === "execution_control" || event.event_type === "kill_switch")
           .filter((event) => {
             if (event.event_type === "execution_control") {
+              return schedulerControlFilterMode === "all";
+            }
+            if (event.event_type === "kill_switch") {
               return schedulerControlFilterMode === "all";
             }
             if (schedulerControlFilterMode === "all") return true;
@@ -1811,8 +1860,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "auto-refresh-toggle": "pipeline-message",
           "scheduler-start": "scheduler-message",
           "scheduler-stop": "scheduler-message",
+          "broker-pause-scheduler": "scheduler-message",
           "scheduler-strategy-save": "scheduler-message",
           "execution-backend-save": "scheduler-message",
+          "broker-switch-paper": "scheduler-message",
+          "broker-reconcile-orders": "scheduler-message",
           "queue-recover-pipeline": "queue-message",
           "queue-clear-pipeline": "queue-message",
           "queue-enqueue-strategy": "queue-message",
@@ -1820,6 +1872,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-drain-execution": "queue-message",
           "queue-retry-strategy": "queue-message",
           "queue-retry-execution": "queue-message",
+          "broker-enable-kill": "kill-message",
           "kill-enable": "kill-message",
           "kill-disable": "kill-message",
           "alert-test": "alerts-message",
@@ -1852,6 +1905,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             result = await api("/scheduler/start", { method: "POST" });
           } else if (type === "scheduler-stop") {
             result = await api("/scheduler/stop", { method: "POST" });
+          } else if (type === "broker-pause-scheduler") {
+            result = await api("/scheduler/stop", {
+              method: "POST",
+              body: JSON.stringify({
+                audit_action: "broker_protection:pause_scheduler",
+                audit_message: "Scheduler paused from broker protection recommendation.",
+              }),
+            });
           } else if (type === "scheduler-strategy-save") {
             const payload = collectSchedulerStrategyPayload();
             payload.audit_action = "save_strategy_state";
@@ -1871,6 +1932,27 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               method: "POST",
               body: JSON.stringify({
                 backend: el("execution-backend-select")?.value || "paper",
+              }),
+            });
+          } else if (type === "broker-switch-paper") {
+            const executionBackendSelect = el("execution-backend-select");
+            if (executionBackendSelect) {
+              executionBackendSelect.value = "paper";
+            }
+            result = await api("/execution/backend", {
+              method: "POST",
+              body: JSON.stringify({
+                backend: "paper",
+                audit_action: "broker_protection:switch_to_paper_backend",
+                audit_message: "Execution backend switched to paper from broker protection recommendation.",
+              }),
+            });
+          } else if (type === "broker-reconcile-orders") {
+            result = await api("/orders/reconcile", {
+              method: "POST",
+              body: JSON.stringify({
+                audit_action: "broker_protection:reconcile_orders",
+                audit_message: "Order reconciliation triggered from broker protection recommendation.",
               }),
             });
           } else if (type === "scheduler-preset-top1") {
@@ -1948,6 +2030,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             });
           } else if (type === "kill-enable") {
             result = await api("/kill-switch/enable", { method: "POST" });
+          } else if (type === "broker-enable-kill") {
+            result = await api("/kill-switch/enable", {
+              method: "POST",
+              body: JSON.stringify({
+                reason: "Kill switch enabled from broker protection recommendation.",
+                source: "broker_protection",
+                notify_message: "Crypto alert: kill switch enabled from broker protection recommendation.",
+              }),
+            });
           } else if (type === "kill-disable") {
             result = await api("/kill-switch/disable", { method: "POST" });
           } else if (type === "alert-test") {
@@ -1967,6 +2058,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       document.querySelectorAll("[data-action]").forEach((button) => {
         button.addEventListener("click", () => runAction(button.dataset.action));
+      });
+
+      el("issue-strip")?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-action]");
+        if (!button) return;
+        runAction(button.dataset.action);
       });
 
       document.querySelectorAll("[data-refresh]").forEach((button) => {

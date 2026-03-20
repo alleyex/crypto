@@ -79,7 +79,7 @@
 - [~] 分離 API 與 worker
   目標：降低彼此干擾。
   交付物：可獨立部署的 API 與 worker。
-  備註：已拆出 `data-worker`、`strategy-worker`、`execution-worker` Compose services，job module / entrypoint / scheduler mode / heartbeat / log 已分離；尚未引入 queue，也還不是獨立事件驅動 worker 架構。
+  備註：已拆出 `data-worker`、`strategy-worker`、`execution-worker` Compose services，job module / entrypoint / scheduler mode / heartbeat / log 已分離；pipeline 已支援 queue-native orchestration 與 batch control，但尚未完全收斂成純事件驅動 worker runtime。
 
 - [~] 建立市場資料 worker
   目標：將行情接入獨立處理。
@@ -89,17 +89,17 @@
 - [~] 建立策略 worker
   目標：支援多策略排程。
   交付物：strategy worker。
-  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 都已可跑；尚未做真正的 worker isolation 與 queue-based dispatch。
+  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 都已可跑，且 pipeline / queue path 已可共用 dispatcher；尚未做更完整的 worker isolation 與 strategy group orchestration。
 
 - [~] 建立 execution worker
   目標：將重試與同步邏輯獨立。
   交付物：execution worker。
-  備註：`execution-only` mode 與 `execution-worker` 已可獨立執行，並可依 active symbols 過濾 pending risks；尚未做更完整的 retry / reconciliation worker 化。
+  備註：`execution-only` mode 與 `execution-worker` 已可獨立執行，並可依 active symbols 過濾 pending risks；已補 queue retry / stale batch recover / clear 與 audit trail，尚未做更完整的 reconciliation worker 化。
 
-- [~] 引入 Redis 或簡易 queue
+- [x] 引入 Redis 或簡易 queue
   目標：支援非同步任務分派。
   交付物：初版 queue。
-  備註：已完成 persistent `job_queue`、enqueue/list、`run-next`、scheduler queue-dispatch / queue-drain、health/admin queue summary、retry controls 與 queue observability；尚未完成 full queue-native runtime 與更完整 backpressure / worker orchestration。
+  備註：已完成 persistent `job_queue`、enqueue/list、`run-next`、pipeline batch dispatch / drain / queue_batch、health/admin queue summary、retry / recover / clear controls、stale batch detection、queue alerting 與 queue control audit trail。
 
 - [~] 支援多商品
   目標：從單一資產擴展。
@@ -111,10 +111,10 @@
   交付物：strategy registry。
   備註：目前已有 strategy registry、runtime strategy control、priority/limit/enable-disable、leaderboard、closed trade reporting；風控與 execution 雖已能配合多策略運作，但集中化治理仍可再加強。
 
-- [~] 建立告警通知
+- [x] 建立告警通知
   目標：異常時可即時通知。
   交付物：Telegram 或 Slack alerts。
-  備註：Telegram alert、health alert dedupe、queue failure alert、stale worker alert、execution failure alert、test endpoint 已完成；更細的 order-level / broker-level operational coverage 仍可再補。
+  備註：Telegram alert、health alert dedupe、queue failure / stale batch alert、stale worker alert、execution failure alert、test endpoint 與 queue control audit 已完成；更細的 order-level / broker-level operational coverage 仍可再補。
 
 ## Stage 3 Production
 
@@ -198,6 +198,24 @@
 - 實際完成日
 - 阻塞因素
 - 驗收標準
+
+## 目前建議優先開工
+
+- [ ] 補完 Stage 1 正式 `daily ledger`
+  目標：讓單日損益限制不再依賴保守版邏輯。
+  備註：這是目前最明確的 MVP 風控缺口。
+
+- [ ] 累積一週 paper trading / soak validation 紀錄
+  目標：關閉 Stage 1 驗證缺口。
+  備註：目前已有 soak validation 與摘要，但尚未累積完整一週紀錄。
+
+- [ ] 推進 broker adapter groundwork
+  目標：讓 `simulated_live` 不再只是 placeholder。
+  備註：這是 Stage 3 最自然的起點，也最能承接目前的 execution backend abstraction。
+
+- [ ] 補 broker / order-level alerting 與保護機制
+  目標：讓 operational alerts 從 queue / worker 層延伸到下單與 broker 層。
+  備註：目前 health、queue、execution alert 已有骨架，可在此基礎上擴充。
 
 ## 里程碑
 

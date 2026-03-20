@@ -39,33 +39,41 @@ def _log_scheduler_control_event(
     )
 
 
-def set_stop_flag() -> str:
+def set_stop_flag(
+    *,
+    audit_action: str = "stop",
+    audit_message: str = "Scheduler stop flag set.",
+) -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     STOP_FILE.write_text("stop\n", encoding="utf-8")
     send_telegram_message("Crypto alert: scheduler stop flag has been set.")
     _log_scheduler_control_event(
         status="stopped",
-        action="stop",
-        message="Scheduler stop flag set.",
+        action=audit_action,
+        message=audit_message,
         payload={"stop_file": str(STOP_FILE)},
     )
     return str(STOP_FILE)
 
 
-def clear_stop_flag() -> Tuple[bool, str]:
+def clear_stop_flag(
+    *,
+    audit_action: str = "start",
+    audit_message: str = "Scheduler stop flag cleared.",
+) -> Tuple[bool, str]:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
         _log_scheduler_control_event(
             status="started",
-            action="start",
-            message="Scheduler stop flag cleared.",
+            action=audit_action,
+            message=audit_message,
             payload={"stop_file": str(STOP_FILE), "flag_removed": True},
         )
         return True, str(STOP_FILE)
     _log_scheduler_control_event(
         status="started",
-        action="start",
-        message="Scheduler start requested but no stop flag was present.",
+        action=audit_action,
+        message=audit_message if audit_message != "Scheduler stop flag cleared." else "Scheduler start requested but no stop flag was present.",
         payload={"stop_file": str(STOP_FILE), "flag_removed": False},
     )
     return False, str(STOP_FILE)
