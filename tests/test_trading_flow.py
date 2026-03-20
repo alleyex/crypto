@@ -29,6 +29,7 @@ from app.core.job_queue import fail_job
 from app.core.job_queue import get_job
 from app.core.job_queue import lease_next_job
 from app.core.job_queue import list_jobs
+from app.core.job_queue import reclaim_stale_leased_jobs
 from app.core.job_queue import retry_job
 from app.core.job_queue import run_pipeline_batch
 from app.core.job_queue import run_next_pipeline_batch
@@ -67,7 +68,10 @@ from app.execution.paper_broker import execute_pending_approved_risks
 from app.execution.paper_broker import execute_latest_risk
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import NoopExecutionAdapter
+from app.execution.adapter import SimulatedLiveExecutionAdapter
 from app.execution.adapter import get_execution_adapter_name
+from app.execution.live_broker import SimulatedBrokerClient
+from app.execution import live_broker
 from app.execution.runtime import get_execution_backend_runtime_status
 from app.execution.runtime import set_execution_backend
 from app.pipeline.execution_job import run_execution_job
@@ -108,6 +112,7 @@ from app.scheduler.runner import run_scheduler
 from app.scheduler.control import read_effective_active_strategies
 from app.system.heartbeat import get_heartbeats
 from app.system.heartbeat import upsert_heartbeat
+from app.validation.soak_history import build_soak_history_summary
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
@@ -2883,6 +2888,120 @@ def test_maybe_send_broker_alert_clears_state_when_protection_recovers(monkeypat
     assert not state_file.exists()
 
 
+def test_pipeline_check_includes_latest_fill_and_unfilled_order_count() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        from app.execution.paper_broker import execute_pending_approved_risks as paper_exec
+        paper_exec(connection, symbol_names=["BTCUSDT"])
+
+        _pipeline_check = __import__("app.api.main", fromlist=["_pipeline_check"])._pipeline_check
+        result = _pipeline_check(connection)
+
+        assert result["status"] == "ok"
+        assert "latest_order" in result
+        assert result["latest_order"]["symbol"] == "BTCUSDT"
+        assert result["latest_order"]["qty"] == 0.001
+        assert result["latest_order"]["status"] == "FILLED"
+        assert "latest_fill" in result
+        assert result["latest_fill"]["symbol"] == "BTCUSDT"
+        assert result["latest_fill"]["side"] == "BUY"
+        assert result["latest_fill"]["price"] == 14.0
+        assert result["unfilled_order_count"] == 0
+    finally:
+        connection.close()
+
+
+def test_pipeline_check_counts_unfilled_orders() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status)
+            VALUES ('test-uuid-1', 1, 'BTCUSDT', '1m', 'manual_test', 'BUY', 0.001, 50000.0, 'FILLED');
+            """
+        )
+        connection.commit()
+
+        _pipeline_check = __import__("app.api.main", fromlist=["_pipeline_check"])._pipeline_check
+        result = _pipeline_check(connection)
+
+        assert result["unfilled_order_count"] == 1
+    finally:
+        connection.close()
+
+
+def test_broker_protection_check_degrades_on_unfilled_orders() -> None:
+    result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+        make_connection(),
+        {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+        {"unfilled_order_count": 2},
+    )
+
+    assert result["status"] == "degraded"
+    assert result["severity"] == "high"
+    assert result["reason_code"] == "unfilled_orders_detected"
+    assert result["recommended_action"] == "inspect_and_reconcile_orders"
+    assert result["unfilled_order_count"] == 2
+    assert "2 order(s)" in result["reason"]
+
+
+def test_broker_protection_check_ok_when_no_unfilled_orders() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"unfilled_order_count": 0},
+        )
+        assert result["status"] == "ok"
+        assert result.get("reason_code") is None
+    finally:
+        connection.close()
+
+
+def test_maybe_send_broker_alert_includes_unfilled_orders_in_message(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "broker_alert_state.json"
+    sent_messages: list[str] = []
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.broker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    report = {
+        "checks": {
+            "broker_protection": {
+                "status": "degraded",
+                "backend": "paper",
+                "reason": "2 order(s) have no corresponding fill.",
+                "reason_code": "unfilled_orders_detected",
+                "severity": "high",
+                "recommended_action": "inspect_and_reconcile_orders",
+                "unfilled_order_count": 2,
+            }
+        }
+    }
+
+    result = maybe_send_broker_alert(report)
+
+    assert result["sent"] is True
+    assert len(sent_messages) == 1
+    assert "unfilled_orders=2" in sent_messages[0]
+
+
 def test_admin_page_is_served() -> None:
     client = TestClient(app)
 
@@ -3354,6 +3473,14 @@ def test_build_health_report_includes_queue_summary(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr("app.api.main._heartbeat_check", lambda connection: {"status": "ok", "components": []})
+    monkeypatch.setattr(
+        "app.api.main._execution_backend_check",
+        lambda: {"status": "ok", "backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+    )
+    monkeypatch.setattr(
+        "app.api.main._broker_protection_check",
+        lambda connection, execution_backend_check, pipeline_check: {"status": "ok"},
+    )
     monkeypatch.setattr(
         "app.api.main.get_stop_status",
         lambda: {"stopped": False, "stop_file": "runtime/scheduler.stop"},
@@ -4014,6 +4141,69 @@ def test_scheduler_symbol_endpoints_round_trip(monkeypatch) -> None:
     assert captured["kwargs"]["audit_action"] == "set_active_symbols"
 
 
+def test_reclaim_stale_leased_jobs_resets_expired_lease() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        leased = lease_next_job(connection, job_type="strategy")
+        assert leased is not None
+        assert leased["status"] == "leased"
+
+        # Simulate a stale lease by back-dating started_at.
+        connection.execute(
+            "UPDATE job_queue SET started_at = '2000-01-01 00:00:00' WHERE id = ?;",
+            (job_id,),
+        )
+        connection.commit()
+
+        reclaimed = reclaim_stale_leased_jobs(connection, lease_timeout_seconds=300)
+        assert reclaimed == 1
+
+        recovered = get_job(connection, job_id)
+        assert recovered is not None
+        assert recovered["status"] == "queued"
+        assert recovered["started_at"] is None
+    finally:
+        connection.close()
+
+
+def test_reclaim_stale_leased_jobs_ignores_fresh_leases() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        leased = lease_next_job(connection, job_type="strategy")
+        assert leased is not None
+
+        # Fresh lease — should NOT be reclaimed.
+        reclaimed = reclaim_stale_leased_jobs(connection, lease_timeout_seconds=300)
+        assert reclaimed == 0
+
+        job = get_job(connection, int(leased["id"]))
+        assert job is not None
+        assert job["status"] == "leased"
+    finally:
+        connection.close()
+
+
+def test_reclaim_stale_leased_jobs_ignores_completed_and_failed() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "strategy", payload={})
+        complete_job(connection, job_id, result={"status": "ok"})
+
+        reclaimed = reclaim_stale_leased_jobs(connection, lease_timeout_seconds=0)
+        assert reclaimed == 0
+
+        job = get_job(connection, job_id)
+        assert job is not None
+        assert job["status"] == "completed"
+    finally:
+        connection.close()
+
+
 def test_job_queue_lifecycle_round_trip() -> None:
     connection = make_connection()
     try:
@@ -4067,6 +4257,7 @@ def test_job_queue_lifecycle_round_trip() -> None:
                 "description": "Paper broker execution backend.",
                 "dry_run": False,
                 "can_execute_orders": True,
+                "is_live": False,
                 "placeholder": False,
                 "status": "ok",
             },
@@ -4156,6 +4347,7 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
             "description": "Paper broker execution backend.",
             "dry_run": False,
             "can_execute_orders": True,
+            "is_live": False,
             "placeholder": False,
             "status": "ok",
         },
@@ -5278,6 +5470,7 @@ def test_get_execution_backend_status_reports_capabilities(monkeypatch) -> None:
         "description": "No-op execution backend for dry-run validation.",
         "dry_run": True,
         "can_execute_orders": False,
+        "is_live": False,
         "placeholder": False,
         "status": "ok",
     }
@@ -5287,12 +5480,142 @@ def test_get_execution_backend_status_supports_simulated_live(monkeypatch) -> No
     monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "simulated_live")
     assert get_execution_backend_status() == {
         "backend": "simulated_live",
-        "description": "Placeholder live-style backend backed by simulated paper fills.",
+        "description": "Live-style execution backend backed by a simulated broker client.",
         "dry_run": False,
         "can_execute_orders": True,
-        "placeholder": True,
+        "is_live": False,
+        "placeholder": False,
         "status": "ok",
     }
+
+
+def test_simulated_broker_client_place_order_returns_fill_at_ref_price() -> None:
+    client = SimulatedBrokerClient()
+    result = client.place_order(symbol="BTCUSDT", side="BUY", qty=0.001, ref_price=50000.0)
+    assert result == {
+        "status": "FILLED",
+        "fill_price": 50000.0,
+        "fill_qty": 0.001,
+    }
+    assert client.broker_name == "simulated"
+
+
+def test_live_broker_execute_risk_event_id_writes_order_and_fill() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        broker = SimulatedBrokerClient()
+        result = live_broker.execute_risk_event_id(connection, int(risk["id"]), broker)
+
+        assert result is not None
+        assert result["status"] == "FILLED"
+        assert result["symbol"] == "BTCUSDT"
+        assert result["side"] == "BUY"
+        assert result["qty"] == 0.001
+        assert result["broker"] == "simulated"
+
+        orders = get_orders(connection, limit=5)
+        assert len(orders) == 1
+        assert orders[0]["status"] == "FILLED"
+
+        fills = get_fills(connection, limit=5)
+        assert len(fills) == 1
+        assert fills[0]["price"] == result["price"]
+    finally:
+        connection.close()
+
+
+def test_live_broker_skips_already_executed_risk_event() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        broker = SimulatedBrokerClient()
+        risk_id = int(risk["id"])
+        live_broker.execute_risk_event_id(connection, risk_id, broker)
+        second = live_broker.execute_risk_event_id(connection, risk_id, broker)
+
+        assert second is not None
+        assert second.get("reason") == "Already executed"
+        assert len(get_orders(connection, limit=10)) == 1
+    finally:
+        connection.close()
+
+
+def test_simulated_live_adapter_executes_pending_risks_end_to_end() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        adapter = SimulatedLiveExecutionAdapter()
+        results = adapter.execute_pending_approved_risks(connection, symbol_names=["BTCUSDT"])
+
+        assert len(results) == 1
+        result = results[0]
+        assert result["status"] == "FILLED"
+        assert result["symbol"] == "BTCUSDT"
+        assert result["broker"] == "simulated"
+
+        orders = get_orders(connection, limit=5)
+        assert len(orders) == 1
+
+        fills = get_fills(connection, limit=5)
+        assert len(fills) == 1
+    finally:
+        connection.close()
+
+
+def test_simulated_live_adapter_execute_risk_event_ids() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        adapter = SimulatedLiveExecutionAdapter()
+        results = adapter.execute_risk_event_ids(connection, [int(risk["id"])])
+
+        assert len(results) == 1
+        assert results[0]["status"] == "FILLED"
+        assert results[0]["broker"] == "simulated"
+    finally:
+        connection.close()
+
+
+def test_simulated_live_adapter_is_not_placeholder() -> None:
+    adapter = SimulatedLiveExecutionAdapter()
+    assert adapter.placeholder is False
+    assert adapter.is_live is False
+    assert adapter.can_execute_orders is True
+    assert adapter.dry_run is False
+    assert adapter.name == "simulated_live"
 
 
 def test_execution_backend_runtime_status_round_trip(tmp_path, monkeypatch) -> None:
@@ -5679,6 +6002,7 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
             "description": "Paper broker execution backend.",
             "dry_run": False,
             "can_execute_orders": True,
+            "is_live": False,
             "placeholder": False,
             "status": "ok",
         },
@@ -6235,6 +6559,34 @@ def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path)
     assert history[0]["checked_at"] == "2026-03-18T10:00:00+00:00"
 
 
+def test_build_soak_history_summary_reports_progress(monkeypatch, tmp_path) -> None:
+    history_file = tmp_path / "soak_history.jsonl"
+    monkeypatch.setattr("app.validation.soak_history.SOAK_HISTORY_FILE", history_file)
+    history_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"status": "ok", "checked_at": "2026-03-18T08:00:00+00:00"}),
+                json.dumps({"status": "degraded", "checked_at": "2026-03-19T08:00:00+00:00"}),
+                json.dumps({"status": "ok", "checked_at": "2026-03-20T20:00:00+00:00"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = build_soak_history_summary()
+
+    assert summary["status"] == "ok"
+    assert summary["record_count"] == 3
+    assert summary["distinct_utc_dates"] == 3
+    assert summary["ok_count"] == 2
+    assert summary["degraded_count"] == 1
+    assert summary["error_count"] == 0
+    assert summary["continuous_span_hours"] == 60.0
+    assert summary["remaining_hours_to_target"] == 108.0
+    assert summary["meets_weekly_target"] is False
+
+
 def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_path) -> None:
     history_file = tmp_path / "soak_history.jsonl"
     monkeypatch.setattr("app.validation.soak_history.SOAK_HISTORY_FILE", history_file)
@@ -6245,6 +6597,10 @@ def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_pa
     monkeypatch.setattr(
         "app.validation.soak_history.build_soak_validation_report",
         lambda: {"status": "ok", "checked_at": "2026-03-18T10:00:00+00:00", "issues": []},
+    )
+    monkeypatch.setattr(
+        "app.api.main.build_soak_history_summary",
+        lambda: {"status": "ok", "continuous_span_hours": 60.0},
     )
 
     client = TestClient(app)
@@ -6263,6 +6619,10 @@ def test_soak_validation_endpoints_return_report_and_history(monkeypatch, tmp_pa
     assert len(history) == 1
     assert history[0]["status"] == "ok"
 
+    summary_response = client.get("/validation/soak/history/summary")
+    assert summary_response.status_code == 200
+    assert summary_response.json()["continuous_span_hours"] == 60.0
+
 
 def test_execution_backend_endpoint() -> None:
     client = TestClient(app)
@@ -6277,6 +6637,7 @@ def test_execution_backend_endpoint() -> None:
         "default_backend": "paper",
         "dry_run": False,
         "can_execute_orders": True,
+        "is_live": False,
         "execution_backend_file": "runtime/execution.backend",
         "placeholder": False,
         "status": "ok",
