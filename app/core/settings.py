@@ -46,6 +46,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_TIMEOUT_SECONDS = _get_int("TELEGRAM_TIMEOUT_SECONDS", 5)
 DEFAULT_STRATEGY_NAME = os.getenv("CRYPTO_STRATEGY_NAME", "ma_cross").strip() or "ma_cross"
 EXECUTION_BACKEND = os.getenv("CRYPTO_EXECUTION_BACKEND", "paper").strip().lower() or "paper"
+BINANCE_API_KEY = os.getenv("CRYPTO_BINANCE_API_KEY", "").strip()
+BINANCE_API_SECRET = os.getenv("CRYPTO_BINANCE_API_SECRET", "").strip()
+BINANCE_TESTNET = os.getenv("CRYPTO_BINANCE_TESTNET", "true").strip().lower() != "false"
 DEFAULT_PIPELINE_ORCHESTRATION = _get_choice(
     "CRYPTO_PIPELINE_ORCHESTRATION",
     "queue_batch",

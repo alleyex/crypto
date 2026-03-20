@@ -5677,6 +5677,85 @@ def test_get_execution_backend_status_supports_simulated_live(monkeypatch) -> No
     }
 
 
+def test_get_execution_backend_status_supports_binance(monkeypatch) -> None:
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "binance")
+    monkeypatch.setattr("app.core.settings.BINANCE_API_KEY", "test-key")
+    monkeypatch.setattr("app.core.settings.BINANCE_API_SECRET", "test-secret")
+    status = get_execution_backend_status()
+    assert status["backend"] == "binance"
+    assert status["is_live"] is True
+    assert status["can_execute_orders"] is True
+    assert status["dry_run"] is False
+    assert status["placeholder"] is False
+    assert status["status"] == "ok"
+
+
+def test_binance_broker_client_raises_without_credentials() -> None:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    client = BinanceBrokerClient(api_key="", api_secret="", testnet=True)
+    try:
+        client.place_order(symbol="BTCUSDT", side="BUY", qty=0.001, ref_price=50000.0)
+        assert False, "Expected ValueError"
+    except ValueError as exc:
+        assert "CRYPTO_BINANCE_API_KEY" in str(exc)
+
+
+def test_binance_broker_client_uses_testnet_url_by_default() -> None:
+    from app.execution.binance_broker import BinanceBrokerClient, TESTNET_BASE_URL, MAINNET_BASE_URL
+
+    testnet_client = BinanceBrokerClient(api_key="k", api_secret="s", testnet=True)
+    mainnet_client = BinanceBrokerClient(api_key="k", api_secret="s", testnet=False)
+    assert testnet_client._base_url == TESTNET_BASE_URL
+    assert mainnet_client._base_url == MAINNET_BASE_URL
+
+
+def test_binance_broker_client_place_order_calls_api(monkeypatch) -> None:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    posted: list = []
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "orderId": 99,
+                "status": "FILLED",
+                "executedQty": "0.001",
+                "fills": [{"price": "51000.0", "qty": "0.001"}],
+            }
+
+    def fake_post(url, headers=None, timeout=None):
+        posted.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.execution.binance_broker.requests.post", fake_post)
+
+    client = BinanceBrokerClient(api_key="test-key", api_secret="test-secret", testnet=True)
+    result = client.place_order(symbol="BTCUSDT", side="BUY", qty=0.001, ref_price=50000.0)
+
+    assert len(posted) == 1
+    assert "testnet.binance.vision" in posted[0]
+    assert "BTCUSDT" in posted[0]
+    assert "BUY" in posted[0]
+    assert result["status"] == "FILLED"
+    assert result["fill_price"] == 51000.0
+    assert result["fill_qty"] == 0.001
+    assert result["order_id"] == "99"
+
+
+def test_binance_broker_client_weighted_avg_fill_price() -> None:
+    from app.execution.binance_broker import _weighted_avg_fill_price
+
+    fills = [
+        {"price": "50000.0", "qty": "0.001"},
+        {"price": "50200.0", "qty": "0.002"},
+    ]
+    avg = _weighted_avg_fill_price(fills)
+    expected = (50000.0 * 0.001 + 50200.0 * 0.002) / 0.003
+    assert abs(avg - expected) < 0.01
+
+
 def test_simulated_broker_client_place_order_returns_fill_at_ref_price() -> None:
     client = SimulatedBrokerClient()
     result = client.place_order(symbol="BTCUSDT", side="BUY", qty=0.001, ref_price=50000.0)

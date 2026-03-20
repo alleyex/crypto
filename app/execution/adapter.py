@@ -195,6 +195,62 @@ class SimulatedLiveExecutionAdapter:
         )
 
 
+class BinanceLiveExecutionAdapter:
+    """Live execution adapter routing orders through BinanceBrokerClient.
+
+    Uses Binance Spot testnet by default (CRYPTO_BINANCE_TESTNET=true).
+    Set CRYPTO_BINANCE_TESTNET=false only after soak validation is complete.
+    Requires CRYPTO_BINANCE_API_KEY and CRYPTO_BINANCE_API_SECRET to be set.
+    """
+
+    name = "binance"
+    description = "Live execution backend using Binance Spot API."
+    dry_run = False
+    can_execute_orders = True
+    is_live = True
+    placeholder = False
+
+    def __init__(self) -> None:
+        from app.execution.binance_broker import BinanceBrokerClient
+        self._broker = BinanceBrokerClient()
+
+    def ensure_tables(self, connection: DBConnection) -> None:
+        paper_broker.ensure_tables(connection)
+
+    def execute_latest_risk(
+        self,
+        connection: DBConnection,
+        order_qty: float = 0.001,
+    ) -> Optional[ExecutionResult]:
+        return live_broker.execute_latest_risk(connection, self._broker, order_qty=order_qty)
+
+    def execute_pending_approved_risks(
+        self,
+        connection: DBConnection,
+        order_qty: float = 0.001,
+        symbol_names: Optional[List[str]] = None,
+    ) -> List[ExecutionResult]:
+        return live_broker.execute_pending_approved_risks(
+            connection,
+            self._broker,
+            order_qty=order_qty,
+            symbol_names=symbol_names,
+        )
+
+    def execute_risk_event_ids(
+        self,
+        connection: DBConnection,
+        risk_event_ids: List[int],
+        order_qty: float = 0.001,
+    ) -> List[ExecutionResult]:
+        return live_broker.execute_risk_event_ids(
+            connection,
+            risk_event_ids,
+            self._broker,
+            order_qty=order_qty,
+        )
+
+
 def get_execution_adapter() -> ExecutionAdapter:
     configured_backend = read_configured_execution_backend()
     if configured_backend == "paper":
@@ -203,6 +259,8 @@ def get_execution_adapter() -> ExecutionAdapter:
         return NoopExecutionAdapter()
     if configured_backend == "simulated_live":
         return SimulatedLiveExecutionAdapter()
+    if configured_backend == "binance":
+        return BinanceLiveExecutionAdapter()
     raise ValueError(f"Unsupported execution backend: {configured_backend}")
 
 
