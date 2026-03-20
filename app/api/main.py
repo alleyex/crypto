@@ -95,6 +95,7 @@ from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
+from app.validation.soak_history import build_soak_history_summary
 from app.validation.soak_report import build_soak_validation_report
 
 
@@ -196,6 +197,7 @@ def _execution_backend_check() -> dict[str, Any]:
         "backend": backend_status["backend"],
         "dry_run": backend_status["dry_run"],
         "can_execute_orders": backend_status["can_execute_orders"],
+        "is_live": backend_status.get("is_live", False),
         "placeholder": backend_status.get("placeholder", False),
     }
 
@@ -253,6 +255,16 @@ def _broker_protection_check(
             result["reason"] = "Latest order is stale and still not terminal."
             result["recommended_action"] = "inspect_and_reconcile_orders"
             return result
+
+    unfilled_order_count = int(pipeline_check.get("unfilled_order_count") or 0) if isinstance(pipeline_check, dict) else 0
+    if unfilled_order_count > 0:
+        result["status"] = "degraded"
+        result["severity"] = "high"
+        result["reason_code"] = "unfilled_orders_detected"
+        result["reason"] = f"{unfilled_order_count} order(s) have no corresponding fill."
+        result["recommended_action"] = "inspect_and_reconcile_orders"
+        result["unfilled_order_count"] = unfilled_order_count
+        return result
 
     rejection_rows = connection.execute(
         """
@@ -313,10 +325,27 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     ).fetchone()
     latest_order = connection.execute(
         """
-        SELECT side, status, created_at
+        SELECT side, symbol, qty, status, created_at
         FROM orders
         ORDER BY id DESC
         LIMIT 1;
+        """
+    ).fetchone()
+    latest_fill = connection.execute(
+        """
+        SELECT symbol, side, qty, price, created_at
+        FROM fills
+        ORDER BY id DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+    unfilled_order_count = connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM orders o
+        LEFT JOIN fills f ON f.order_id = o.id
+        WHERE f.id IS NULL
+          AND o.status NOT IN ('CANCELLED', 'REJECTED', 'EXPIRED');
         """
     ).fetchone()
     pipeline_heartbeat = connection.execute(
@@ -369,10 +398,22 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     if latest_order is not None:
         result["latest_order"] = {
             "side": latest_order[0],
-            "status": latest_order[1],
-            "created_at": latest_order[2],
-            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_order[2])).total_seconds()),
+            "symbol": latest_order[1],
+            "qty": latest_order[2],
+            "status": latest_order[3],
+            "created_at": latest_order[4],
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_order[4])).total_seconds()),
         }
+    if latest_fill is not None:
+        result["latest_fill"] = {
+            "symbol": latest_fill[0],
+            "side": latest_fill[1],
+            "qty": latest_fill[2],
+            "price": latest_fill[3],
+            "created_at": latest_fill[4],
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_fill[4])).total_seconds()),
+        }
+    result["unfilled_order_count"] = int(unfilled_order_count[0]) if unfilled_order_count else 0
     return result
 
 
@@ -1054,6 +1095,11 @@ def record_soak_validation() -> dict[str, Any]:
 @app.get("/validation/soak/history")
 def soak_validation_history(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, Any]]:
     return read_soak_validation_history(limit=limit)
+
+
+@app.get("/validation/soak/history/summary")
+def soak_validation_history_summary() -> dict[str, Any]:
+    return build_soak_history_summary()
 
 
 @app.get("/scheduler/status")
