@@ -34,10 +34,10 @@
   交付物：signals 成功寫入資料庫。
   備註：先從 MA Cross 開始。
 
-- [ ] 實作風控引擎
+- [~] 實作風控引擎
   目標：阻擋危險交易。
   交付物：初版風控規則。
-  備註：已完成重複訊號、持倉限制、最大倉位、冷卻時間、保守版單日虧損限制；正式 daily ledger 尚未完成。
+  備註：已完成重複訊號、持倉限制、最大倉位、冷卻時間、正式 daily ledger 與自動 kill switch；`daily_realized_pnl` 已在現有 `fills` 資料上完成 2026-03-17 到 2026-03-20 對帳驗證，剩餘缺口主要是更長時間的實跑驗收。
 
 - [x] 建立模擬下單執行
   目標：完成 paper trading。
@@ -201,9 +201,9 @@
 
 ## 目前建議優先開工
 
-- [ ] 補完 Stage 1 正式 `daily ledger`
+- [x] 補完 Stage 1 正式 `daily ledger`
   目標：讓單日損益限制不再依賴保守版邏輯。
-  備註：這是目前最明確的 MVP 風控缺口。
+  備註：`daily_realized_pnl` 已落地，風控已接入，且已用 2026-03-17 到 2026-03-20 的實際 `fills` 對帳驗證。
 
 - [ ] 累積一週 paper trading / soak validation 紀錄
   目標：關閉 Stage 1 驗證缺口。
@@ -222,6 +222,6 @@
 - [x] M1：市場資料可穩定落庫，策略可產生 signals。
 - [x] M2：paper broker 可執行，且 `orders`、`fills`、`positions` 狀態一致。
 - [ ] M3：風控、pause、kill switch 可用，系統可連跑數天。
-  備註：pause、手動 kill switch、基本風控、告警、admin UI 已完成；尚缺正式 daily ledger、自動 kill switch 與多日連跑驗證。
+  備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；目前主要缺口是更長時間的多日連跑驗證。
 - [~] M4：API 與監控可用，系統可進入小額實盤準備階段。
   備註：API、admin runtime view、queue observability、split worker status、multi-symbol / multi-strategy controls、PostgreSQL validation 與 CI 已完成；尚未完成 broker adapter、風控服務獨立化、投組服務與更完整 production monitoring。

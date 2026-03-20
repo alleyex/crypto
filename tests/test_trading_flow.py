@@ -1916,6 +1916,58 @@ def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
         connection.close()
 
 
+def test_execute_latest_risk_refreshes_persisted_daily_realized_pnl() -> None:
+    connection = make_connection()
+    try:
+        today = datetime.now(timezone.utc).date().isoformat()
+        ensure_execution_tables(connection)
+        ensure_risk_table(connection)
+        seed_candles(connection, [100, 101, 102, 103, 110])
+
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("buy-ledger-refresh", 100, "BTCUSDT", "1m", "manual_test", "BUY", 1.0, 100.0, "FILLED", f"{today} 10:00:00"),
+        )
+        buy_order_id = int(
+            connection.execute(
+                "SELECT id FROM orders WHERE client_order_id = 'buy-ledger-refresh';"
+            ).fetchone()[0]
+        )
+        insert_fill(connection, buy_order_id, "BTCUSDT", "BUY", 1.0, 100.0, f"{today} 10:00:00")
+        connection.commit()
+
+        connection.execute(
+            """
+            INSERT INTO risk_events (
+                signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (999, "BTCUSDT", "1m", "manual_test", "SELL", "APPROVED", "manual test approval"),
+        )
+        connection.commit()
+
+        execution_result = execute_latest_risk(connection, order_qty=1.0)
+
+        assert execution_result is not None
+        assert execution_result["status"] == "FILLED"
+        row = connection.execute(
+            """
+            SELECT realized_pnl
+            FROM daily_realized_pnl
+            WHERE symbol = ? AND pnl_date = ?;
+            """,
+            ("BTCUSDT", today),
+        ).fetchone()
+        assert row is not None
+        assert float(row[0]) == 10.0
+    finally:
+        connection.close()
+
+
 def test_update_positions_and_pnl_snapshots_track_realized_and_unrealized_pnl() -> None:
     connection = make_connection()
     try:

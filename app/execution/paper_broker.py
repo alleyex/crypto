@@ -5,6 +5,7 @@ from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.core.migrations import run_migrations
 from app.data.candles_service import get_latest_close
+from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
 
 
 CREATE_ORDERS_TABLE_SQL = """
@@ -166,6 +167,8 @@ def execute_risk_event_id(
         INSERT_FILL_SQL,
         (order_id, symbol, signal_type, order_qty, latest_close),
     )
+    # Keep persisted daily realized PnL in sync with newly written fills.
+    rebuild_daily_realized_pnl(connection)
     connection.commit()
 
     return {
