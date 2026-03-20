@@ -2742,9 +2742,9 @@ def test_admin_page_is_served() -> None:
     assert 'id="queue-message"' in response.text
     assert 'id="queue-board"' in response.text
     assert 'id="queue-filter-select"' in response.text
+    assert 'data-action="queue-recover-pipeline"' in response.text
+    assert 'data-action="queue-clear-pipeline"' in response.text
     assert 'data-action="queue-enqueue-strategy"' in response.text
-    assert 'data-action="queue-enqueue-pipeline"' in response.text
-    assert 'data-action="queue-drain-pipeline"' in response.text
     assert 'data-action="queue-drain-strategy"' in response.text
     assert 'data-action="queue-drain-execution"' in response.text
     assert 'data-action="queue-retry-strategy"' in response.text
@@ -2765,8 +2765,8 @@ def test_admin_page_is_served() -> None:
     assert "Latest failed:" in response.text
     assert "Latest retry:" in response.text
     assert "Enqueue Strategy Job" in response.text
-    assert "Enqueue Pipeline Chain" in response.text
-    assert "Drain Next Pipeline Batch" in response.text
+    assert "Recover Stale Pipeline Batch" in response.text
+    assert "Clear Stale Pipeline Batch" in response.text
     assert "Drain Strategy Job" in response.text
     assert "Drain Execution Job" in response.text
     assert "Retry Failed Strategy Job" in response.text
@@ -3401,6 +3401,7 @@ def test_pipeline_run_endpoint_supports_queue_dispatch(monkeypatch) -> None:
     assert response.json()["orchestration"] == "queue_dispatch"
     assert response.json()["batch_id"] == "batch-123"
     assert captured["kwargs"] == {
+        "payload": {"orchestration": "queue_dispatch", "source": "api_pipeline"},
         "strategy_name": "momentum_3bar",
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
     }
@@ -5520,6 +5521,7 @@ def test_run_scheduler_supports_queue_dispatch_for_pipeline_mode(monkeypatch, tm
 
     assert recorded == [{"status": "ok"}]
     assert captured == {
+        "payload": {"orchestration": "queue_dispatch", "source": "scheduler_pipeline"},
         "strategy_name": "ma_cross",
         "strategy_names": ["ma_cross", "momentum_3bar"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
@@ -5570,6 +5572,7 @@ def test_run_scheduler_uses_default_pipeline_orchestration_setting(monkeypatch, 
 
     assert recorded == [{"status": "ok"}]
     assert captured["kwargs"] == {
+        "payload": {"orchestration": "queue_dispatch", "source": "scheduler_pipeline"},
         "strategy_name": "ma_cross",
         "strategy_names": ["ma_cross"],
         "symbol_names": ["BTCUSDT"],

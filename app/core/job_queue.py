@@ -427,14 +427,17 @@ def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = 
         }
 
     next_job = batch_jobs[0]
-    leased_job = lease_job_by_id(connection, int(next_job["id"]))
-    if leased_job is None:
-        return {
-            "status": "empty",
-            "batch_id": resolved_batch_id,
-            "message": f"Unable to lease queued job {next_job['id']} for pipeline batch {resolved_batch_id}.",
-        }
-    run_result = _run_leased_queue_job(connection, leased_job)
+    if batch_id is None:
+        run_result = run_next_queued_job(connection, job_type=str(next_job["job_type"]))
+    else:
+        leased_job = lease_job_by_id(connection, int(next_job["id"]))
+        if leased_job is None:
+            return {
+                "status": "empty",
+                "batch_id": resolved_batch_id,
+                "message": f"Unable to lease queued job {next_job['id']} for pipeline batch {resolved_batch_id}.",
+            }
+        run_result = _run_leased_queue_job(connection, leased_job)
     run_result["batch_id"] = resolved_batch_id
     run_result["remaining_job_types"] = [str(job["job_type"]) for job in batch_jobs[1:]]
     return run_result
@@ -442,7 +445,8 @@ def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = 
 
 def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
     ensure_table(connection)
-    current_result = run_next_pipeline_batch(connection, batch_id=batch_id)
+    requested_batch_id = batch_id
+    current_result = run_next_pipeline_batch(connection) if requested_batch_id is None else run_next_pipeline_batch(connection, batch_id=requested_batch_id)
     if current_result["status"] != "completed":
         return current_result
 
@@ -452,7 +456,7 @@ def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None)
     execution_backend_status = current_result.get("execution_backend_status")
 
     while current_result.get("remaining_job_types"):
-        next_result = run_next_pipeline_batch(connection, batch_id=batch_id)
+        next_result = run_next_pipeline_batch(connection) if requested_batch_id is None else run_next_pipeline_batch(connection, batch_id=requested_batch_id)
         if next_result["status"] != "completed":
             next_result["batch_id"] = batch_id
             next_result["completed_jobs"] = jobs

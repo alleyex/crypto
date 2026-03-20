@@ -54,7 +54,7 @@ def maybe_send_queue_alert(report: dict[str, Any]) -> dict[str, Any]:
     )
     if queue_check.get("status") == "ok" or (failed_count <= 0 and not stale_batch):
         _clear_state()
-        return {"sent": False, "reason": "Queue has no failed jobs or stale incomplete batches."}
+        return {"sent": False, "reason": "Queue has no failed jobs."}
 
     fingerprint = _build_fingerprint(queue_check)
     previous = _read_state()
