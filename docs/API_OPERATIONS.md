@@ -286,6 +286,32 @@ curl -s -X POST http://127.0.0.1:8000/execution/backend \
   | python -m json.tool
 ```
 
+Switch to Binance Spot backend:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"binance"}' | python -m json.tool
+```
+
+Required environment variables before using Binance:
+
+- `CRYPTO_BINANCE_API_KEY`
+- `CRYPTO_BINANCE_API_SECRET`
+- `CRYPTO_BINANCE_TESTNET=true`
+
+Validate Binance account connectivity:
+
+```bash
+curl -s http://127.0.0.1:8000/execution/backend/check | python -m json.tool
+```
+
+Behavior:
+
+- returns `status=skipped` when the active backend is not `binance`
+- returns `status=ok` with account capability fields when signed Binance auth succeeds
+- returns `status=error` when credentials are missing or the remote request fails
+
 ## 11. Broker Protection Workflow
 
 Suggested response flow when `/health` reports `checks.broker_protection.status=degraded`:

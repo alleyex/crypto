@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, List, Optional, Union
 
+import requests
 from fastapi import BackgroundTasks
 from fastapi import FastAPI, Query
 from fastapi import Response
@@ -723,6 +724,36 @@ def execution_backend_update(payload: ExecutionBackendRequest) -> dict[str, Unio
         **get_execution_backend_status(),
         **get_execution_backend_runtime_status(),
     }
+
+
+@app.get("/execution/backend/check")
+def execution_backend_check() -> dict[str, Union[bool, str, int]]:
+    backend_status = get_execution_backend_status()
+    backend = str(backend_status["backend"])
+    if backend != "binance":
+        return {
+            "status": "skipped",
+            "backend": backend,
+            "reason": "Remote connectivity checks are only implemented for the binance backend.",
+        }
+
+    try:
+        from app.execution.binance_broker import BinanceBrokerClient
+
+        client = BinanceBrokerClient()
+        return client.check_account_connectivity()
+    except ValueError as exc:
+        return {
+            "status": "error",
+            "backend": backend,
+            "reason": str(exc),
+        }
+    except requests.RequestException as exc:
+        return {
+            "status": "error",
+            "backend": backend,
+            "reason": str(exc),
+        }
 
 
 @app.post("/alerts/test")

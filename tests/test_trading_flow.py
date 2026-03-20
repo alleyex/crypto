@@ -5940,23 +5940,56 @@ def test_binance_broker_client_place_order_calls_api(monkeypatch) -> None:
                 "fills": [{"price": "51000.0", "qty": "0.001"}],
             }
 
-    def fake_post(url, headers=None, timeout=None):
-        posted.append(url)
+    def fake_request(method, url, headers=None, timeout=None):
+        posted.append((method, url))
         return FakeResponse()
 
-    monkeypatch.setattr("app.execution.binance_broker.requests.post", fake_post)
+    monkeypatch.setattr("app.execution.binance_broker.requests.request", fake_request)
 
     client = BinanceBrokerClient(api_key="test-key", api_secret="test-secret", testnet=True)
     result = client.place_order(symbol="BTCUSDT", side="BUY", qty=0.001, ref_price=50000.0)
 
     assert len(posted) == 1
-    assert "testnet.binance.vision" in posted[0]
-    assert "BTCUSDT" in posted[0]
-    assert "BUY" in posted[0]
+    assert posted[0][0] == "POST"
+    assert "testnet.binance.vision" in posted[0][1]
+    assert "BTCUSDT" in posted[0][1]
+    assert "BUY" in posted[0][1]
     assert result["status"] == "FILLED"
     assert result["fill_price"] == 51000.0
     assert result["fill_qty"] == 0.001
     assert result["order_id"] == "99"
+
+
+def test_binance_broker_client_check_account_connectivity_calls_api(monkeypatch) -> None:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    requested: list = []
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "accountType": "SPOT",
+                "canTrade": True,
+                "canDeposit": True,
+                "canWithdraw": True,
+                "balances": [{"asset": "BTC", "free": "1.0", "locked": "0.0"}],
+            }
+
+    def fake_request(method, url, headers=None, timeout=None):
+        requested.append((method, url))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.execution.binance_broker.requests.request", fake_request)
+
+    client = BinanceBrokerClient(api_key="test-key", api_secret="test-secret", testnet=True)
+    result = client.check_account_connectivity()
+
+    assert requested[0][0] == "GET"
+    assert "/api/v3/account" in requested[0][1]
+    assert result["status"] == "ok"
+    assert result["broker"] == "binance"
+    assert result["balance_count"] == 1
 
 
 def test_binance_broker_client_weighted_avg_fill_price() -> None:
@@ -6111,7 +6144,7 @@ def test_execution_backend_runtime_status_round_trip(tmp_path, monkeypatch) -> N
     assert get_execution_backend_runtime_status() == {
         "backend": "noop",
         "default_backend": "paper",
-        "available_backends": ["paper", "noop", "simulated_live"],
+        "available_backends": ["paper", "noop", "simulated_live", "binance"],
         "execution_backend_file": str(backend_file),
     }
 
@@ -7186,7 +7219,7 @@ def test_execution_backend_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "available_backends": ["paper", "noop", "simulated_live"],
+        "available_backends": ["paper", "noop", "simulated_live", "binance"],
         "backend": "paper",
         "description": "Paper broker execution backend.",
         "default_backend": "paper",
@@ -7223,7 +7256,7 @@ def test_execution_backend_update_endpoint(monkeypatch) -> None:
         lambda: {
             "backend": "noop",
             "default_backend": "paper",
-            "available_backends": ["paper", "noop", "simulated_live"],
+            "available_backends": ["paper", "noop", "simulated_live", "binance"],
             "execution_backend_file": "runtime/execution.backend",
         },
     )
@@ -7235,6 +7268,68 @@ def test_execution_backend_update_endpoint(monkeypatch) -> None:
     assert captured["audit_action"] == "set_execution_backend:noop"
     assert response.json()["backend"] == "noop"
     assert response.json()["dry_run"] is True
+
+
+def test_execution_backend_check_skips_for_non_binance_backend(monkeypatch) -> None:
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.api.main.get_execution_backend_status",
+        lambda: {
+            "backend": "paper",
+            "description": "Paper broker execution backend.",
+            "dry_run": False,
+            "can_execute_orders": True,
+            "is_live": False,
+            "placeholder": False,
+            "status": "ok",
+        },
+    )
+
+    response = client.get("/execution/backend/check")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "skipped",
+        "backend": "paper",
+        "reason": "Remote connectivity checks are only implemented for the binance backend.",
+    }
+
+
+def test_execution_backend_check_returns_binance_account_status(monkeypatch) -> None:
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.api.main.get_execution_backend_status",
+        lambda: {
+            "backend": "binance",
+            "description": "Live execution backend using Binance Spot API.",
+            "dry_run": False,
+            "can_execute_orders": True,
+            "is_live": True,
+            "placeholder": False,
+            "status": "ok",
+        },
+    )
+
+    class FakeClient:
+        def check_account_connectivity(self):
+            return {
+                "status": "ok",
+                "broker": "binance",
+                "account_type": "SPOT",
+                "can_trade": True,
+                "can_deposit": True,
+                "can_withdraw": True,
+                "balance_count": 3,
+            }
+
+    monkeypatch.setattr("app.execution.binance_broker.BinanceBrokerClient", FakeClient)
+
+    response = client.get("/execution/backend/check")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["broker"] == "binance"
+    assert response.json()["balance_count"] == 3
 
 
 def test_scheduler_stop_endpoint_accepts_custom_audit_metadata(monkeypatch) -> None:

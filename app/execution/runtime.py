@@ -7,7 +7,7 @@ from app.core.settings import EXECUTION_BACKEND
 
 RUNTIME_DIR = Path("runtime")
 EXECUTION_BACKEND_FILE = RUNTIME_DIR / "execution.backend"
-SUPPORTED_EXECUTION_BACKENDS = ("paper", "noop", "simulated_live")
+SUPPORTED_EXECUTION_BACKENDS = ("paper", "noop", "simulated_live", "binance")
 
 
 def list_supported_execution_backends() -> List[str]:

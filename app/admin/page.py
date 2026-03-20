@@ -544,6 +544,7 @@ __STRATEGY_OPTIONS__
               <option value="paper">paper</option>
               <option value="noop">noop</option>
               <option value="simulated_live">simulated_live</option>
+              <option value="binance">binance</option>
             </select>
             <button class="secondary" data-action="execution-backend-save">Apply Execution Backend</button>
           </div>

@@ -141,8 +141,11 @@ Execution backend modes:
   - dry-run execution backend
   - never writes orders or fills
 - `simulated_live`
-  - placeholder live-style backend
-  - currently still uses simulated paper fills, but keeps a separate runtime/backend identity for future broker integration
+  - live-style backend backed by a simulated broker client
+  - uses the broker abstraction without talking to a real exchange
+- `binance`
+  - live execution backend using Binance Spot API
+  - supports Spot testnet credentials and account connectivity checks
 
 Read or update the active execution backend used by runtime jobs:
 
@@ -154,7 +157,21 @@ curl -s -X POST http://127.0.0.1:8000/execution/backend \
 curl -s -X POST http://127.0.0.1:8000/execution/backend \
   -H "Content-Type: application/json" \
   -d '{"backend":"simulated_live"}'
+curl -s -X POST http://127.0.0.1:8000/execution/backend \
+  -H "Content-Type: application/json" \
+  -d '{"backend":"binance"}'
+curl -s http://127.0.0.1:8000/execution/backend/check
 ```
+
+Binance backend configuration:
+
+```bash
+export CRYPTO_BINANCE_API_KEY=your_testnet_api_key
+export CRYPTO_BINANCE_API_SECRET=your_testnet_api_secret
+export CRYPTO_BINANCE_TESTNET=true
+```
+
+`GET /execution/backend/check` performs a signed Binance account call when the active backend is `binance`.
 
 Set the active runtime strategy set used by pipeline and strategy-only scheduler loops:
 
@@ -504,7 +521,7 @@ Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin 
 - positions, orders, pnl, and scheduler log panels
 - buttons for targeted pipeline runs, scheduler control, and kill switch control
 - runtime strategy and symbol controls for split workers
-- runtime execution backend control for `paper`, `noop`, and `simulated_live`
+- runtime execution backend control for `paper`, `noop`, `simulated_live`, and `binance`
 - broker protection issue chips with direct actions for `switch_to_paper_backend`, `pause_scheduler`, `enable_kill_switch`, and `inspect_and_reconcile_orders`
 
 `GET /audit-events` provides:
@@ -569,7 +586,7 @@ Logs:
 - Single timeframe: `1m`
 - Multi-strategy runtime currently validated for `ma_cross` and `momentum_3bar`
 - Paper trading only
-- Execution backend runtime control now supports `paper`, `noop`, and `simulated_live`, but only `paper` and `simulated_live` currently produce fills, and `simulated_live` is still a placeholder adapter backed by simulated paper execution
+- Execution backend runtime control now supports `paper`, `noop`, `simulated_live`, and `binance`; `binance` can perform signed Spot account connectivity checks and live order routing when testnet credentials are configured
 - A persistent `job_queue` abstraction now exists, and split worker scheduler modes can now dispatch to or drain from it, but the full runtime is not yet queue-native end to end
 
 ## Next Recommended Work

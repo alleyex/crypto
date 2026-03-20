@@ -25,6 +25,7 @@ TESTNET_BASE_URL = "https://testnet.binance.vision"
 MAINNET_BASE_URL = "https://api.binance.com"
 
 _ORDER_ENDPOINT = "/api/v3/order"
+_ACCOUNT_ENDPOINT = "/api/v3/account"
 
 
 def _sign(query_string: str, secret: str) -> str:
@@ -64,6 +65,40 @@ class BinanceBrokerClient:
         self._base_url = TESTNET_BASE_URL if testnet else MAINNET_BASE_URL
         self._timeout = timeout_seconds
 
+    def _signed_request(self, method: str, endpoint: str, params: Dict[str, Union[str, int, float]]) -> dict:
+        if not self._api_key or not self._api_secret:
+            raise ValueError(
+                "Binance API key and secret must be set via "
+                "CRYPTO_BINANCE_API_KEY and CRYPTO_BINANCE_API_SECRET."
+            )
+
+        query_string = urlencode(params)
+        signature = _sign(query_string, self._api_secret)
+        query_string += f"&signature={signature}"
+        url = f"{self._base_url}{endpoint}?{query_string}"
+        response = requests.request(
+            method.upper(),
+            url,
+            headers={"X-MBX-APIKEY": self._api_key},
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def check_account_connectivity(self) -> Dict[str, Union[str, bool, int]]:
+        timestamp = int(time.time() * 1000)
+        data = self._signed_request("GET", _ACCOUNT_ENDPOINT, {"timestamp": timestamp})
+        balances = data.get("balances") or []
+        return {
+            "status": "ok",
+            "broker": self.broker_name,
+            "account_type": str(data.get("accountType") or "SPOT"),
+            "can_trade": bool(data.get("canTrade", False)),
+            "can_deposit": bool(data.get("canDeposit", False)),
+            "can_withdraw": bool(data.get("canWithdraw", False)),
+            "balance_count": len(balances),
+        }
+
     def place_order(
         self,
         symbol: str,
@@ -87,12 +122,6 @@ class BinanceBrokerClient:
             requests.HTTPError: if Binance returns a non-2xx status.
             ValueError: if required credentials are not configured.
         """
-        if not self._api_key or not self._api_secret:
-            raise ValueError(
-                "Binance API key and secret must be set via "
-                "CRYPTO_BINANCE_API_KEY and CRYPTO_BINANCE_API_SECRET."
-            )
-
         timestamp = int(time.time() * 1000)
         params: Dict[str, Union[str, int, float]] = {
             "symbol": symbol,
@@ -101,18 +130,7 @@ class BinanceBrokerClient:
             "quantity": qty,
             "timestamp": timestamp,
         }
-        query_string = urlencode(params)
-        signature = _sign(query_string, self._api_secret)
-        query_string += f"&signature={signature}"
-
-        url = f"{self._base_url}{_ORDER_ENDPOINT}?{query_string}"
-        response = requests.post(
-            url,
-            headers={"X-MBX-APIKEY": self._api_key},
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
+        data = self._signed_request("POST", _ORDER_ENDPOINT, params)
 
         fills = data.get("fills") or []
         fill_price = _weighted_avg_fill_price(fills) if fills else ref_price
