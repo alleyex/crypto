@@ -1,9 +1,11 @@
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 from typing import Optional
 
+from app.alerting.state import build_fingerprint
+from app.alerting.state import clear_alert_state
+from app.alerting.state import read_alert_state
+from app.alerting.state import write_alert_state
 from app.alerting.telegram import send_telegram_message
 
 
@@ -12,30 +14,24 @@ EXECUTION_ALERT_STATE_FILE = RUNTIME_DIR / "execution_alert_state.json"
 
 
 def _read_state() -> Optional[dict[str, Any]]:
-    if not EXECUTION_ALERT_STATE_FILE.exists():
-        return None
-    return json.loads(EXECUTION_ALERT_STATE_FILE.read_text(encoding="utf-8"))
+    return read_alert_state(EXECUTION_ALERT_STATE_FILE)
 
 
 def _write_state(state: dict[str, Any]) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    EXECUTION_ALERT_STATE_FILE.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    write_alert_state(EXECUTION_ALERT_STATE_FILE, state)
 
 
 def _clear_state() -> None:
-    if EXECUTION_ALERT_STATE_FILE.exists():
-        EXECUTION_ALERT_STATE_FILE.unlink()
+    clear_alert_state(EXECUTION_ALERT_STATE_FILE)
 
 
 def _build_fingerprint(job: dict[str, Any]) -> str:
-    payload = {
+    return build_fingerprint({
         "id": job.get("id"),
         "job_type": job.get("job_type"),
         "attempt_count": job.get("attempt_count"),
         "error_message": job.get("error_message"),
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    })
 
 
 def maybe_send_execution_alert(report: dict[str, Any]) -> dict[str, Any]:

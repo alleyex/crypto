@@ -1,9 +1,11 @@
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 from typing import Optional
 
+from app.alerting.state import build_fingerprint
+from app.alerting.state import clear_alert_state
+from app.alerting.state import read_alert_state
+from app.alerting.state import write_alert_state
 from app.alerting.telegram import send_telegram_message
 
 
@@ -12,32 +14,26 @@ WORKER_ALERT_STATE_FILE = RUNTIME_DIR / "worker_alert_state.json"
 
 
 def _read_state() -> Optional[dict[str, Any]]:
-    if not WORKER_ALERT_STATE_FILE.exists():
-        return None
-    return json.loads(WORKER_ALERT_STATE_FILE.read_text(encoding="utf-8"))
+    return read_alert_state(WORKER_ALERT_STATE_FILE)
 
 
 def _write_state(state: dict[str, Any]) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    WORKER_ALERT_STATE_FILE.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    write_alert_state(WORKER_ALERT_STATE_FILE, state)
 
 
 def _clear_state() -> None:
-    if WORKER_ALERT_STATE_FILE.exists():
-        WORKER_ALERT_STATE_FILE.unlink()
+    clear_alert_state(WORKER_ALERT_STATE_FILE)
 
 
 def _build_fingerprint(stale_workers: list[dict[str, Any]]) -> str:
-    payload = [
+    return build_fingerprint([
         {
             "component": item.get("component"),
             "status": item.get("status"),
             "age_seconds": item.get("age_seconds"),
         }
         for item in stale_workers
-    ]
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    ])
 
 
 def maybe_send_worker_alert(report: dict[str, Any]) -> dict[str, Any]:
