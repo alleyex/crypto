@@ -168,7 +168,7 @@
 - [x] 建立實驗追蹤
   目標：管理研究結果。
   交付物：tracking system。
-  備註：第一至六組全部完成（migrations 021-024）；涵蓋 experiment_name 分組、tags/notes、compare、leaderboard、champion promote/get、WF fold grouping + 聚合統計；剩餘可選：equity curve 持久化（第五組，nice-to-have）。（2026-03-21）
+  備註：全六組完成（migrations 021-025）；涵蓋 experiment_name 分組、tags/notes、compare、leaderboard、champion promote/get、WF fold grouping + 聚合統計、equity curve 持久化與查詢。409 tests 通過。（2026-03-21）
 
 - [ ] 建立訓練流程
   目標：讓訓練可重現。
@@ -226,15 +226,15 @@
 
   備註：第一至四組已於 2026-03-21 全部完成，24 條測試通過（394 total）。
 
-### 第五組：Equity Curve 持久化（可選，資料較大）
+### 第五組：Equity Curve 持久化✅
 
-- [ ] **migration 024：`backtest_runs` 加入 `equity_curve_json` 欄位**
-  目標：存下 equity curve，不用重跑就能畫圖。
-  備註：每條 curve 可能有幾百個點（~幾 KB），可按需要才做。
-  交付物：migration + `persist_run()` 更新 + 測試。
+- [x] **migration 025：`backtest_runs` 加入 `equity_curve_json` 欄位**
+- [x] **`GET /backtest` 持久化 single run 的 equity curve**
+- [x] **`POST /backtest/walk-forward` 每折持久化 `test_equity_curve`（walk_forward.py 同步更新）**
+- [x] **`GET /backtest/runs/{id}/equity-curve` — 取回 equity curve**
+  （run 不存在 → 404；curve 未存 → 空 list）
 
-- [ ] **`GET /backtest/runs/{id}/equity-curve` — 取回 equity curve**
-  目標：前端 / 腳本可直接取歷史 equity curve 畫圖。
+  備註：第五組已於 2026-03-21 完成，6 條測試通過（409 total）。第五組不存 sweep runs 的 curve（組合數過多）。
   交付物：endpoint + 測試。
 
 ### 第六組：Walk-forward Fold 分組（實驗完整性）✅
