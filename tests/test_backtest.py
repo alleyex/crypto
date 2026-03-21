@@ -14,6 +14,10 @@ from app.backtest.runner import run_backtest
 from app.backtest.sweep import run_parameter_sweep
 from app.backtest.walk_forward import run_walk_forward
 from app.core.migrations import run_migrations
+from app.strategy.bbands import _compute_bands, generate_signal as bbands_signal
+from app.strategy.macd import _compute_macd, _ema, generate_signal as macd_signal
+from app.strategy.registry import list_registered_strategies
+from app.strategy.rsi import _compute_rsi, generate_signal as rsi_signal
 
 
 # ---------------------------------------------------------------------------
@@ -754,3 +758,230 @@ def test_post_backtest_walk_forward_unknown_strategy_returns_error(monkeypatch) 
     response = client.post("/backtest/walk-forward", json={"strategy": "ghost_strategy"})
     assert response.status_code == 200
     assert "error" in response.json()
+
+
+# ---------------------------------------------------------------------------
+# Strategy unit tests — RSI
+# ---------------------------------------------------------------------------
+
+def test_rsi_extreme_up_returns_100() -> None:
+    # All gains → avg_loss = 0 → RSI = 100
+    closes = [float(i) for i in range(1, 17)]  # 16 values, all rising
+    assert _compute_rsi(closes, period=14) == 100.0
+
+
+def test_rsi_extreme_down_near_zero() -> None:
+    # All losses → avg_gain = 0 → RSI ≈ 0
+    closes = [float(16 - i) for i in range(16)]  # falling
+    rsi = _compute_rsi(closes, period=14)
+    assert rsi < 5.0
+
+
+def test_rsi_midpoint_near_50() -> None:
+    # Alternating up/down → RSI near 50
+    closes = [100.0 + (1 if i % 2 == 0 else -1) for i in range(30)]
+    rsi = _compute_rsi(closes, period=14)
+    assert 40.0 < rsi < 60.0
+
+
+def _make_in_memory_db_with_closes(closes):
+    conn = sqlite3.connect(":memory:")
+    run_migrations(conn)
+    for i, c in enumerate(closes):
+        conn.execute(
+            "INSERT INTO candles (symbol, timeframe, open_time, open, high, low, close, volume, close_time)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BTCUSDT", "1m", (i + 1) * 60000, str(c), str(c), str(c), str(c), "1.0", (i + 1) * 60000 + 59999),
+        )
+    conn.commit()
+    return conn
+
+
+def test_rsi_generate_signal_returns_none_when_insufficient_candles() -> None:
+    conn = _make_in_memory_db_with_closes([100.0] * 5)
+    assert rsi_signal(conn, symbol="BTCUSDT", period=14) is None
+    conn.close()
+
+
+def test_rsi_generate_signal_returns_buy_when_oversold() -> None:
+    # Falling prices → low RSI → BUY
+    closes = [100.0 - i * 2 for i in range(50)]
+    conn = _make_in_memory_db_with_closes(closes)
+    result = rsi_signal(conn, symbol="BTCUSDT", period=14, oversold=30.0, overbought=70.0)
+    assert result is not None
+    assert result["signal_type"] == "BUY"
+    assert result["short_ma"] <= 30.0  # RSI stored in short_ma
+    conn.close()
+
+
+def test_rsi_generate_signal_returns_sell_when_overbought() -> None:
+    # Rising prices → high RSI → SELL
+    closes = [100.0 + i * 2 for i in range(50)]
+    conn = _make_in_memory_db_with_closes(closes)
+    result = rsi_signal(conn, symbol="BTCUSDT", period=14, oversold=30.0, overbought=70.0)
+    assert result is not None
+    assert result["signal_type"] == "SELL"
+    assert result["short_ma"] >= 70.0
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Strategy unit tests — Bollinger Bands
+# ---------------------------------------------------------------------------
+
+def test_bbands_compute_middle_band() -> None:
+    closes = [100.0] * 20
+    middle, upper, lower = _compute_bands(closes, period=20, num_std=2.0)
+    assert middle == pytest.approx(100.0)
+    assert upper == pytest.approx(100.0)
+    assert lower == pytest.approx(100.0)
+
+
+def test_bbands_upper_above_lower() -> None:
+    import random
+    random.seed(42)
+    closes = [100.0 + random.gauss(0, 1) for _ in range(20)]
+    middle, upper, lower = _compute_bands(closes, period=20, num_std=2.0)
+    assert upper > middle > lower
+
+
+def test_bbands_generate_signal_returns_none_when_insufficient() -> None:
+    conn = _make_in_memory_db_with_closes([100.0] * 10)
+    assert bbands_signal(conn, symbol="BTCUSDT", period=20) is None
+    conn.close()
+
+
+def test_bbands_generate_signal_buy_at_lower_band() -> None:
+    # Flat middle with a sharp drop at the end → touches lower band
+    closes = [100.0] * 19 + [85.0]  # std≈3.5, lower≈93; 85 < lower → BUY
+    conn = _make_in_memory_db_with_closes(closes)
+    result = bbands_signal(conn, symbol="BTCUSDT", period=20, num_std=2.0)
+    assert result is not None
+    assert result["signal_type"] == "BUY"
+    conn.close()
+
+
+def test_bbands_generate_signal_sell_at_upper_band() -> None:
+    closes = [100.0] * 19 + [115.0]  # spike above upper band → SELL
+    conn = _make_in_memory_db_with_closes(closes)
+    result = bbands_signal(conn, symbol="BTCUSDT", period=20, num_std=2.0)
+    assert result is not None
+    assert result["signal_type"] == "SELL"
+    conn.close()
+
+
+def test_bbands_generate_signal_hold_within_bands() -> None:
+    # Volatile series so bands are wide; last close is at the middle → HOLD
+    closes = [95.0, 105.0] * 9 + [100.0, 100.0]  # 20 candles, last close = 100 (middle)
+    conn = _make_in_memory_db_with_closes(closes)
+    result = bbands_signal(conn, symbol="BTCUSDT", period=20, num_std=2.0)
+    assert result is not None
+    assert result["signal_type"] == "HOLD"
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Strategy unit tests — MACD
+# ---------------------------------------------------------------------------
+
+def test_ema_single_value() -> None:
+    assert _ema([100.0], period=5) == [100.0]
+
+
+def test_ema_constant_series_returns_constant() -> None:
+    result = _ema([50.0] * 20, period=9)
+    for v in result:
+        assert v == pytest.approx(50.0)
+
+
+def test_ema_increases_on_rising_series() -> None:
+    closes = [float(i) for i in range(1, 30)]
+    result = _ema(closes, period=9)
+    assert result[-1] > result[0]
+
+
+def test_macd_compute_returns_none_when_insufficient() -> None:
+    closes = [100.0] * 10
+    assert _compute_macd(closes, fast=12, slow=26, signal_period=9) is None
+
+
+def test_macd_compute_returns_tuple_with_enough_data() -> None:
+    closes = [100.0 + i * 0.1 for i in range(60)]
+    result = _compute_macd(closes, fast=12, slow=26, signal_period=9)
+    assert result is not None
+    assert len(result) == 4
+
+
+def test_macd_generate_signal_returns_none_when_insufficient() -> None:
+    conn = _make_in_memory_db_with_closes([100.0] * 10)
+    assert macd_signal(conn, symbol="BTCUSDT") is None
+    conn.close()
+
+
+def test_macd_generate_signal_buy_on_bullish_crossover() -> None:
+    # Flat then sharp rise: MACD crosses above signal
+    closes = [100.0] * 40 + [100.0 + i * 3 for i in range(20)]
+    conn = _make_in_memory_db_with_closes(closes)
+    # Run enough bars to accumulate signals; check at least one BUY was generated
+    results = []
+    for n in range(35, len(closes) + 1):
+        sub_conn = _make_in_memory_db_with_closes(closes[:n])
+        r = macd_signal(sub_conn, symbol="BTCUSDT")
+        if r and r["signal_type"] == "BUY":
+            results.append(r)
+        sub_conn.close()
+    assert len(results) > 0
+    conn.close()
+
+
+def test_macd_generate_signal_returns_hold_on_flat_prices() -> None:
+    closes = [100.0] * 60
+    conn = _make_in_memory_db_with_closes(closes)
+    result = macd_signal(conn, symbol="BTCUSDT")
+    assert result is not None
+    assert result["signal_type"] == "HOLD"
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Registry tests
+# ---------------------------------------------------------------------------
+
+def test_registry_contains_all_five_strategies() -> None:
+    strategies = list_registered_strategies()
+    for name in ("ma_cross", "momentum_3bar", "rsi", "bbands", "macd"):
+        assert name in strategies
+
+
+def test_registry_strategies_sorted_alphabetically() -> None:
+    strategies = list_registered_strategies()
+    assert strategies == sorted(strategies)
+
+
+# ---------------------------------------------------------------------------
+# Backtest integration — new strategies
+# ---------------------------------------------------------------------------
+
+def test_run_backtest_rsi_strategy() -> None:
+    prices = [100.0 - i * 0.5 for i in range(50)]  # falling → oversold BUY
+    candles = _make_candles(prices)
+    result = run_backtest("BTCUSDT", "rsi", candles, order_qty=0.001, max_position_qty=0.002)
+    assert result["strategy_name"] == "rsi"
+    assert result["candle_count"] == len(prices)
+    assert isinstance(result["metrics"], dict)
+
+
+def test_run_backtest_bbands_strategy() -> None:
+    prices = [100.0] * 19 + [85.0] + [100.0] * 19 + [115.0] + [100.0] * 5
+    candles = _make_candles(prices)
+    result = run_backtest("BTCUSDT", "bbands", candles, order_qty=0.001, max_position_qty=0.002)
+    assert result["strategy_name"] == "bbands"
+    assert result["candle_count"] == len(prices)
+
+
+def test_run_backtest_macd_strategy() -> None:
+    prices = [100.0 + i * 0.2 for i in range(80)]
+    candles = _make_candles(prices)
+    result = run_backtest("BTCUSDT", "macd", candles, order_qty=0.001, max_position_qty=0.002)
+    assert result["strategy_name"] == "macd"
+    assert result["candle_count"] == len(prices)
