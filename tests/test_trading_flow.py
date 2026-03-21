@@ -7866,6 +7866,81 @@ def test_check_portfolio_limits_rejects_when_total_exposure_exceeded() -> None:
         connection.close()
 
 
+def test_check_portfolio_limits_includes_pending_approved_buys_in_total_exposure() -> None:
+    """Pending approved BUYs (no order yet) must be counted against portfolio limits
+    to prevent concurrent risk evaluations from both passing before either executes."""
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import set_portfolio_config, check_portfolio_limits
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+
+        # BTCUSDT price = 5.0; total_capital=10, max_exposure=0.8 → limit=8.0
+        seed_candles(connection, [5.0] * 5)
+        set_portfolio_config(connection, total_capital=10.0, max_total_exposure_pct=0.8)
+
+        # Insert an APPROVED BUY risk event with no corresponding order (pending execution).
+        # order_qty=1.0, price=5.0 → pending notional = 5.0
+        connection.execute(
+            "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
+            " VALUES (?,?,?,?,?,?,?);",
+            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "test"),
+        )
+        connection.commit()
+
+        # Now try another BUY of 1.0 @ 5.0 = 5.0 notional.
+        # pending(5.0) + proposed(5.0) = 10.0 > limit(8.0) → must be rejected.
+        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        assert approved is False
+        assert "Portfolio total exposure limit" in reason
+    finally:
+        connection.close()
+
+
+def test_check_portfolio_limits_pending_clears_after_order_placed() -> None:
+    """Once the pending approved buy has a corresponding order, it is no longer
+    counted as pending and the next BUY may be approved again."""
+    from app.core.migrations import run_migrations
+    from app.portfolio.portfolio_service import set_portfolio_config, check_portfolio_limits
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+
+        # BTCUSDT price = 5.0; total_capital=20, limit=16.0
+        seed_candles(connection, [5.0] * 5)
+        set_portfolio_config(connection, total_capital=20.0, max_total_exposure_pct=0.8)
+
+        # Insert APPROVED BUY risk event
+        risk_event_id = insert_and_get_rowid(
+            connection,
+            "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
+            " VALUES (?,?,?,?,?,?,?);",
+            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "test"),
+        )
+        connection.commit()
+
+        # Before order is placed: pending notional = 5.0 (1 BTC @ 5.0)
+        # proposed = 1.0 @ 5.0 = 5.0; total = 10.0 ≤ 16.0 → approved
+        approved, _ = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        assert approved is True
+
+        # Place the order linking to the risk event
+        connection.execute(
+            "INSERT INTO orders (client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status)"
+            " VALUES (?,?,?,?,?,?,?,?,?);",
+            ("o1", risk_event_id, "BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 5.0, "FILLED"),
+        )
+        connection.commit()
+
+        # Now risk event has an order — no longer pending; same check should still pass
+        approved2, _ = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        assert approved2 is True
+    finally:
+        connection.close()
+
+
 def test_position_open_close_emits_audit_events() -> None:
     from app.core.migrations import run_migrations
     from app.portfolio.positions_service import update_positions

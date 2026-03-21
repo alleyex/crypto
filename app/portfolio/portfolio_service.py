@@ -69,6 +69,17 @@ JOIN signals s ON s.id = re.signal_id
 ORDER BY f.id ASC;
 """
 
+# Pending approved buys: risk_events that are APPROVED BUY but have no order yet.
+# Used to prevent double-counting when two risk evaluations race before execution.
+SELECT_PENDING_APPROVED_BUYS_SQL = """
+SELECT re.symbol, re.strategy_name
+FROM risk_events re
+LEFT JOIN orders o ON o.risk_event_id = re.id
+WHERE re.signal_type = 'BUY'
+  AND re.decision = 'APPROVED'
+  AND o.id IS NULL;
+"""
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -176,6 +187,32 @@ def _get_latest_price(connection: DBConnection, symbol: str) -> Optional[float]:
         return None
     row = connection.execute(SELECT_LATEST_CLOSE_SQL, (symbol,)).fetchone()
     return float(row[0]) if row is not None else None
+
+
+def _compute_pending_approved_notional(
+    connection: DBConnection,
+    order_qty: float,
+) -> tuple[float, dict[str, float]]:
+    """Return (total_pending_notional, {strategy_name: pending_notional}) for approved but
+    unexecuted BUY risk events.  Mirrors the guard in risk_service._get_pending_approved_buy_qty()
+    so that portfolio limits account for in-flight approvals and prevent concurrent over-allocation.
+
+    Returns (0.0, {}) when the required tables do not exist yet.
+    """
+    if not (table_exists(connection, "risk_events") and table_exists(connection, "orders")):
+        return 0.0, {}
+
+    rows = connection.execute(SELECT_PENDING_APPROVED_BUYS_SQL).fetchall()
+    total = 0.0
+    per_strategy: dict[str, float] = {}
+    for symbol, strategy_name in rows:
+        price = _get_latest_price(connection, symbol)
+        if price is None or price <= 0:
+            continue
+        notional = order_qty * price
+        total += notional
+        per_strategy[strategy_name] = per_strategy.get(strategy_name, 0.0) + notional
+    return total, per_strategy
 
 
 def _compute_per_strategy_open_qty(connection: DBConnection) -> dict[str, dict[str, float]]:
@@ -300,7 +337,12 @@ def check_portfolio_limits(
     symbol: str,
     order_qty: float,
 ) -> tuple[bool, str]:
-    """Return (approved, reason).  Always approved when total_capital == 0."""
+    """Return (approved, reason).  Always approved when total_capital == 0.
+
+    Pending approved buys (risk_events APPROVED with no order yet) are included
+    in notional calculations to prevent concurrent risk evaluations from
+    simultaneously exceeding portfolio limits before either is executed.
+    """
     config = get_portfolio_config(connection)
     if config.total_capital <= 0:
         return True, ""
@@ -311,16 +353,22 @@ def check_portfolio_limits(
 
     proposed_notional = order_qty * latest_price
 
+    # Include in-flight approved buys so concurrent evaluations don't over-allocate.
+    pending_total_notional, pending_per_strategy = _compute_pending_approved_notional(
+        connection, order_qty
+    )
+
     # 1. Total exposure limit
     if config.max_total_notional is not None:
         if table_exists(connection, "positions"):
             rows = connection.execute(SELECT_OPEN_POSITIONS_SQL).fetchall()
-            current_total = sum(
+            filled_total = sum(
                 float(r[1]) * (p or 0.0)
                 for r in rows
                 for p in [_get_latest_price(connection, r[0])]
                 if p is not None
             )
+            current_total = filled_total + pending_total_notional
             if current_total + proposed_notional > config.max_total_notional:
                 return (
                     False,
@@ -332,12 +380,13 @@ def check_portfolio_limits(
     if config.max_strategy_notional is not None:
         strategy_open = _compute_per_strategy_open_qty(connection)
         strategy_symbols = strategy_open.get(strategy_name, {})
-        current_strategy_notional = sum(
+        filled_strategy_notional = sum(
             qty * (p or 0.0)
             for sym, qty in strategy_symbols.items()
             for p in [_get_latest_price(connection, sym)]
             if p is not None
         )
+        current_strategy_notional = filled_strategy_notional + pending_per_strategy.get(strategy_name, 0.0)
         if current_strategy_notional + proposed_notional > config.max_strategy_notional:
             return (
                 False,
