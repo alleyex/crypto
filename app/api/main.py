@@ -104,6 +104,8 @@ from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.metrics.metrics_service import build_metrics
+from app.backtest.history_service import list_runs as list_backtest_runs
+from app.backtest.history_service import persist_run as persist_backtest_run
 from app.backtest.loader import load_candles_from_db
 from app.backtest.runner import run_backtest
 from app.backtest.sweep import run_parameter_sweep
@@ -472,7 +474,7 @@ def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
             "components": [],
         }
 
-    worker_components = {"data_worker", "strategy_worker", "execution_worker"}
+    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker"}
     enriched_heartbeats: list[dict[str, Any]] = []
     stale_workers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
@@ -600,7 +602,7 @@ class PipelineRunRequest(BaseModel):
 
 
 class QueueJobRequest(BaseModel):
-    job_type: Literal["market_data", "strategy", "execution"]
+    job_type: Literal["market_data", "strategy", "risk", "execution"]
     strategy_name: Optional[str] = None
     strategy_names: Optional[List[str]] = None
     symbol_names: Optional[List[str]] = None
@@ -608,7 +610,7 @@ class QueueJobRequest(BaseModel):
 
 
 class QueueRunRequest(BaseModel):
-    job_type: Optional[Literal["market_data", "strategy", "execution"]] = None
+    job_type: Optional[Literal["market_data", "strategy", "risk", "execution"]] = None
 
 
 class SchedulerStrategyRequest(BaseModel):
@@ -789,7 +791,7 @@ def audit_events(limit: int = Query(default=20, ge=1, le=200)) -> list[dict]:
 def queue_jobs(
     limit: int = Query(default=20, ge=1, le=200),
     status: Optional[str] = Query(default=None),
-    job_type: Optional[Literal["market_data", "strategy", "execution"]] = Query(default=None),
+    job_type: Optional[Literal["market_data", "strategy", "risk", "execution"]] = Query(default=None),
 ) -> list[dict[str, Any]]:
     connection = get_connection()
     try:
@@ -1495,7 +1497,7 @@ def backtest(
                 "strategy": strategy,
                 "days": days,
             }
-        return run_backtest(
+        result = run_backtest(
             symbol=symbol,
             strategy_name=strategy,
             candles=candles,
@@ -1503,6 +1505,31 @@ def backtest(
             order_qty=order_qty,
             max_position_qty=max_position_qty,
             fill_on=fill_on,
+        )
+        persist_backtest_run(connection, run_type="single", result=result, days=days, fill_on=fill_on)
+        return result
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/history")
+def backtest_history(
+    symbol: Optional[str] = Query(default=None),
+    strategy: Optional[str] = Query(default=None),
+    run_type: Optional[str] = Query(default=None, pattern="^(single|sweep|walk_forward)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    """Return paginated history of all persisted backtest runs."""
+    connection = get_connection()
+    try:
+        return list_backtest_runs(
+            connection,
+            symbol=symbol,
+            strategy_name=strategy,
+            run_type=run_type,
+            limit=limit,
+            offset=offset,
         )
     finally:
         connection.close()
@@ -1540,6 +1567,21 @@ def backtest_sweep(req: BacktestSweepRequest) -> Dict[str, Any]:
             )
         except ValueError as exc:
             return {"error": str(exc)}
+        for combo in results:
+            persist_backtest_run(
+                connection,
+                run_type="sweep",
+                result={
+                    "symbol": req.symbol,
+                    "strategy_name": req.strategy,
+                    "candle_count": len(candles),
+                    "trade_count": combo.get("trade_count", 0),
+                    "metrics": combo.get("metrics", {}),
+                },
+                days=req.days,
+                fill_on=req.fill_on,
+                params=combo.get("params"),
+            )
         return {
             "symbol": req.symbol,
             "strategy": req.strategy,
@@ -1571,7 +1613,7 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
         if not candles:
             return {"error": f"No candles found for symbol={req.symbol!r} in the last {req.days} days."}
         try:
-            return run_walk_forward(
+            wf_result = run_walk_forward(
                 symbol=req.symbol,
                 strategy_name=req.strategy,
                 candles=candles,
@@ -1583,5 +1625,25 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
             )
         except ValueError as exc:
             return {"error": str(exc)}
+        for split in wf_result.get("splits", []):
+            persist_backtest_run(
+                connection,
+                run_type="walk_forward",
+                result={
+                    "symbol": req.symbol,
+                    "strategy_name": req.strategy,
+                    "candle_count": split.get("test_candle_count", 0),
+                    "trade_count": split.get("test_trade_count", 0),
+                    "metrics": split.get("test_metrics", {}),
+                },
+                days=req.days,
+                fill_on=req.fill_on,
+                params={
+                    "fold": split.get("fold"),
+                    "train_candle_count": split.get("train_candle_count"),
+                    "test_candle_count": split.get("test_candle_count"),
+                },
+            )
+        return wf_result
     finally:
         connection.close()

@@ -985,3 +985,204 @@ def test_run_backtest_macd_strategy() -> None:
     result = run_backtest("BTCUSDT", "macd", candles, order_qty=0.001, max_position_qty=0.002)
     assert result["strategy_name"] == "macd"
     assert result["candle_count"] == len(prices)
+
+# ---------------------------------------------------------------------------
+# history_service tests
+# ---------------------------------------------------------------------------
+
+from app.backtest.history_service import persist_run, list_runs
+
+
+def _make_history_conn():
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+    return conn
+
+
+def test_persist_run_returns_id() -> None:
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    run_id = persist_run(conn, "single", result, days=30)
+    assert isinstance(run_id, int) and run_id > 0
+    conn.close()
+
+
+def test_persist_run_stored_values() -> None:
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    persist_run(conn, "single", result, days=7, fill_on="next_open")
+    history = list_runs(conn)
+    assert history["total"] == 1
+    row = history["runs"][0]
+    assert row["symbol"] == "BTCUSDT"
+    assert row["strategy_name"] == "ma_cross"
+    assert row["run_type"] == "single"
+    assert row["fill_on"] == "next_open"
+    assert row["days"] == 7
+    conn.close()
+
+
+def test_list_runs_filter_by_symbol() -> None:
+    conn = _make_history_conn()
+    r1 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    r2 = run_backtest("ETHUSDT", "ma_cross", _make_candles([100.0] * 5))
+    persist_run(conn, "single", r1)
+    persist_run(conn, "single", r2)
+    btc_history = list_runs(conn, symbol="BTCUSDT")
+    assert btc_history["total"] == 1
+    assert btc_history["runs"][0]["symbol"] == "BTCUSDT"
+    conn.close()
+
+
+def test_list_runs_filter_by_run_type() -> None:
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    persist_run(conn, "single", result)
+    persist_run(conn, "sweep", result, params={"order_qty": 0.001})
+    assert list_runs(conn, run_type="single")["total"] == 1
+    assert list_runs(conn, run_type="sweep")["total"] == 1
+    assert list_runs(conn)["total"] == 2
+    conn.close()
+
+
+def test_list_runs_pagination() -> None:
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    for _ in range(5):
+        persist_run(conn, "single", result)
+    page = list_runs(conn, limit=2, offset=0)
+    assert len(page["runs"]) == 2
+    assert page["total"] == 5
+    assert page["limit"] == 2
+    assert page["offset"] == 0
+    conn.close()
+
+
+def test_persist_run_handles_infinite_profit_factor() -> None:
+    """profit_factor=inf must not raise (coerced to NULL)."""
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result["metrics"]["profit_factor"] = float("inf")
+    run_id = persist_run(conn, "single", result)
+    row = list_runs(conn)["runs"][0]
+    assert row["profit_factor"] is None
+    conn.close()
+
+
+def test_persist_run_params_json_stored() -> None:
+    conn = _make_history_conn()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    params = {"order_qty": 0.002, "max_position_qty": 0.004}
+    persist_run(conn, "sweep", result, params=params)
+    import json
+    row = list_runs(conn, run_type="sweep")["runs"][0]
+    assert json.loads(row["params_json"]) == params
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /backtest/history endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_backtest_history_empty(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    resp = client.get("/backtest/history")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["runs"] == []
+    conn.close()
+
+
+class _PersistentConn:
+    """Wraps a sqlite3 connection, ignoring close() so it can be reused across requests."""
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def close(self) -> None:
+        pass  # intentional no-op
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def really_close(self) -> None:
+        self._conn.close()
+
+
+def _make_seeded_conn(candles: List[Dict], symbol: str = "BTCUSDT") -> "_PersistentConn":
+    """In-memory connection with migrations + candles seeded for the given symbol."""
+    raw = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(raw)
+    for c in candles:
+        raw.execute(
+            """INSERT OR IGNORE INTO candles
+               (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+               VALUES (?, '1m', ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, c["open_time"], c["open"], c["high"], c["low"],
+             c["close"], c["volume"], c["open_time"] + 59999),
+        )
+    raw.commit()
+    return _PersistentConn(raw)
+
+
+def test_get_backtest_history_appears_after_run(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&days=30")
+    resp = client.get("/backtest/history")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert data["runs"][0]["symbol"] == "BTCUSDT"
+    assert data["runs"][0]["run_type"] == "single"
+    conn.really_close()
+
+
+def test_get_backtest_history_filter_by_symbol(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    # also seed ETHUSDT candles
+    for c in candles:
+        conn._conn.execute(
+            """INSERT OR IGNORE INTO candles
+               (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+               VALUES (?, '1m', ?, ?, ?, ?, ?, ?, ?)""",
+            ("ETHUSDT", c["open_time"], c["open"], c["high"], c["low"],
+             c["close"], c["volume"], c["open_time"] + 59999),
+        )
+    conn._conn.commit()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
+    client.get("/backtest?symbol=ETHUSDT&strategy=ma_cross")
+    resp = client.get("/backtest/history?symbol=BTCUSDT")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["runs"][0]["symbol"] == "BTCUSDT"
+    conn.really_close()
+
+
+def test_get_backtest_history_pagination(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    for _ in range(5):
+        client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
+    resp = client.get("/backtest/history?limit=2&offset=0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["runs"]) == 2
+    assert data["total"] == 5
+    conn.really_close()

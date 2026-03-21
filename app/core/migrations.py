@@ -313,6 +313,39 @@ def _create_portfolio_config_table(connection: DBConnection) -> None:
     )
 
 
+def _create_backtest_runs_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            {_auto_id_column_sql(backend)},
+            run_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            strategy_name TEXT NOT NULL,
+            timeframe TEXT NOT NULL DEFAULT '1m',
+            days INTEGER,
+            candle_count INTEGER NOT NULL,
+            trade_count INTEGER NOT NULL,
+            fill_on TEXT NOT NULL DEFAULT 'close',
+            initial_capital REAL,
+            final_equity REAL,
+            total_return_pct REAL,
+            max_drawdown_pct REAL,
+            sharpe_ratio REAL,
+            win_rate_pct REAL,
+            profit_factor REAL,
+            round_trips INTEGER,
+            params_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backtest_runs_symbol_strategy "
+        "ON backtest_runs(symbol, strategy_name, created_at DESC);"
+    )
+
+
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -346,6 +379,7 @@ MIGRATIONS: list[Migration] = [
     ("017_create_portfolio_config_table", _create_portfolio_config_table),
     ("018_add_orders_broker_metadata", _add_orders_broker_metadata),
     ("019_add_performance_indexes", _add_performance_indexes),
+    ("020_create_backtest_runs_table", _create_backtest_runs_table),
 ]
 
 
