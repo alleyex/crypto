@@ -1,12 +1,17 @@
 """Tests for the backtesting engine and metrics module."""
 
 import math
+import sqlite3
 from typing import Dict, List
 
 import pytest
 
+from app.backtest.loader import load_candles_from_db, _iso_to_epoch_ms
 from app.backtest.metrics import compute_metrics, _max_drawdown_pct, _sharpe_ratio, _daily_closes
 from app.backtest.runner import run_backtest
+from app.backtest.sweep import run_parameter_sweep
+from app.backtest.walk_forward import run_walk_forward
+from app.core.migrations import run_migrations
 
 
 # ---------------------------------------------------------------------------
@@ -348,3 +353,257 @@ def test_run_backtest_equity_curve_fields() -> None:
         for field in ("timestamp", "open_time", "close", "equity",
                       "realized_pnl", "unrealized_pnl", "qty"):
             assert field in point
+
+
+# ---------------------------------------------------------------------------
+# loader.py tests
+# ---------------------------------------------------------------------------
+
+def _make_db_with_candles(candles: List[Dict]) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    run_migrations(conn)
+    for c in candles:
+        conn.execute(
+            """INSERT INTO candles
+               (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(symbol, timeframe, open_time) DO NOTHING""",
+            ("BTCUSDT", "1m",
+             int(c["open_time"]),
+             str(c["open"]), str(c["high"]), str(c["low"]), str(c["close"]),
+             str(c.get("volume", "1.0")),
+             int(c.get("close_time", int(c["open_time"]) + 59999))),
+        )
+    conn.commit()
+    return conn
+
+
+def test_iso_to_epoch_ms_date_only() -> None:
+    ms = _iso_to_epoch_ms("2024-01-01")
+    from datetime import datetime, timezone
+    dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert ms == int(dt.timestamp() * 1000)
+
+
+def test_iso_to_epoch_ms_datetime() -> None:
+    ms = _iso_to_epoch_ms("2024-06-15 12:30:00")
+    from datetime import datetime, timezone
+    dt = datetime(2024, 6, 15, 12, 30, 0, tzinfo=timezone.utc)
+    assert ms == int(dt.timestamp() * 1000)
+
+
+def test_iso_to_epoch_ms_invalid_raises() -> None:
+    with pytest.raises(ValueError):
+        _iso_to_epoch_ms("not-a-date")
+
+
+def test_load_candles_from_db_returns_all_when_no_filter() -> None:
+    candles = _make_candles([100.0, 101.0, 102.0])
+    conn = _make_db_with_candles(candles)
+    loaded = load_candles_from_db(conn, symbol="BTCUSDT", timeframe="1m")
+    assert len(loaded) == 3
+    conn.close()
+
+
+def test_load_candles_from_db_result_fields() -> None:
+    candles = _make_candles([100.0])
+    conn = _make_db_with_candles(candles)
+    loaded = load_candles_from_db(conn, "BTCUSDT")
+    assert len(loaded) == 1
+    row = loaded[0]
+    for field in ("open_time", "open", "high", "low", "close", "volume", "close_time"):
+        assert field in row
+    assert isinstance(row["open_time"], int)
+    assert isinstance(row["close"], float)
+    conn.close()
+
+
+def test_load_candles_from_db_sorted_ascending() -> None:
+    candles = _make_candles([100.0, 101.0, 102.0])
+    conn = _make_db_with_candles(candles)
+    loaded = load_candles_from_db(conn, "BTCUSDT")
+    open_times = [r["open_time"] for r in loaded]
+    assert open_times == sorted(open_times)
+    conn.close()
+
+
+def test_load_candles_from_db_start_filter() -> None:
+    candles = _make_candles([100.0, 101.0, 102.0, 103.0, 104.0])
+    conn = _make_db_with_candles(candles)
+    # start at the 3rd candle's open_time
+    start_ms = candles[2]["open_time"]
+    from datetime import datetime, timezone
+    start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    loaded = load_candles_from_db(conn, "BTCUSDT", start=start_iso)
+    assert len(loaded) == 3
+    assert loaded[0]["open_time"] == start_ms
+    conn.close()
+
+
+def test_load_candles_from_db_end_filter() -> None:
+    candles = _make_candles([100.0, 101.0, 102.0, 103.0, 104.0])
+    conn = _make_db_with_candles(candles)
+    # end before the 3rd candle (exclusive)
+    end_ms = candles[2]["open_time"]
+    from datetime import datetime, timezone
+    end_iso = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    loaded = load_candles_from_db(conn, "BTCUSDT", end=end_iso)
+    assert len(loaded) == 2
+    conn.close()
+
+
+def test_load_candles_from_db_limit() -> None:
+    candles = _make_candles([100.0, 101.0, 102.0, 103.0, 104.0])
+    conn = _make_db_with_candles(candles)
+    loaded = load_candles_from_db(conn, "BTCUSDT", limit=2)
+    assert len(loaded) == 2
+    conn.close()
+
+
+def test_load_candles_from_db_empty_when_symbol_missing() -> None:
+    candles = _make_candles([100.0, 101.0])
+    conn = _make_db_with_candles(candles)
+    loaded = load_candles_from_db(conn, "ETHUSDT")
+    assert loaded == []
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# sweep.py tests
+# ---------------------------------------------------------------------------
+
+def test_run_parameter_sweep_single_combination() -> None:
+    candles = _make_candles([100.0 + i for i in range(10)])
+    results = run_parameter_sweep(
+        symbol="BTCUSDT",
+        strategy_name="ma_cross",
+        candles=candles,
+        param_grid={"order_qty": [0.001]},
+    )
+    assert len(results) == 1
+    assert "params" in results[0]
+    assert "metrics" in results[0]
+    assert results[0]["params"]["order_qty"] == 0.001
+
+
+def test_run_parameter_sweep_multiple_combinations() -> None:
+    candles = _make_candles([100.0 + i for i in range(15)])
+    results = run_parameter_sweep(
+        symbol="BTCUSDT",
+        strategy_name="ma_cross",
+        candles=candles,
+        param_grid={"order_qty": [0.001, 0.002], "max_position_qty": [0.002, 0.004]},
+    )
+    # 2 × 2 = 4 combinations
+    assert len(results) == 4
+    param_sets = [frozenset(r["params"].items()) for r in results]
+    assert len(set(param_sets)) == 4  # all unique
+
+
+def test_run_parameter_sweep_sorted_by_sharpe() -> None:
+    candles = _make_candles([100.0 + i for i in range(15)])
+    results = run_parameter_sweep(
+        symbol="BTCUSDT",
+        strategy_name="ma_cross",
+        candles=candles,
+        param_grid={"order_qty": [0.001, 0.002]},
+        sort_by="sharpe_ratio",
+    )
+    sharpe_values = [
+        r["metrics"].get("sharpe_ratio")
+        for r in results
+        if r["metrics"].get("sharpe_ratio") is not None
+    ]
+    assert sharpe_values == sorted(sharpe_values, reverse=True)
+
+
+def test_run_parameter_sweep_sorted_by_max_drawdown() -> None:
+    candles = _make_candles([100.0 + i for i in range(15)])
+    results = run_parameter_sweep(
+        symbol="BTCUSDT",
+        strategy_name="ma_cross",
+        candles=candles,
+        param_grid={"order_qty": [0.001, 0.002]},
+        sort_by="max_drawdown_pct",
+    )
+    # max_drawdown_pct is ascending (lower is better)
+    dd_values = [r["metrics"].get("max_drawdown_pct", 0.0) for r in results]
+    assert dd_values == sorted(dd_values)
+
+
+def test_run_parameter_sweep_unknown_param_raises() -> None:
+    candles = _make_candles([100.0, 101.0])
+    with pytest.raises(ValueError, match="Unknown sweep parameter"):
+        run_parameter_sweep("BTCUSDT", "ma_cross", candles, param_grid={"bad_param": [1]})
+
+
+def test_run_parameter_sweep_result_contains_trade_count() -> None:
+    candles = _make_candles([100.0 + i for i in range(10)])
+    results = run_parameter_sweep(
+        "BTCUSDT", "ma_cross", candles,
+        param_grid={"order_qty": [0.001]},
+    )
+    assert "trade_count" in results[0]
+
+
+# ---------------------------------------------------------------------------
+# walk_forward.py tests
+# ---------------------------------------------------------------------------
+
+def test_run_walk_forward_basic_structure() -> None:
+    candles = _make_candles([100.0 + i * 0.5 for i in range(30)])
+    result = run_walk_forward(
+        symbol="BTCUSDT",
+        strategy_name="ma_cross",
+        candles=candles,
+        n_splits=3,
+    )
+    for key in ("symbol", "strategy_name", "candle_count", "n_splits", "splits", "oos_metrics"):
+        assert key in result
+    assert result["candle_count"] == 30
+    assert result["n_splits"] == 3
+
+
+def test_run_walk_forward_splits_count() -> None:
+    candles = _make_candles([100.0 + i for i in range(40)])
+    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=4)
+    assert len(result["splits"]) == 4
+
+
+def test_run_walk_forward_split_fields() -> None:
+    candles = _make_candles([100.0 + i for i in range(20)])
+    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=2)
+    for split in result["splits"]:
+        for key in ("fold", "train_candle_count", "test_candle_count",
+                    "train_metrics", "test_metrics",
+                    "train_trade_count", "test_trade_count"):
+            assert key in split
+
+
+def test_run_walk_forward_expanding_window() -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=2)
+    splits = result["splits"]
+    # Each fold's training set is larger than the previous
+    assert splits[1]["train_candle_count"] > splits[0]["train_candle_count"]
+
+
+def test_run_walk_forward_oos_metrics_keys() -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=3)
+    oos = result["oos_metrics"]
+    for key in ("total_return_pct_mean", "total_return_pct_std",
+                "max_drawdown_pct_mean", "max_drawdown_pct_std"):
+        assert key in oos
+
+
+def test_run_walk_forward_too_few_candles_raises() -> None:
+    candles = _make_candles([100.0, 101.0])  # 2 candles, n_splits=5 → chunk_size=0
+    with pytest.raises(ValueError, match="Too few candles"):
+        run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=5)
+
+
+def test_run_walk_forward_invalid_n_splits_raises() -> None:
+    candles = _make_candles([100.0 + i for i in range(10)])
+    with pytest.raises(ValueError, match="n_splits must be >= 1"):
+        run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=0)
