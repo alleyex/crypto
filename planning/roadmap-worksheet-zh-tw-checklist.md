@@ -79,7 +79,7 @@
 - [x] 分離 API 與 worker
   目標：降低彼此干擾。
   交付物：可獨立部署的 API 與 worker。
-  備註：已拆出 `data-worker`、`strategy-worker`、`execution-worker` Compose services；split-workers double execution bug 已修（`--queue-drain` + `queue_dispatch`）；`depends_on_job_id` 確保 market_data → strategy → execution 依序執行；stale lease 自動回收；`depends_on: api` false coupling 已移除。（2026-03-20）
+  備註：已拆出 `data-worker`、`strategy-worker`、`risk-worker`、`execution-worker` Compose services；split-workers double execution bug 已修（`--queue-drain` + `queue_dispatch`）；`depends_on_job_id` 與 payload propagation 確保 market_data → strategy → risk → execution 依序執行；stale lease 自動回收；`depends_on: api` false coupling 已移除。（2026-03-21）
 
 - [x] 建立市場資料 worker
   目標：將行情接入獨立處理。
@@ -89,12 +89,17 @@
 - [x] 建立策略 worker
   目標：支援多策略排程。
   交付物：strategy worker。
-  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 可跑；per-strategy error isolation 已完成（一個 crash 不影響其他）；multi-strategy double-execution 已透過 pending approved BUY qty 修復。（2026-03-20）
+  備註：`strategy-only` mode、strategy registry、multi-strategy、multi-symbol 可跑；per-strategy error isolation 已完成（一個 crash 不影響其他）；strategy worker 現在只負責 signals，不再內含 risk evaluation；multi-strategy double-execution 已透過 pending approved BUY qty 修復。（2026-03-21）
+
+- [x] 建立 risk worker
+  目標：將風控評估從策略產生流程中切出。
+  交付物：risk worker。
+  備註：`risk-only` mode、`risk-worker` heartbeat/log、queue drain/dispatch、admin drain/retry controls 均已完成；pipeline 已正式固定為 `market_data -> strategy -> risk -> execution`。（2026-03-21）
 
 - [x] 建立 execution worker
   目標：將重試與同步邏輯獨立。
   交付物：execution worker。
-  備註：`execution-only` mode 可獨立執行；queue retry / stale batch recover / clear / audit trail 已完成；orphan order 偵測（`check_orphan_orders` step）已加入每次 execution job。（2026-03-20）
+  備註：`execution-only` mode 可獨立執行；queue retry / stale batch recover / clear / audit trail 已完成；orphan order 偵測（`check_orphan_orders` step）已加入每次 execution job；上游改為接收 risk step 傳下來的 `risk_event_ids`。（2026-03-21）
 
 - [x] 引入 Redis 或簡易 queue
   目標：支援非同步任務分派。
@@ -118,10 +123,10 @@
 
 ## Stage 3 Production
 
-- [~] 抽象化 broker adapter
+- [x] 抽象化 broker adapter
   目標：支援多交易所。
   交付物：adapter interface。
-  備註：`BrokerClient` Protocol、`SimulatedBrokerClient`、`live_broker` 執行模組已完成（groundwork 2026-03-20）；`SimulatedLiveExecutionAdapter` 已接入真實 execution path；待實作真實交易所 adapter（如 Binance）。
+  備註：`BrokerClient` Protocol、`SimulatedBrokerClient`、`BinanceBrokerClient`（HMAC-SHA256、MARKET order、weighted-avg fill price）、`BinanceLiveExecutionAdapter` 均已完成；testnet 端到端驗證通過（帳號連線 → dry-run order → 完整 pipeline 7 步）；切換 `CRYPTO_EXECUTION_BACKEND=binance` 即可上線。（2026-03-21）
 
 - [ ] 風控服務獨立化
   目標：提高風控一致性。
