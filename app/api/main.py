@@ -104,6 +104,10 @@ from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.metrics.metrics_service import build_metrics
+from app.backtest.loader import load_candles_from_db
+from app.backtest.runner import run_backtest
+from app.backtest.sweep import run_parameter_sweep
+from app.backtest.walk_forward import run_walk_forward
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_history import build_soak_history_summary
@@ -1428,3 +1432,156 @@ def kill_switch_enable(payload: Optional[KillSwitchControlRequest] = None) -> Di
 def kill_switch_disable() -> Dict[str, Union[str, bool]]:
     removed, kill_switch_file = disable_kill_switch()
     return {"enabled": False, "kill_switch_file": kill_switch_file, "flag_removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# Backtest endpoints
+# ---------------------------------------------------------------------------
+
+class BacktestSweepRequest(BaseModel):
+    symbol: str = DEFAULT_SYMBOL
+    strategy: str = DEFAULT_STRATEGY_NAME
+    days: int = 30
+    param_grid: Dict[str, List[float]] = {}
+    sort_by: str = "sharpe_ratio"
+    fill_on: str = "close"
+    initial_capital: float = 10000.0
+
+
+class BacktestWalkForwardRequest(BaseModel):
+    symbol: str = DEFAULT_SYMBOL
+    strategy: str = DEFAULT_STRATEGY_NAME
+    days: int = 30
+    n_splits: int = 5
+    order_qty: float = DEFAULT_ORDER_QTY
+    max_position_qty: float = MAX_POSITION_QTY
+    fill_on: str = "close"
+    initial_capital: float = 10000.0
+
+
+def _backtest_start_iso(days: int) -> str:
+    from datetime import timedelta
+    return (_utc_now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+@app.get("/backtest")
+def backtest(
+    symbol: str = Query(default=DEFAULT_SYMBOL),
+    strategy: str = Query(default=DEFAULT_STRATEGY_NAME),
+    days: int = Query(default=30, ge=1, le=365),
+    order_qty: float = Query(default=DEFAULT_ORDER_QTY, gt=0),
+    max_position_qty: float = Query(default=MAX_POSITION_QTY, gt=0),
+    fill_on: str = Query(default="close", pattern="^(close|next_open)$"),
+    initial_capital: float = Query(default=10000.0, gt=0),
+) -> Dict[str, Any]:
+    """Run a backtest over recent candles loaded from the DB.
+
+    Returns metrics (total_return_pct, sharpe_ratio, max_drawdown_pct,
+    win_rate_pct, profit_factor), equity_curve, and trades.
+    """
+    if strategy not in list_registered_strategies():
+        return {"error": f"Unknown strategy: {strategy!r}. Available: {list_registered_strategies()}"}
+    connection = get_connection()
+    try:
+        candles = load_candles_from_db(
+            connection,
+            symbol=symbol,
+            start=_backtest_start_iso(days),
+        )
+        if not candles:
+            return {
+                "error": f"No candles found for symbol={symbol!r} in the last {days} days.",
+                "symbol": symbol,
+                "strategy": strategy,
+                "days": days,
+            }
+        return run_backtest(
+            symbol=symbol,
+            strategy_name=strategy,
+            candles=candles,
+            initial_capital=initial_capital,
+            order_qty=order_qty,
+            max_position_qty=max_position_qty,
+            fill_on=fill_on,
+        )
+    finally:
+        connection.close()
+
+
+@app.post("/backtest/sweep")
+def backtest_sweep(req: BacktestSweepRequest) -> Dict[str, Any]:
+    """Run a parameter grid search over recent candles.
+
+    param_grid keys: order_qty, max_position_qty, cooldown_seconds, max_daily_loss.
+    Results are sorted by sort_by (default: sharpe_ratio, best first).
+    """
+    if req.strategy not in list_registered_strategies():
+        return {"error": f"Unknown strategy: {req.strategy!r}. Available: {list_registered_strategies()}"}
+    if not req.param_grid:
+        return {"error": "param_grid must not be empty."}
+    connection = get_connection()
+    try:
+        candles = load_candles_from_db(
+            connection,
+            symbol=req.symbol,
+            start=_backtest_start_iso(req.days),
+        )
+        if not candles:
+            return {"error": f"No candles found for symbol={req.symbol!r} in the last {req.days} days."}
+        try:
+            results = run_parameter_sweep(
+                symbol=req.symbol,
+                strategy_name=req.strategy,
+                candles=candles,
+                param_grid={k: list(v) for k, v in req.param_grid.items()},
+                sort_by=req.sort_by,
+                initial_capital=req.initial_capital,
+                fill_on=req.fill_on,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {
+            "symbol": req.symbol,
+            "strategy": req.strategy,
+            "days": req.days,
+            "candle_count": len(candles),
+            "combination_count": len(results),
+            "sort_by": req.sort_by,
+            "results": results,
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/backtest/walk-forward")
+def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
+    """Run expanding-window walk-forward validation over recent candles.
+
+    Returns per-fold train/test metrics and aggregated out-of-sample statistics.
+    """
+    if req.strategy not in list_registered_strategies():
+        return {"error": f"Unknown strategy: {req.strategy!r}. Available: {list_registered_strategies()}"}
+    connection = get_connection()
+    try:
+        candles = load_candles_from_db(
+            connection,
+            symbol=req.symbol,
+            start=_backtest_start_iso(req.days),
+        )
+        if not candles:
+            return {"error": f"No candles found for symbol={req.symbol!r} in the last {req.days} days."}
+        try:
+            return run_walk_forward(
+                symbol=req.symbol,
+                strategy_name=req.strategy,
+                candles=candles,
+                n_splits=req.n_splits,
+                initial_capital=req.initial_capital,
+                order_qty=req.order_qty,
+                max_position_qty=req.max_position_qty,
+                fill_on=req.fill_on,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+    finally:
+        connection.close()

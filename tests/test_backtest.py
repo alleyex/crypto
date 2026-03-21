@@ -5,7 +5,9 @@ import sqlite3
 from typing import Dict, List
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.main import app
 from app.backtest.loader import load_candles_from_db, _iso_to_epoch_ms
 from app.backtest.metrics import compute_metrics, _max_drawdown_pct, _sharpe_ratio, _daily_closes
 from app.backtest.runner import run_backtest
@@ -607,3 +609,148 @@ def test_run_walk_forward_invalid_n_splits_raises() -> None:
     candles = _make_candles([100.0 + i for i in range(10)])
     with pytest.raises(ValueError, match="n_splits must be >= 1"):
         run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=0)
+
+
+# ---------------------------------------------------------------------------
+# API endpoint tests  GET /backtest, POST /backtest/sweep, POST /backtest/walk-forward
+# ---------------------------------------------------------------------------
+
+def _seed_db_connection(candles: List[Dict], symbol: str = "BTCUSDT") -> sqlite3.Connection:
+    """Build a seeded in-memory SQLite connection for endpoint monkeypatching."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+    for c in candles:
+        conn.execute(
+            """INSERT INTO candles
+               (symbol, timeframe, open_time, open, high, low, close, volume, close_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(symbol, timeframe, open_time) DO NOTHING""",
+            (symbol, "1m",
+             int(c["open_time"]),
+             str(c["open"]), str(c["high"]), str(c["low"]), str(c["close"]),
+             "1.0", int(c.get("close_time", int(c["open_time"]) + 59999))),
+        )
+    conn.commit()
+    return conn
+
+
+def _patched_client(monkeypatch, candles: List[Dict], symbol: str = "BTCUSDT"):
+    """Return a TestClient whose get_connection returns a seeded in-memory DB.
+
+    Also patches _backtest_start_iso so that historical test candles (2023)
+    always fall within the requested date range.
+    """
+    conn = _seed_db_connection(candles, symbol)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    return TestClient(app)
+
+
+def test_get_backtest_returns_metrics(monkeypatch) -> None:
+    prices = [100.0 + i for i in range(20)]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&days=1")
+    assert response.status_code == 200
+    data = response.json()
+    for key in ("symbol", "strategy_name", "candle_count", "trade_count", "metrics", "equity_curve", "trades"):
+        assert key in data, f"Missing key: {key}"
+
+
+def test_get_backtest_metrics_keys(monkeypatch) -> None:
+    prices = [100.0 + i * 0.5 for i in range(20)]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.get("/backtest")
+    assert response.status_code == 200
+    metrics = response.json()["metrics"]
+    for key in ("total_return_pct", "max_drawdown_pct", "trade_count", "initial_capital"):
+        assert key in metrics
+
+
+def test_get_backtest_no_candles_returns_error(monkeypatch) -> None:
+    # Empty DB — no candles for the symbol
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    response = client.get("/backtest?symbol=ETHUSDT")
+    assert response.status_code == 200
+    assert "error" in response.json()
+
+
+def test_get_backtest_unknown_strategy_returns_error(monkeypatch) -> None:
+    prices = [100.0] * 10
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.get("/backtest?strategy=nonexistent_strategy")
+    assert response.status_code == 200
+    assert "error" in response.json()
+
+
+def test_get_backtest_fill_on_next_open(monkeypatch) -> None:
+    prices = [100.0 + i for i in range(20)]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.get("/backtest?fill_on=next_open")
+    assert response.status_code == 200
+    assert "equity_curve" in response.json()
+
+
+def test_post_backtest_sweep_returns_combinations(monkeypatch) -> None:
+    prices = [100.0 + i for i in range(20)]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    payload = {
+        "symbol": "BTCUSDT",
+        "strategy": "ma_cross",
+        "days": 1,
+        "param_grid": {"order_qty": [0.001, 0.002]},
+        "sort_by": "total_return_pct",
+    }
+    response = client.post("/backtest/sweep", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["combination_count"] == 2
+    assert len(data["results"]) == 2
+    assert data["results"][0]["params"]["order_qty"] in (0.001, 0.002)
+
+
+def test_post_backtest_sweep_empty_param_grid_returns_error(monkeypatch) -> None:
+    prices = [100.0] * 10
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.post("/backtest/sweep", json={"param_grid": {}})
+    assert response.status_code == 200
+    assert "error" in response.json()
+
+
+def test_post_backtest_sweep_unknown_param_returns_error(monkeypatch) -> None:
+    prices = [100.0] * 10
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.post("/backtest/sweep", json={"param_grid": {"bad_param": [1]}})
+    assert response.status_code == 200
+    assert "error" in response.json()
+
+
+def test_post_backtest_walk_forward_returns_splits(monkeypatch) -> None:
+    prices = [100.0 + i * 0.5 for i in range(40)]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    payload = {"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 1, "n_splits": 3}
+    response = client.post("/backtest/walk-forward", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    for key in ("symbol", "strategy_name", "candle_count", "n_splits", "splits", "oos_metrics"):
+        assert key in data
+    assert data["n_splits"] == 3
+    assert len(data["splits"]) == 3
+
+
+def test_post_backtest_walk_forward_too_few_candles_returns_error(monkeypatch) -> None:
+    prices = [100.0, 101.0]
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.post("/backtest/walk-forward", json={"n_splits": 10})
+    assert response.status_code == 200
+    assert "error" in response.json()
+
+
+def test_post_backtest_walk_forward_unknown_strategy_returns_error(monkeypatch) -> None:
+    prices = [100.0] * 20
+    client = _patched_client(monkeypatch, _make_candles(prices))
+    response = client.post("/backtest/walk-forward", json={"strategy": "ghost_strategy"})
+    assert response.status_code == 200
+    assert "error" in response.json()
