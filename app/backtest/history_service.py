@@ -15,8 +15,9 @@ INSERT INTO backtest_runs (
     run_type, symbol, strategy_name, timeframe, days, candle_count,
     trade_count, fill_on, initial_capital, final_equity,
     total_return_pct, max_drawdown_pct, sharpe_ratio, win_rate_pct,
-    profit_factor, round_trips, params_json, experiment_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    profit_factor, round_trips, params_json, experiment_name,
+    wf_group_id, fold_index
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -42,6 +43,8 @@ def persist_run(
     fill_on: str = "close",
     params: Optional[Dict[str, Any]] = None,
     experiment_name: Optional[str] = None,
+    wf_group_id: Optional[str] = None,
+    fold_index: Optional[int] = None,
 ) -> int:
     """Persist a single backtest result row and return its id."""
     metrics = result.get("metrics") or {}
@@ -67,6 +70,8 @@ def persist_run(
             metrics.get("round_trips"),
             json.dumps(params, sort_keys=True) if params is not None else None,
             experiment_name,
+            wf_group_id,
+            fold_index,
         ),
     )
     connection.commit()
@@ -241,6 +246,67 @@ def get_champion_run(
         (strategy_name,),
     )
     return rows[0] if rows else None
+
+
+_WF_AGGREGATE_METRICS = (
+    "sharpe_ratio", "total_return_pct", "max_drawdown_pct", "win_rate_pct", "profit_factor"
+)
+
+
+def get_walk_forward_group(
+    connection: DBConnection, wf_group_id: str
+) -> Optional[Dict[str, Any]]:
+    """Return all folds for a WF group plus per-metric aggregate stats, or None."""
+    rows = fetch_all_as_dicts(
+        connection,
+        "SELECT * FROM backtest_runs WHERE wf_group_id = ?"
+        " ORDER BY fold_index ASC, id ASC;",
+        (wf_group_id,),
+    )
+    if not rows:
+        return None
+
+    agg: Dict[str, Any] = {}
+    for metric in _WF_AGGREGATE_METRICS:
+        vals = [float(r[metric]) for r in rows if r.get(metric) is not None]
+        if vals:
+            agg[f"avg_{metric}"] = round(sum(vals) / len(vals), 4)
+            agg[f"min_{metric}"] = round(min(vals), 4)
+            agg[f"max_{metric}"] = round(max(vals), 4)
+
+    first = rows[0]
+    return {
+        "wf_group_id": wf_group_id,
+        "strategy_name": first.get("strategy_name"),
+        "symbol": first.get("symbol"),
+        "fold_count": len(rows),
+        "folds": rows,
+        "aggregate": agg,
+    }
+
+
+def list_walk_forward_groups(connection: DBConnection) -> List[Dict[str, Any]]:
+    """Return summary rows for every distinct WF group, newest first."""
+    rows = connection.execute(
+        """
+        SELECT wf_group_id, strategy_name, symbol, COUNT(*) AS fold_count,
+               MIN(created_at) AS created_at
+        FROM backtest_runs
+        WHERE wf_group_id IS NOT NULL
+        GROUP BY wf_group_id, strategy_name, symbol
+        ORDER BY created_at DESC;
+        """
+    ).fetchall()
+    return [
+        {
+            "wf_group_id": r[0],
+            "strategy_name": r[1],
+            "symbol": r[2],
+            "fold_count": int(r[3]),
+            "created_at": r[4],
+        }
+        for r in rows
+    ]
 
 
 def get_best_sweep_run(

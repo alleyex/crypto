@@ -379,6 +379,16 @@ def _add_backtest_runs_promoted_at(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN promoted_at TEXT;")
 
 
+def _add_backtest_runs_wf_columns(connection: DBConnection) -> None:
+    if not table_exists(connection, "backtest_runs"):
+        return
+    cols = get_table_columns(connection, "backtest_runs")
+    if "wf_group_id" not in cols:
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN wf_group_id TEXT;")
+    if "fold_index" not in cols:
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN fold_index INTEGER;")
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -403,6 +413,7 @@ MIGRATIONS: list[Migration] = [
     ("021_add_backtest_runs_experiment_name", _add_backtest_runs_experiment_name),
     ("022_add_backtest_runs_tags_notes", _add_backtest_runs_tags_notes),
     ("023_add_backtest_runs_promoted_at", _add_backtest_runs_promoted_at),
+    ("024_add_backtest_runs_wf_columns", _add_backtest_runs_wf_columns),
 ]
 
 

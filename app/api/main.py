@@ -108,9 +108,11 @@ from app.backtest.history_service import compare_runs as compare_backtest_runs
 from app.backtest.history_service import get_best_sweep_run
 from app.backtest.history_service import get_champion_run
 from app.backtest.history_service import get_run as get_backtest_run
+from app.backtest.history_service import get_walk_forward_group
 from app.backtest.history_service import leaderboard_runs as leaderboard_backtest_runs
 from app.backtest.history_service import list_experiments as list_backtest_experiments
 from app.backtest.history_service import list_runs as list_backtest_runs
+from app.backtest.history_service import list_walk_forward_groups
 from app.backtest.history_service import persist_run as persist_backtest_run
 from app.backtest.history_service import promote_run as promote_backtest_run
 from app.backtest.history_service import update_run as update_backtest_run
@@ -1703,6 +1705,34 @@ def backtest_champion(strategy_name: str) -> Dict[str, Any]:
         connection.close()
 
 
+@app.get("/backtest/walk-forward/groups")
+def backtest_wf_groups() -> Dict[str, Any]:
+    """Return summary list of all persisted walk-forward groups, newest first."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return {"groups": list_walk_forward_groups(connection)}
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/walk-forward/groups/{wf_group_id}")
+def backtest_wf_group(wf_group_id: str) -> Dict[str, Any]:
+    """Return all folds and aggregate stats for a walk-forward group."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        group = get_walk_forward_group(connection, wf_group_id)
+        if group is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Walk-forward group {wf_group_id!r} not found.",
+            )
+        return group
+    finally:
+        connection.close()
+
+
 @app.post("/backtest/sweep")
 def backtest_sweep(req: BacktestSweepRequest) -> Dict[str, Any]:
     """Run a parameter grid search over recent candles.
@@ -1769,7 +1799,9 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
     """Run expanding-window walk-forward validation over recent candles.
 
     Returns per-fold train/test metrics and aggregated out-of-sample statistics.
+    All folds are persisted under a shared wf_group_id for later aggregation.
     """
+    import uuid as _uuid
     if req.strategy not in list_registered_strategies():
         return {"error": f"Unknown strategy: {req.strategy!r}. Available: {list_registered_strategies()}"}
     connection = get_connection()
@@ -1794,6 +1826,7 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
             )
         except ValueError as exc:
             return {"error": str(exc)}
+        wf_group_id = str(_uuid.uuid4())
         for split in wf_result.get("splits", []):
             persist_backtest_run(
                 connection,
@@ -1813,7 +1846,10 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
                     "test_candle_count": split.get("test_candle_count"),
                 },
                 experiment_name=req.experiment_name,
+                wf_group_id=wf_group_id,
+                fold_index=split.get("fold"),
             )
+        wf_result["wf_group_id"] = wf_group_id
         return wf_result
     finally:
         connection.close()

@@ -995,9 +995,11 @@ from app.backtest.history_service import (
     get_best_sweep_run,
     get_champion_run,
     get_run,
+    get_walk_forward_group,
     leaderboard_runs,
     list_experiments,
     list_runs,
+    list_walk_forward_groups,
     persist_run,
     promote_run,
     update_run,
@@ -1602,4 +1604,132 @@ def test_champion_endpoint_not_found(monkeypatch) -> None:
     client = TestClient(app)
     resp = client.get("/backtest/champion/ma_cross")
     assert resp.status_code == 404
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 6: Walk-forward fold grouping — service + API
+# ---------------------------------------------------------------------------
+
+
+def _seed_wf_group(conn, strategy="ma_cross", symbol="BTCUSDT", n_folds=3, group_id="wfg-001"):
+    """Insert n_folds walk_forward rows sharing the same wf_group_id."""
+    for i in range(n_folds):
+        conn.execute(
+            """INSERT INTO backtest_runs
+               (run_type, symbol, strategy_name, timeframe, candle_count, trade_count,
+                fill_on, sharpe_ratio, total_return_pct, max_drawdown_pct,
+                wf_group_id, fold_index)
+               VALUES ('walk_forward', ?, ?, '1m', 100, 5, 'close', ?, ?, ?, ?, ?)""",
+            (symbol, strategy, 1.0 + i * 0.5, 2.0 + i, 3.0, group_id, i),
+        )
+    conn.commit()
+
+
+def test_persist_run_stores_wf_group_id() -> None:
+    conn = _make_history_conn_with_migrations()
+    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    run_id = persist_run(conn, "walk_forward", result, wf_group_id="wfg-test", fold_index=0)
+    row = get_run(conn, run_id)
+    assert row["wf_group_id"] == "wfg-test"
+    assert row["fold_index"] == 0
+    conn.close()
+
+
+def test_get_walk_forward_group_returns_folds() -> None:
+    conn = _make_history_conn_with_migrations()
+    _seed_wf_group(conn, n_folds=3, group_id="wfg-abc")
+    group = get_walk_forward_group(conn, "wfg-abc")
+    assert group is not None
+    assert group["fold_count"] == 3
+    assert group["wf_group_id"] == "wfg-abc"
+    assert len(group["folds"]) == 3
+    conn.close()
+
+
+def test_get_walk_forward_group_aggregate_stats() -> None:
+    conn = _make_history_conn_with_migrations()
+    _seed_wf_group(conn, n_folds=2, group_id="wfg-agg")
+    group = get_walk_forward_group(conn, "wfg-agg")
+    agg = group["aggregate"]
+    # folds have sharpe_ratio 1.0 and 1.5 → avg=1.25
+    assert agg["avg_sharpe_ratio"] == 1.25
+    assert agg["min_sharpe_ratio"] == 1.0
+    assert agg["max_sharpe_ratio"] == 1.5
+    conn.close()
+
+
+def test_get_walk_forward_group_returns_none_for_unknown() -> None:
+    conn = _make_history_conn_with_migrations()
+    assert get_walk_forward_group(conn, "no-such-group") is None
+    conn.close()
+
+
+def test_list_walk_forward_groups() -> None:
+    conn = _make_history_conn_with_migrations()
+    _seed_wf_group(conn, group_id="wfg-1", n_folds=2)
+    _seed_wf_group(conn, group_id="wfg-2", n_folds=3)
+    groups = list_walk_forward_groups(conn)
+    group_ids = [g["wf_group_id"] for g in groups]
+    assert "wfg-1" in group_ids
+    assert "wfg-2" in group_ids
+    assert groups[0]["fold_count"] in (2, 3)
+    conn.close()
+
+
+def test_wf_groups_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    _seed_wf_group(conn._conn, group_id="wfg-ep", n_folds=2)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/walk-forward/groups")
+    assert resp.status_code == 200
+    ids = [g["wf_group_id"] for g in resp.json()["groups"]]
+    assert "wfg-ep" in ids
+    conn.really_close()
+
+
+def test_wf_group_detail_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    _seed_wf_group(conn._conn, group_id="wfg-detail", n_folds=3)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/walk-forward/groups/wfg-detail")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["wf_group_id"] == "wfg-detail"
+    assert data["fold_count"] == 3
+    assert "aggregate" in data
+    assert "avg_sharpe_ratio" in data["aggregate"]
+    conn.really_close()
+
+
+def test_wf_group_detail_not_found(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/walk-forward/groups/nonexistent")
+    assert resp.status_code == 404
+    conn.really_close()
+
+
+def test_walk_forward_endpoint_returns_wf_group_id(monkeypatch) -> None:
+    """POST /backtest/walk-forward should return wf_group_id in response."""
+    candles = _make_candles([100.0 + i for i in range(60)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    resp = client.post(
+        "/backtest/walk-forward",
+        json={"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 30, "n_splits": 3},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "wf_group_id" in data
+    assert data["wf_group_id"] is not None
+    # Verify folds are persisted and linked under that group_id
+    group = get_walk_forward_group(conn._conn, data["wf_group_id"])
+    assert group is not None
+    assert group["fold_count"] >= 1
     conn.really_close()
