@@ -162,7 +162,9 @@ def _evaluate_signal_row(
         daily_realized_pnl = get_daily_realized_pnl(connection, symbol)
 
         # 2. Daily loss limit — auto-enable kill switch when breached.
-        if daily_realized_pnl <= -abs(max_daily_loss):
+        # Guard: max_daily_loss=0 means "no limit configured"; skip the check to
+        # avoid triggering on any signal with non-positive daily PnL (0.0 <= -0.0).
+        if max_daily_loss > 0 and daily_realized_pnl <= -abs(max_daily_loss):
             decision = "REJECTED"
             reason = (
                 f"Daily loss limit breached: daily_realized_pnl={daily_realized_pnl}, "

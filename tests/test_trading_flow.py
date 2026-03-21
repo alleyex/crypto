@@ -7928,6 +7928,15 @@ def test_daily_loss_breach_emits_audit_event(monkeypatch) -> None:
         monkeypatch.setattr("app.risk.risk_service.enable_kill_switch", lambda **kwargs: None)
         monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: False)
 
+        # Insert a BUY fill then a SELL fill at a lower price to create negative daily PnL.
+        connection.execute(
+            "INSERT INTO fills (order_id, symbol, side, qty, price, created_at) VALUES (0,'BTCUSDT','BUY',0.001,50000.0,CURRENT_TIMESTAMP);"
+        )
+        connection.execute(
+            "INSERT INTO fills (order_id, symbol, side, qty, price, created_at) VALUES (0,'BTCUSDT','SELL',0.001,30000.0,CURRENT_TIMESTAMP);"
+        )
+        connection.commit()
+
         signal_id = insert_and_get_rowid(
             connection,
             "INSERT INTO signals (symbol,timeframe,strategy_name,signal_type,short_ma,long_ma) VALUES (?,?,?,?,?,?);",
@@ -7935,14 +7944,50 @@ def test_daily_loss_breach_emits_audit_event(monkeypatch) -> None:
         )
         connection.commit()
 
-        # Trigger daily loss breach by passing tiny max_daily_loss
-        evaluate_signal_id(connection, signal_id, max_daily_loss=0.0)
+        # daily_pnl = (30000 - 50000) * 0.001 = -20; limit=10 → breach triggered
+        evaluate_signal_id(connection, signal_id, max_daily_loss=10.0)
 
         events = connection.execute(
             "SELECT event_type, status FROM audit_events WHERE event_type='daily_loss_breach';"
         ).fetchall()
         assert len(events) == 1
         assert events[0][1] == "triggered"
+    finally:
+        connection.close()
+
+
+def test_daily_loss_zero_limit_does_not_trigger(monkeypatch) -> None:
+    """max_daily_loss=0 means no limit configured — must not auto-enable kill switch."""
+    from app.core.migrations import run_migrations
+    from app.risk.risk_service import evaluate_signal_id
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [50000.0] * 5)
+
+        monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: False)
+        kill_switch_calls = []
+        monkeypatch.setattr(
+            "app.risk.risk_service.enable_kill_switch",
+            lambda **kwargs: kill_switch_calls.append(kwargs),
+        )
+
+        signal_id = insert_and_get_rowid(
+            connection,
+            "INSERT INTO signals (symbol,timeframe,strategy_name,signal_type,short_ma,long_ma) VALUES (?,?,?,?,?,?);",
+            ("BTCUSDT", "1m", "ma_cross", "BUY", 200.0, 100.0),
+        )
+        connection.commit()
+
+        # max_daily_loss=0 → guard skips the check; kill switch must NOT be called
+        evaluate_signal_id(connection, signal_id, max_daily_loss=0.0)
+
+        assert kill_switch_calls == [], "kill switch must not fire when max_daily_loss=0"
+        events = connection.execute(
+            "SELECT event_type FROM audit_events WHERE event_type='daily_loss_breach';"
+        ).fetchall()
+        assert events == []
     finally:
         connection.close()
 
