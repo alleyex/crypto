@@ -118,6 +118,7 @@ from app.validation.soak_history import build_soak_history_summary
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_report import build_soak_validation_report
+from app.validation.soak_report import _signal_quality_check
 
 
 def make_connection() -> sqlite3.Connection:
@@ -8321,3 +8322,188 @@ def test_portfolio_api_endpoints() -> None:
     resp = client.get("/portfolio/config")
     assert resp.status_code == 200
     assert resp.json()["total_capital"] == 5000.0
+
+
+# ---------------------------------------------------------------------------
+# Signal quality check tests
+# ---------------------------------------------------------------------------
+
+def _make_signal_quality_db(tmp_path, signals=None, risk_events=None, fills=None):
+    db_path = tmp_path / "sq.db"
+    conn = sqlite3.connect(db_path)
+    run_migrations(conn)
+    if signals:
+        for sig in signals:
+            conn.execute(
+                "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma)"
+                " VALUES (?, ?, ?, ?, 0, 0)",
+                (sig.get("symbol", "BTCUSDT"), "1m", sig.get("strategy", "ma_cross"), sig["type"]),
+            )
+    if risk_events:
+        for re in risk_events:
+            conn.execute(
+                "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
+                " VALUES (NULL, 'BTCUSDT', '1m', ?, ?, ?, ?)",
+                (re.get("strategy", "ma_cross"), re["signal_type"], re["decision"], re.get("reason", "ok")),
+            )
+    if fills:
+        conn.execute(
+            "INSERT INTO orders (client_order_id, risk_event_id, broker_name, symbol, timeframe,"
+            " strategy_name, side, qty, price, status)"
+            " VALUES ('c1', NULL, 'paper', 'BTCUSDT', '1m', 'ma_cross', 'BUY', 0.001, 100.0, 'FILLED')"
+        )
+        order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for _ in range(fills):
+            conn.execute(
+                "INSERT INTO fills (order_id, symbol, side, qty, price) VALUES (?, 'BTCUSDT', 'BUY', 0.001, 100.0)",
+                (order_id,),
+            )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_signal_quality_check_empty_db_returns_zeros() -> None:
+    conn = sqlite3.connect(":memory:")
+    run_migrations(conn)
+    result = _signal_quality_check(conn)
+    assert result["total_signals"] == 0
+    assert result["buy_count"] == 0
+    assert result["approval_rate"] is None
+    assert result["execution_rate"] is None
+    conn.close()
+
+
+def test_signal_quality_check_buy_sell_hold_counts(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[{"type": "BUY"}, {"type": "BUY"}, {"type": "SELL"}, {"type": "HOLD"}],
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert result["total_signals"] == 4
+    assert result["buy_count"] == 2
+    assert result["sell_count"] == 1
+    assert result["hold_count"] == 1
+    assert result["buy_rate"] == 0.5
+    assert result["sell_rate"] == 0.25
+    assert result["actionable_rate"] == 0.75
+
+
+def test_signal_quality_check_approval_rate(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[{"type": "BUY"}, {"type": "BUY"}],
+        risk_events=[
+            {"signal_type": "BUY", "decision": "APPROVED"},
+            {"signal_type": "BUY", "decision": "REJECTED", "reason": "some reason"},
+        ],
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert result["approval_rate"] == 0.5
+
+
+def test_signal_quality_check_duplicate_rejection_rate(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[{"type": "BUY"}, {"type": "BUY"}],
+        risk_events=[
+            {"signal_type": "BUY", "decision": "APPROVED"},
+            {"signal_type": "BUY", "decision": "REJECTED", "reason": "Duplicate signal type."},
+        ],
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert result["duplicate_rejection_rate"] == 0.5
+
+
+def test_signal_quality_check_execution_rate(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[{"type": "BUY"}],
+        risk_events=[
+            {"signal_type": "BUY", "decision": "APPROVED"},
+            {"signal_type": "BUY", "decision": "APPROVED"},
+        ],
+        fills=1,
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert result["execution_rate"] == 0.5  # 1 fill / 2 approved
+
+
+def test_signal_quality_check_by_strategy_breakdown(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[
+            {"type": "BUY", "strategy": "ma_cross"},
+            {"type": "SELL", "strategy": "ma_cross"},
+            {"type": "BUY", "strategy": "rsi"},
+        ],
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert "ma_cross" in result["by_strategy"]
+    assert "rsi" in result["by_strategy"]
+    assert result["by_strategy"]["ma_cross"]["signals"] == 2
+    assert result["by_strategy"]["rsi"]["signals"] == 1
+    assert result["by_strategy"]["ma_cross"]["buy"] == 1
+    assert result["by_strategy"]["ma_cross"]["sell"] == 1
+
+
+def test_signal_quality_check_all_hold_gives_zero_actionable_rate(tmp_path) -> None:
+    db_path = _make_signal_quality_db(
+        tmp_path,
+        signals=[{"type": "HOLD"}, {"type": "HOLD"}],
+    )
+    conn = sqlite3.connect(db_path)
+    result = _signal_quality_check(conn)
+    conn.close()
+    assert result["actionable_rate"] == 0.0
+    assert result["buy_count"] == 0
+
+
+def test_build_soak_report_includes_signal_quality_key(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "soak2.db"
+    conn = sqlite3.connect(db_path)
+    run_migrations(conn)
+    seed_candles(conn, [10.0, 11.0, 12.0])
+    conn.close()
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.validation.soak_report.read_scheduler_log", lambda lines=200: ["dummy log line"])
+    monkeypatch.setattr("app.validation.soak_report.get_heartbeats", lambda c: [])
+    monkeypatch.setattr("app.validation.soak_report.build_soak_history_summary", lambda: {})
+    report = build_soak_validation_report()
+    assert "signal_quality" in report
+    sq = report["signal_quality"]
+    for key in ("total_signals", "buy_count", "sell_count", "hold_count",
+                "actionable_rate", "approval_rate", "execution_rate",
+                "duplicate_rejection_rate", "by_strategy"):
+        assert key in sq
+
+
+def test_build_soak_report_flags_low_actionable_rate_as_issue(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "soak3.db"
+    conn = sqlite3.connect(db_path)
+    run_migrations(conn)
+    seed_candles(conn, [10.0, 11.0])
+    # All HOLD signals → actionable_rate = 0 < 5%
+    for _ in range(10):
+        conn.execute(
+            "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma)"
+            " VALUES ('BTCUSDT', '1m', 'ma_cross', 'HOLD', 0, 0)"
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr("app.validation.soak_report.read_scheduler_log", lambda lines=200: ["ok"])
+    monkeypatch.setattr("app.validation.soak_report.get_heartbeats", lambda c: [])
+    monkeypatch.setattr("app.validation.soak_report.build_soak_history_summary", lambda: {})
+    report = build_soak_validation_report()
+    assert any("actionable rate" in issue.lower() for issue in report["issues"])
