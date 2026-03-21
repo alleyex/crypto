@@ -148,10 +148,10 @@
   交付物：手動與自動停機控制。
   備註：`app/system/kill_switch.py` 完整 state management；`POST /kill-switch/enable|disable`、`GET /kill-switch/status`；admin UI 顯示狀態與按鈕；risk service 在 daily loss breach 時自動觸發；pipeline 與所有 scheduler modes（direct / queue_batch / queue_drain / queue_dispatch / split-workers）均檢查 kill switch；Telegram alert on enable（2026-03-20）。
 
-- [ ] 擴充 audit log
+- [x] 擴充 audit log
   目標：追蹤所有關鍵事件。
   交付物：audit store。
-  備註：支援除錯與稽核。
+  備註：`log_event()` 已涵蓋 pipeline_run、risk_evaluation、kill_switch、scheduler_control、queue_control、execution_control、alert_delivery；本次補齊 `portfolio_config`（POST /portfolio/config）、`risk_config`（POST/DELETE /risk-config/{strategy}）、`param_sync`（POST /backtest/sweep/{strategy}/apply-best-params）共四條路徑；4 條 integration test 驗證 audit row 寫入。（2026-03-21）
 
 - [ ] 引入 event bus
   目標：支援更大規模服務拆分。
@@ -237,4 +237,4 @@
 - [~] M3：風控、pause、kill switch 可用，系統可連跑數天。
   備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；multi-strategy double-execution 修復；剩餘缺口為一週連跑 soak validation 驗收。
 - [~] M4：API 與監控可用，系統可進入小額實盤準備階段。
-  備註：Stage 2 全部項目已完成；Binance testnet 端到端驗證通過；風控服務獨立化完成（4-step pipeline）；回測持久化與 strategy param 自動同步完成；投組服務完成（`check_portfolio_limits` 整合至 risk 路徑）；Stage 3 剩餘缺口：audit log 擴充、event bus（可延後）。
+  備註：Stage 2 全部項目已完成；Binance testnet 端到端驗證通過；風控服務獨立化完成（4-step pipeline）；回測持久化與 strategy param 自動同步完成；投組服務完成；audit log 已涵蓋所有關鍵路徑；Stage 3 僅剩 event bus（可延後）。
