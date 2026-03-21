@@ -990,7 +990,18 @@ def test_run_backtest_macd_strategy() -> None:
 # history_service tests
 # ---------------------------------------------------------------------------
 
-from app.backtest.history_service import persist_run, list_runs, get_best_sweep_run
+from app.backtest.history_service import (
+    compare_runs,
+    get_best_sweep_run,
+    get_champion_run,
+    get_run,
+    leaderboard_runs,
+    list_experiments,
+    list_runs,
+    persist_run,
+    promote_run,
+    update_run,
+)
 
 
 def _make_history_conn():
@@ -1277,5 +1288,318 @@ def test_apply_best_sweep_params_min_trade_count_filter(monkeypatch) -> None:
         "/backtest/sweep/ma_cross/apply-best-params",
         json={"min_trade_count": 5},
     )
+    assert resp.status_code == 404
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 1: experiment_name — service + API
+# ---------------------------------------------------------------------------
+
+
+def _make_history_conn_with_migrations():
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+    return conn
+
+
+def _insert_run(conn, strategy="ma_cross", symbol="BTCUSDT", run_type="single", experiment_name=None):
+    result = run_backtest(strategy, strategy, _make_candles([100.0 + i for i in range(5)]))
+    result["symbol"] = symbol
+    result["strategy_name"] = strategy
+    return persist_run(conn, run_type, result, experiment_name=experiment_name)
+
+
+def test_persist_run_stores_experiment_name() -> None:
+    conn = _make_history_conn_with_migrations()
+    run_id = _insert_run(conn, experiment_name="exp_q1")
+    row = list_runs(conn)["runs"][0]
+    assert row["experiment_name"] == "exp_q1"
+    conn.close()
+
+
+def test_list_runs_filters_by_experiment_name() -> None:
+    conn = _make_history_conn_with_migrations()
+    _insert_run(conn, experiment_name="exp_a")
+    _insert_run(conn, experiment_name="exp_b")
+    result = list_runs(conn, experiment_name="exp_a")
+    assert result["total"] == 1
+    assert result["runs"][0]["experiment_name"] == "exp_a"
+    conn.close()
+
+
+def test_list_experiments_returns_distinct_names() -> None:
+    conn = _make_history_conn_with_migrations()
+    _insert_run(conn, experiment_name="exp_a")
+    _insert_run(conn, experiment_name="exp_a")
+    _insert_run(conn, experiment_name="exp_b")
+    _insert_run(conn)  # no experiment_name
+    names = list_experiments(conn)
+    assert names == ["exp_a", "exp_b"]
+    conn.close()
+
+
+def test_get_backtest_experiments_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    conn._conn.execute(
+        "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe, candle_count,"
+        " trade_count, fill_on, experiment_name) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close','exp_x')"
+    )
+    conn._conn.commit()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/experiments")
+    assert resp.status_code == 200
+    assert "exp_x" in resp.json()["experiments"]
+    conn.really_close()
+
+
+def test_backtest_history_experiment_name_filter(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&experiment_name=exp_test")
+    resp = client.get("/backtest/history?experiment_name=exp_test")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["runs"][0]["experiment_name"] == "exp_test"
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 2: notes + tags — service + API
+# ---------------------------------------------------------------------------
+
+
+def test_update_run_notes() -> None:
+    conn = _make_history_conn_with_migrations()
+    run_id = _insert_run(conn)
+    updated = update_run(conn, run_id, notes="good run")
+    assert updated["notes"] == "good run"
+    conn.close()
+
+
+def test_update_run_tags() -> None:
+    import json as _json
+    conn = _make_history_conn_with_migrations()
+    run_id = _insert_run(conn)
+    updated = update_run(conn, run_id, tags={"env": "test", "version": 2})
+    assert _json.loads(updated["tags_json"]) == {"env": "test", "version": 2}
+    conn.close()
+
+
+def test_update_run_returns_none_for_missing_id() -> None:
+    conn = _make_history_conn_with_migrations()
+    assert update_run(conn, 9999, notes="x") is None
+    conn.close()
+
+
+def test_patch_run_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    conn._conn.execute(
+        "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe, candle_count,"
+        " trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+    )
+    conn._conn.commit()
+    run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.patch(f"/backtest/runs/{run_id}", json={"notes": "nice", "tags": {"k": "v"}})
+    assert resp.status_code == 200
+    assert resp.json()["notes"] == "nice"
+    conn.really_close()
+
+
+def test_patch_run_endpoint_not_found(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.patch("/backtest/runs/9999", json={"notes": "x"})
+    assert resp.status_code == 404
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 3: compare + leaderboard — service + API
+# ---------------------------------------------------------------------------
+
+
+def _seed_two_runs(conn):
+    r1 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    r1["metrics"]["sharpe_ratio"] = 1.0
+    id1 = persist_run(conn, "single", r1)
+    r2 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    r2["metrics"]["sharpe_ratio"] = 2.0
+    id2 = persist_run(conn, "single", r2)
+    return id1, id2
+
+
+def test_compare_runs_returns_ordered_rows() -> None:
+    conn = _make_history_conn_with_migrations()
+    id1, id2 = _seed_two_runs(conn)
+    result = compare_runs(conn, [id2, id1])
+    assert result["runs"][0]["id"] == id2
+    assert result["runs"][1]["id"] == id1
+    conn.close()
+
+
+def test_compare_runs_identifies_best_sharpe() -> None:
+    conn = _make_history_conn_with_migrations()
+    id1, id2 = _seed_two_runs(conn)
+    result = compare_runs(conn, [id1, id2])
+    assert result["best"]["sharpe_ratio"] == id2
+    conn.close()
+
+
+def test_compare_runs_empty_ids() -> None:
+    conn = _make_history_conn_with_migrations()
+    result = compare_runs(conn, [])
+    assert result == {"runs": [], "best": {}}
+    conn.close()
+
+
+def test_compare_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    for _ in range(2):
+        conn._conn.execute(
+            "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
+            " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+        )
+    conn._conn.commit()
+    rows = conn._conn.execute("SELECT id FROM backtest_runs ORDER BY id").fetchall()
+    ids = ",".join(str(r[0]) for r in rows)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get(f"/backtest/compare?ids={ids}")
+    assert resp.status_code == 200
+    assert len(resp.json()["runs"]) == 2
+    conn.really_close()
+
+
+def test_leaderboard_runs_service() -> None:
+    conn = _make_history_conn_with_migrations()
+    id1, id2 = _seed_two_runs(conn)
+    top = leaderboard_runs(conn, strategy_name="ma_cross", sort_by="sharpe_ratio", limit=5)
+    assert top[0]["id"] == id2  # higher sharpe first
+    conn.close()
+
+
+def test_leaderboard_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    conn._conn.execute(
+        "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
+        " candle_count, trade_count, fill_on, sharpe_ratio)"
+        " VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close', 1.5)"
+    )
+    conn._conn.commit()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/leaderboard/ma_cross?sort_by=sharpe_ratio&limit=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["strategy_name"] == "ma_cross"
+    assert len(data["runs"]) >= 1
+    conn.really_close()
+
+
+def test_leaderboard_invalid_sort_by(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/leaderboard/ma_cross?sort_by=bad_metric")
+    assert resp.status_code == 422
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 4: champion management — service + API
+# ---------------------------------------------------------------------------
+
+
+def test_promote_run_sets_promoted_at() -> None:
+    conn = _make_history_conn_with_migrations()
+    run_id = _insert_run(conn)
+    promoted = promote_run(conn, run_id)
+    assert promoted["promoted_at"] is not None
+    conn.close()
+
+
+def test_promote_run_clears_previous_champion() -> None:
+    conn = _make_history_conn_with_migrations()
+    id1 = _insert_run(conn)
+    id2 = _insert_run(conn)
+    promote_run(conn, id1)
+    promote_run(conn, id2)
+    row1 = get_run(conn, id1)
+    assert row1["promoted_at"] is None
+    assert get_run(conn, id2)["promoted_at"] is not None
+    conn.close()
+
+
+def test_get_champion_run_returns_latest() -> None:
+    conn = _make_history_conn_with_migrations()
+    id1 = _insert_run(conn)
+    id2 = _insert_run(conn)
+    promote_run(conn, id1)
+    promote_run(conn, id2)
+    champion = get_champion_run(conn, "ma_cross")
+    assert champion["id"] == id2
+    conn.close()
+
+
+def test_promote_run_returns_none_for_missing() -> None:
+    conn = _make_history_conn_with_migrations()
+    assert promote_run(conn, 9999) is None
+    conn.close()
+
+
+def test_promote_endpoint(monkeypatch) -> None:
+    import json as _json
+    conn = _make_seeded_conn([], "BTCUSDT")
+    conn._conn.execute(
+        "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
+        " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+    )
+    conn._conn.commit()
+    run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post(f"/backtest/runs/{run_id}/promote")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert resp.json()["run"]["promoted_at"] is not None
+    # Verify audit log written
+    rows = conn._conn.execute(
+        "SELECT event_type FROM audit_events WHERE event_type='param_sync'"
+    ).fetchall()
+    assert len(rows) == 1
+    conn.really_close()
+
+
+def test_champion_endpoint(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    conn._conn.execute(
+        "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
+        " candle_count, trade_count, fill_on, promoted_at)"
+        " VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close', CURRENT_TIMESTAMP)"
+    )
+    conn._conn.commit()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/champion/ma_cross")
+    assert resp.status_code == 200
+    assert resp.json()["strategy_name"] == "ma_cross"
+    conn.really_close()
+
+
+def test_champion_endpoint_not_found(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/champion/ma_cross")
     assert resp.status_code == 404
     conn.really_close()

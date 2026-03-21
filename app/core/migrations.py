@@ -359,6 +359,26 @@ def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     )
 
 
+def _add_backtest_runs_experiment_name(connection: DBConnection) -> None:
+    if table_exists(connection, "backtest_runs") and "experiment_name" not in get_table_columns(connection, "backtest_runs"):
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN experiment_name TEXT;")
+
+
+def _add_backtest_runs_tags_notes(connection: DBConnection) -> None:
+    if not table_exists(connection, "backtest_runs"):
+        return
+    cols = get_table_columns(connection, "backtest_runs")
+    if "tags_json" not in cols:
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN tags_json TEXT;")
+    if "notes" not in cols:
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN notes TEXT;")
+
+
+def _add_backtest_runs_promoted_at(connection: DBConnection) -> None:
+    if table_exists(connection, "backtest_runs") and "promoted_at" not in get_table_columns(connection, "backtest_runs"):
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN promoted_at TEXT;")
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -380,6 +400,9 @@ MIGRATIONS: list[Migration] = [
     ("018_add_orders_broker_metadata", _add_orders_broker_metadata),
     ("019_add_performance_indexes", _add_performance_indexes),
     ("020_create_backtest_runs_table", _create_backtest_runs_table),
+    ("021_add_backtest_runs_experiment_name", _add_backtest_runs_experiment_name),
+    ("022_add_backtest_runs_tags_notes", _add_backtest_runs_tags_notes),
+    ("023_add_backtest_runs_promoted_at", _add_backtest_runs_promoted_at),
 ]
 
 

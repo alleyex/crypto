@@ -104,9 +104,16 @@ from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.metrics.metrics_service import build_metrics
+from app.backtest.history_service import compare_runs as compare_backtest_runs
 from app.backtest.history_service import get_best_sweep_run
+from app.backtest.history_service import get_champion_run
+from app.backtest.history_service import get_run as get_backtest_run
+from app.backtest.history_service import leaderboard_runs as leaderboard_backtest_runs
+from app.backtest.history_service import list_experiments as list_backtest_experiments
 from app.backtest.history_service import list_runs as list_backtest_runs
 from app.backtest.history_service import persist_run as persist_backtest_run
+from app.backtest.history_service import promote_run as promote_backtest_run
+from app.backtest.history_service import update_run as update_backtest_run
 from app.backtest.loader import load_candles_from_db
 from app.backtest.runner import run_backtest
 from app.backtest.sweep import run_parameter_sweep
@@ -1470,6 +1477,7 @@ class BacktestSweepRequest(BaseModel):
     sort_by: str = "sharpe_ratio"
     fill_on: str = "close"
     initial_capital: float = 10000.0
+    experiment_name: Optional[str] = None
 
 
 class ApplyBestSweepParamsRequest(BaseModel):
@@ -1487,6 +1495,12 @@ class BacktestWalkForwardRequest(BaseModel):
     max_position_qty: float = MAX_POSITION_QTY
     fill_on: str = "close"
     initial_capital: float = 10000.0
+    experiment_name: Optional[str] = None
+
+
+class BacktestRunUpdateRequest(BaseModel):
+    notes: Optional[str] = None
+    tags: Optional[Dict[str, Any]] = None
 
 
 def _backtest_start_iso(days: int) -> str:
@@ -1503,6 +1517,7 @@ def backtest(
     max_position_qty: float = Query(default=MAX_POSITION_QTY, gt=0),
     fill_on: str = Query(default="close", pattern="^(close|next_open)$"),
     initial_capital: float = Query(default=10000.0, gt=0),
+    experiment_name: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
     """Run a backtest over recent candles loaded from the DB.
 
@@ -1534,7 +1549,7 @@ def backtest(
             max_position_qty=max_position_qty,
             fill_on=fill_on,
         )
-        persist_backtest_run(connection, run_type="single", result=result, days=days, fill_on=fill_on)
+        persist_backtest_run(connection, run_type="single", result=result, days=days, fill_on=fill_on, experiment_name=experiment_name)
         return result
     finally:
         connection.close()
@@ -1545,6 +1560,7 @@ def backtest_history(
     symbol: Optional[str] = Query(default=None),
     strategy: Optional[str] = Query(default=None),
     run_type: Optional[str] = Query(default=None, pattern="^(single|sweep|walk_forward)$"),
+    experiment_name: Optional[str] = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> Dict[str, Any]:
@@ -1556,9 +1572,133 @@ def backtest_history(
             symbol=symbol,
             strategy_name=strategy,
             run_type=run_type,
+            experiment_name=experiment_name,
             limit=limit,
             offset=offset,
         )
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/experiments")
+def backtest_experiments() -> Dict[str, Any]:
+    """Return sorted list of distinct experiment names."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return {"experiments": list_backtest_experiments(connection)}
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/compare")
+def backtest_compare(
+    ids: str = Query(description="Comma-separated run IDs, e.g. 1,2,3"),
+) -> Dict[str, Any]:
+    """Return multiple runs side-by-side with per-metric best run id."""
+    try:
+        run_ids = [int(i.strip()) for i in ids.split(",") if i.strip()]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="ids must be comma-separated integers.")
+    if not run_ids:
+        raise HTTPException(status_code=422, detail="At least one id is required.")
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return compare_backtest_runs(connection, run_ids)
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/leaderboard/{strategy_name}")
+def backtest_leaderboard(
+    strategy_name: str,
+    sort_by: str = Query(default="sharpe_ratio"),
+    limit: int = Query(default=10, ge=1, le=100),
+) -> Dict[str, Any]:
+    """Return top runs for a strategy sorted by a metric column."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        try:
+            runs = leaderboard_backtest_runs(
+                connection,
+                strategy_name=strategy_name,
+                sort_by=sort_by,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        return {"strategy_name": strategy_name, "sort_by": sort_by, "runs": runs}
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/runs/{run_id}")
+def backtest_get_run(run_id: int) -> Dict[str, Any]:
+    """Return a single backtest run by id."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        run = get_backtest_run(connection, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+        return run
+    finally:
+        connection.close()
+
+
+@app.patch("/backtest/runs/{run_id}")
+def backtest_update_run(run_id: int, body: BacktestRunUpdateRequest) -> Dict[str, Any]:
+    """Update mutable fields (notes, tags) on an existing run."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        updated = update_backtest_run(connection, run_id, notes=body.notes, tags=body.tags)
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+        return updated
+    finally:
+        connection.close()
+
+
+@app.post("/backtest/runs/{run_id}/promote")
+def backtest_promote_run(run_id: int) -> Dict[str, Any]:
+    """Mark a run as champion for its strategy. Clears promoted_at from all other runs
+    of the same strategy."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        promoted = promote_backtest_run(connection, run_id)
+        if promoted is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+        log_event(
+            event_type="param_sync",
+            status="ok",
+            source="api",
+            message=(
+                f"Run {run_id} promoted as champion for strategy={promoted['strategy_name']!r}."
+            ),
+            payload={"run_id": run_id, "strategy_name": promoted["strategy_name"]},
+        )
+        return {"status": "ok", "run": promoted}
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/champion/{strategy_name}")
+def backtest_champion(strategy_name: str) -> Dict[str, Any]:
+    """Return the current champion run for a strategy."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        run = get_champion_run(connection, strategy_name)
+        if run is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No champion run found for strategy={strategy_name!r}.",
+            )
+        return run
     finally:
         connection.close()
 
@@ -1609,6 +1749,7 @@ def backtest_sweep(req: BacktestSweepRequest) -> Dict[str, Any]:
                 days=req.days,
                 fill_on=req.fill_on,
                 params=combo.get("params"),
+                experiment_name=req.experiment_name,
             )
         return {
             "symbol": req.symbol,
@@ -1671,6 +1812,7 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
                     "train_candle_count": split.get("train_candle_count"),
                     "test_candle_count": split.get("test_candle_count"),
                 },
+                experiment_name=req.experiment_name,
             )
         return wf_result
     finally:
