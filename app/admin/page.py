@@ -612,6 +612,11 @@ __STRATEGY_OPTIONS__
               <div class="inline-note" id="strategy-worker-detail">Checking strategy worker heartbeat...</div>
             </div>
             <div class="side-stat">
+              <label>Risk Worker</label>
+              <div class="value" id="risk-worker-status">Loading</div>
+              <div class="inline-note" id="risk-worker-detail">Checking risk worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
               <label>Execution Worker</label>
               <div class="value" id="execution-worker-status">Loading</div>
               <div class="inline-note" id="execution-worker-detail">Checking execution worker heartbeat...</div>
@@ -694,6 +699,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <option value="pipeline">pipeline</option>
               <option value="market-data-only">market-data-only</option>
               <option value="strategy-only">strategy-only</option>
+              <option value="risk-only">risk-only</option>
               <option value="execution-only">execution-only</option>
             </select>
           </div>
@@ -735,6 +741,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <option value="queued">queued only</option>
               <option value="market_data">market_data</option>
               <option value="strategy">strategy</option>
+              <option value="risk">risk</option>
               <option value="execution">execution</option>
             </select>
           </div>
@@ -743,8 +750,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="queue-clear-pipeline">Clear Stale Pipeline Batch</button>
             <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
             <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
+            <button class="secondary" data-action="queue-drain-risk">Drain Risk Job</button>
             <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
             <button class="secondary" data-action="queue-retry-strategy">Retry Failed Strategy Job</button>
+            <button class="secondary" data-action="queue-retry-risk">Retry Failed Risk Job</button>
             <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
           </div>
           <div class="inline-note" style="margin-bottom: 12px;">Pipeline dispatch/drain now lives in the Pipeline panel via the orchestration selector.</div>
@@ -1065,6 +1074,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("strategy-worker-detail").textContent = strategyWorker
           ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}${(strategyWorker.payload?.symbol_names || []).length ? ` | symbols: ${strategyWorker.payload.symbol_names.join(", ")}` : ""}`
           : "No strategy worker heartbeat recorded yet.";
+
+        const riskWorker = heartbeatMap.risk_worker;
+        el("risk-worker-status").textContent = riskWorker
+          ? String(riskWorker.status).toUpperCase()
+          : "NONE";
+        el("risk-worker-status").className = `value ${statusClass(riskWorker ? riskWorker.status : "degraded")}`;
+        el("risk-worker-detail").textContent = riskWorker
+          ? `${riskWorker.last_seen_at} | ${riskWorker.message}${(riskWorker.payload?.symbol_names || []).length ? ` | symbols: ${riskWorker.payload.symbol_names.join(", ")}` : ""}`
+          : "No risk worker heartbeat recorded yet.";
 
         const executionWorker = heartbeatMap.execution_worker;
         el("execution-worker-status").textContent = executionWorker
@@ -1778,7 +1796,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `recent failed=${metrics.recent_failure_count ?? 0}`,
           `recent retries=${metrics.recent_retry_count ?? 0}`,
         ];
-        const typeBits = ["market_data", "strategy", "execution"].map((jobType) => {
+        const typeBits = ["market_data", "strategy", "risk", "execution"].map((jobType) => {
           const item = byType[jobType] || {};
           const latestTypeFailed = item.latest_failed_job ? ` latest_failed=#${item.latest_failed_job.id}` : "";
           const latestTypeRetry = item.latest_retry_job ? ` latest_retry=#${item.latest_retry_job.id}` : "";
@@ -1970,8 +1988,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-clear-pipeline": "queue-message",
           "queue-enqueue-strategy": "queue-message",
           "queue-drain-strategy": "queue-message",
+          "queue-drain-risk": "queue-message",
           "queue-drain-execution": "queue-message",
           "queue-retry-strategy": "queue-message",
+          "queue-retry-risk": "queue-message",
           "queue-retry-execution": "queue-message",
           "broker-enable-kill": "kill-message",
           "kill-enable": "kill-message",
@@ -2114,13 +2134,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               method: "POST",
               body: JSON.stringify({ job_type: "strategy" }),
             });
+          } else if (type === "queue-drain-risk") {
+            result = await api("/queue/jobs/run-next", {
+              method: "POST",
+              body: JSON.stringify({ job_type: "risk" }),
+            });
           } else if (type === "queue-drain-execution") {
             result = await api("/queue/jobs/run-next", {
               method: "POST",
               body: JSON.stringify({ job_type: "execution" }),
             });
-          } else if (type === "queue-retry-strategy" || type === "queue-retry-execution") {
-            const jobType = type === "queue-retry-strategy" ? "strategy" : "execution";
+          } else if (type === "queue-retry-strategy" || type === "queue-retry-risk" || type === "queue-retry-execution") {
+            const jobType = type === "queue-retry-strategy"
+              ? "strategy"
+              : type === "queue-retry-risk"
+                ? "risk"
+                : "execution";
             const latestFailedJob = (queueSummaryState?.latest_jobs || [])
               .find((job) => job.job_type === jobType && job.status === "failed");
             if (!latestFailedJob) {

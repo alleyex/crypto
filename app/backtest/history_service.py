@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid
 
+_VALID_SORT_KEYS = frozenset(
+    {"sharpe_ratio", "total_return_pct", "max_drawdown_pct", "win_rate_pct", "profit_factor"}
+)
+
 
 _INSERT_SQL = """
 INSERT INTO backtest_runs (
@@ -107,3 +111,60 @@ def list_runs(
         tuple(params) + (limit, offset),
     )
     return {"total": total, "limit": limit, "offset": offset, "runs": rows}
+
+
+def get_best_sweep_run(
+    connection: DBConnection,
+    strategy_name: str,
+    symbol: Optional[str] = None,
+    sort_by: str = "sharpe_ratio",
+    min_trade_count: int = 1,
+) -> Optional[Dict[str, Any]]:
+    """Return the best persisted sweep run for a strategy, or None.
+
+    Raises ValueError if sort_by is not a recognised metric column.
+    The returned dict has two extra keys injected:
+      - 'params':  parsed params_json dict
+      - 'metrics': dict of all metric columns
+    """
+    if sort_by not in _VALID_SORT_KEYS:
+        raise ValueError(
+            f"sort_by must be one of {sorted(_VALID_SORT_KEYS)}, got {sort_by!r}."
+        )
+
+    clauses: List[str] = ["run_type = ?", "strategy_name = ?"]
+    params: List[Any] = ["sweep", strategy_name]
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(symbol)
+    if min_trade_count > 0:
+        clauses.append("trade_count >= ?")
+        params.append(min_trade_count)
+
+    rows = fetch_all_as_dicts(
+        connection,
+        "SELECT * FROM backtest_runs WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC;",
+        tuple(params),
+    )
+    if not rows:
+        return None
+
+    ascending = sort_by == "max_drawdown_pct"
+
+    def _sort_key(row: Dict[str, Any]):
+        v = row.get(sort_by)
+        if v is None:
+            return (1, 0.0)
+        return (0, float(v) if not ascending else -float(v))
+
+    rows.sort(key=_sort_key)
+    best = dict(rows[0])
+    raw_params = best.get("params_json")
+    best["params"] = json.loads(raw_params) if raw_params else {}
+    best["metrics"] = {
+        k: best.get(k)
+        for k in ("total_return_pct", "max_drawdown_pct", "sharpe_ratio", "win_rate_pct", "profit_factor")
+    }
+    return best

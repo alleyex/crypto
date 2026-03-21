@@ -231,12 +231,29 @@ def run_pipeline_collect(
                     str(strategy_job_result["terminal_message"]),
                 )
 
+            current_step = "evaluate_risk"
+            risk_job_result = run_job(
+                connection,
+                "risk",
+                payload={
+                    "signal_ids": strategy_job_result.get("signal_ids"),
+                    "symbol_names": symbol_names,
+                },
+            )
+            result["steps"].extend(risk_job_result["steps"])
+            if risk_job_result.get("status") == "completed":
+                return _finalize_result(
+                    result,
+                    "completed",
+                    str(risk_job_result.get("terminal_message", "Pipeline run completed with skipped risk evaluation.")),
+                )
+
             current_step = "paper_execute"
             execution_job_result = run_job(
                 connection,
                 "execution",
                 payload={
-                    "risk_event_ids": strategy_job_result.get("risk_event_ids"),
+                    "risk_event_ids": risk_job_result.get("risk_event_ids"),
                     "symbol_names": symbol_names,
                 },
             )

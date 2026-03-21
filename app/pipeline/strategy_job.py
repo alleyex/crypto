@@ -2,9 +2,6 @@ from typing import Any, Dict, Optional
 
 from app.core.db import DBConnection
 from app.core.settings import DEFAULT_STRATEGY_NAME
-from app.portfolio.positions_service import ensure_table as ensure_positions_table
-from app.risk.risk_service import evaluate_signal_ids
-from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.registry import generate_registered_signal
 
@@ -45,25 +42,12 @@ def run_strategy_job(
             "terminal_message": "Pipeline run completed with skipped signal generation.",
         }
 
-    ensure_positions_table(connection)
-    ensure_risk_table(connection)
     signal_ids = [int(s["id"]) for s in generated_signal_results]
-    risk_results = evaluate_signal_ids(connection, signal_ids)
-    risk_steps: list[dict[str, Any]] = [{"step": "evaluate_risk", **r} for r in risk_results]
-    generated_risk_results = risk_results
-
-    if not generated_risk_results:
-        return {
-            "status": "completed",
-            "steps": signal_steps + risk_steps,
-            "terminal_message": "Pipeline run completed with skipped risk evaluation.",
-        }
-
     return {
         "status": "ok",
         "symbol_names": active_symbol_names,
-        "risk_event_ids": [int(result["id"]) for result in generated_risk_results],
-        "steps": signal_steps + risk_steps,
+        "signal_ids": signal_ids,
+        "steps": signal_steps,
     }
 
 
@@ -105,10 +89,17 @@ def run_strategy_jobs(
     else:
         status = "completed"
 
+    aggregated_signal_ids: list[int] = []
+    aggregated_symbol_names: list[str] = []
+    for result in results:
+        aggregated_signal_ids.extend(int(item) for item in list(result.get("signal_ids") or []))
+        aggregated_symbol_names.extend(str(item) for item in list(result.get("symbol_names") or []))
+
     return {
         "status": status,
         "strategy_names": normalized_names,
-        "symbol_names": list(dict.fromkeys(symbol_names or [])),
+        "symbol_names": list(dict.fromkeys((symbol_names or []) + aggregated_symbol_names)),
+        "signal_ids": aggregated_signal_ids,
         "steps": [step for result in results for step in result.get("steps", [])],
         "results": results,
     }

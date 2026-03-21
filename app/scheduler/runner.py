@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.risk_job import run_risk_job
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
@@ -32,9 +33,10 @@ LOG_FILE = LOG_DIR / "scheduler.log"
 DATA_WORKER_LOG_FILE = LOG_DIR / "data-worker.log"
 STRATEGY_WORKER_LOG_FILE = LOG_DIR / "strategy-worker.log"
 EXECUTION_WORKER_LOG_FILE = LOG_DIR / "execution-worker.log"
+RISK_WORKER_LOG_FILE = LOG_DIR / "risk-worker.log"
 RUNTIME_DIR = Path("runtime")
 STOP_FILE = RUNTIME_DIR / "scheduler.stop"
-SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "execution-only")
+SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only")
 
 
 def _summarize_result(result: dict) -> str:
@@ -101,6 +103,8 @@ def get_scheduler_log_file(mode: str = "pipeline") -> Path:
         return DATA_WORKER_LOG_FILE
     if mode == "strategy-only":
         return STRATEGY_WORKER_LOG_FILE
+    if mode == "risk-only":
+        return RISK_WORKER_LOG_FILE
     if mode == "execution-only":
         return EXECUTION_WORKER_LOG_FILE
     raise ValueError(f"Unsupported scheduler mode: {mode}")
@@ -111,6 +115,7 @@ def get_scheduler_log_files() -> dict[str, Path]:
         "pipeline": LOG_FILE,
         "market-data-only": DATA_WORKER_LOG_FILE,
         "strategy-only": STRATEGY_WORKER_LOG_FILE,
+        "risk-only": RISK_WORKER_LOG_FILE,
         "execution-only": EXECUTION_WORKER_LOG_FILE,
     }
 
@@ -128,6 +133,8 @@ def _scheduler_component_name(mode: str) -> str:
         return "data_worker"
     if mode == "strategy-only":
         return "strategy_worker"
+    if mode == "risk-only":
+        return "risk_worker"
     if mode == "execution-only":
         return "execution_worker"
     raise ValueError(f"Unsupported scheduler mode: {mode}")
@@ -270,6 +277,8 @@ def _run_scheduled_job(
                 job_type = "market_data"
             elif mode == "strategy-only":
                 job_type = "strategy"
+            elif mode == "risk-only":
+                job_type = "risk"
             elif mode == "execution-only":
                 job_type = "execution"
             else:
@@ -315,6 +324,9 @@ def _run_scheduled_job(
                     strategy_names=strategy_names,
                     symbol_names=symbol_names,
                 )
+            elif mode == "risk-only":
+                job_type = "risk"
+                payload = build_job_payload(symbol_names=symbol_names)
             elif mode == "execution-only":
                 job_type = "execution"
                 payload = build_job_payload(symbol_names=symbol_names)
@@ -339,6 +351,8 @@ def _run_scheduled_job(
             return {"steps": [run_market_data_job(connection, symbol_names=symbol_names)], "symbol_names": symbol_names or []}
         if mode == "strategy-only":
             return run_strategy_jobs(connection, strategy_names or [strategy_name], symbol_names=symbol_names)
+        if mode == "risk-only":
+            return run_risk_job(connection)
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
     finally:
@@ -363,7 +377,7 @@ def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[s
 
 
 def _resolve_active_symbols(mode: str) -> list[str]:
-    if mode not in ("pipeline", "market-data-only", "strategy-only", "execution-only"):
+    if mode not in ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only"):
         return []
     try:
         from app.scheduler.control import read_active_symbols

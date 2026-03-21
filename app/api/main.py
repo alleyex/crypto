@@ -5,11 +5,11 @@ from typing import Any, Dict, Literal, List, Optional, Union
 
 import requests
 from fastapi import BackgroundTasks
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi import Response
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.audit.service import log_event
 from app.alerting.broker import maybe_send_broker_alert
@@ -104,6 +104,7 @@ from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
 from app.metrics.metrics_service import build_metrics
+from app.backtest.history_service import get_best_sweep_run
 from app.backtest.history_service import list_runs as list_backtest_runs
 from app.backtest.history_service import persist_run as persist_backtest_run
 from app.backtest.loader import load_candles_from_db
@@ -1450,6 +1451,12 @@ class BacktestSweepRequest(BaseModel):
     initial_capital: float = 10000.0
 
 
+class ApplyBestSweepParamsRequest(BaseModel):
+    symbol: Optional[str] = None
+    sort_by: str = "sharpe_ratio"
+    min_trade_count: int = Field(default=1, ge=0)
+
+
 class BacktestWalkForwardRequest(BaseModel):
     symbol: str = DEFAULT_SYMBOL
     strategy: str = DEFAULT_STRATEGY_NAME
@@ -1645,5 +1652,70 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
                 },
             )
         return wf_result
+    finally:
+        connection.close()
+
+
+@app.post("/backtest/sweep/{strategy}/apply-best-params")
+def apply_best_sweep_params(
+    strategy: str,
+    body: ApplyBestSweepParamsRequest,
+) -> Dict[str, Any]:
+    """Apply the best persisted sweep run's params to risk_configs for *strategy*.
+
+    Finds the sweep row with the best value of sort_by (default: sharpe_ratio),
+    then calls set_risk_config() with only the params that were varied in the sweep.
+    Fields not present in the sweep's params_json are left at their current values.
+    """
+    if strategy not in list_registered_strategies():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown strategy: {strategy!r}. Available: {list_registered_strategies()}",
+        )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        try:
+            best = get_best_sweep_run(
+                connection,
+                strategy_name=strategy,
+                symbol=body.symbol,
+                sort_by=body.sort_by,
+                min_trade_count=body.min_trade_count,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if best is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No sweep runs found for strategy={strategy!r}"
+                    + (f", symbol={body.symbol!r}" if body.symbol else "")
+                    + f" with trade_count >= {body.min_trade_count}."
+                ),
+            )
+        params = best["params"]
+        cfg = set_risk_config(
+            connection,
+            strategy,
+            order_qty=float(params["order_qty"]) if "order_qty" in params else None,
+            max_position_qty=float(params["max_position_qty"]) if "max_position_qty" in params else None,
+            cooldown_seconds=int(params["cooldown_seconds"]) if "cooldown_seconds" in params else None,
+            max_daily_loss=float(params["max_daily_loss"]) if "max_daily_loss" in params else None,
+        )
+        return {
+            "status": "ok",
+            "strategy": strategy,
+            "source_run": {
+                "id": best["id"],
+                "symbol": best["symbol"],
+                "created_at": best["created_at"],
+                "sort_by": body.sort_by,
+                "sort_value": best["metrics"].get(body.sort_by),
+                "trade_count": best["trade_count"],
+                "params_applied": params,
+            },
+            "config": cfg.to_dict(),
+        }
     finally:
         connection.close()

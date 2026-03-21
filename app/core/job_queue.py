@@ -13,13 +13,14 @@ from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.risk_job import run_risk_job
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
 
 
-JOB_TYPES = ("market_data", "strategy", "execution")
+JOB_TYPES = ("market_data", "strategy", "risk", "execution")
 JOB_STATUSES = ("queued", "leased", "completed", "failed")
-PIPELINE_QUEUE_JOB_TYPES = ("market_data", "strategy", "execution")
+PIPELINE_QUEUE_JOB_TYPES = ("market_data", "strategy", "risk", "execution")
 
 
 INSERT_JOB_SQL = """
@@ -280,6 +281,7 @@ def complete_job(
         (_serialize_payload(result), job_id),
     )
     connection.commit()
+    _propagate_dependent_job_payload(connection, job_id, result=result)
 
 
 def fail_job(
@@ -390,10 +392,15 @@ def run_job(
             symbol_names=symbol_names,
         )
 
+    if job_type == "risk":
+        signal_ids = normalized_payload.get("signal_ids")
+        normalized_signal_ids = [int(i) for i in signal_ids] if signal_ids is not None else None
+        return run_risk_job(connection, signal_ids=normalized_signal_ids)
+
     if job_type == "execution":
         risk_event_ids = normalized_payload.get("risk_event_ids")
         symbol_names = normalized_payload.get("symbol_names")
-        normalized_risk_event_ids = [int(item) for item in risk_event_ids] if risk_event_ids else None
+        normalized_risk_event_ids = [int(item) for item in risk_event_ids] if risk_event_ids is not None else None
         return run_execution_job(
             connection,
             risk_event_ids=normalized_risk_event_ids,
@@ -409,6 +416,54 @@ def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, 
         job_type=str(job["job_type"]),
         payload=dict(job.get("payload") or {}),
     )
+
+
+def _propagate_dependent_job_payload(
+    connection: DBConnection,
+    job_id: int,
+    *,
+    result: Optional[dict[str, Any]] = None,
+) -> None:
+    parent_job = get_job(connection, job_id)
+    if parent_job is None:
+        return
+
+    parent_type = str(parent_job["job_type"])
+    if parent_type == "strategy":
+        propagated_fields = {"signal_ids": list((result or {}).get("signal_ids") or [])}
+        target_job_type = "risk"
+    elif parent_type == "risk":
+        propagated_fields = {"risk_event_ids": list((result or {}).get("risk_event_ids") or [])}
+        target_job_type = "execution"
+    else:
+        return
+
+    rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT id, payload_json
+        FROM job_queue
+        WHERE depends_on_job_id = ? AND status = 'queued'
+        ORDER BY id ASC;
+        """,
+        (job_id,),
+    )
+    for row in rows:
+        dependent_id = int(row["id"])
+        dependent_job = get_job(connection, dependent_id)
+        if dependent_job is None or str(dependent_job["job_type"]) != target_job_type:
+            continue
+        updated_payload = dict(dependent_job.get("payload") or {})
+        updated_payload.update(propagated_fields)
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET payload_json = ?
+            WHERE id = ?;
+            """,
+            (_serialize_payload(updated_payload), dependent_id),
+        )
+    connection.commit()
 
 
 def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:

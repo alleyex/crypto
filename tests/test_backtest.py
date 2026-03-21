@@ -990,7 +990,7 @@ def test_run_backtest_macd_strategy() -> None:
 # history_service tests
 # ---------------------------------------------------------------------------
 
-from app.backtest.history_service import persist_run, list_runs
+from app.backtest.history_service import persist_run, list_runs, get_best_sweep_run
 
 
 def _make_history_conn():
@@ -1185,4 +1185,97 @@ def test_get_backtest_history_pagination(monkeypatch) -> None:
     data = resp.json()
     assert len(data["runs"]) == 2
     assert data["total"] == 5
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# POST /backtest/sweep/{strategy}/apply-best-params endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_apply_best_sweep_params_unknown_strategy(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post("/backtest/sweep/nonexistent_strat/apply-best-params", json={})
+    assert resp.status_code == 404
+    assert "nonexistent_strat" in resp.json()["detail"]
+    conn.really_close()
+
+
+def test_apply_best_sweep_params_no_runs_returns_404(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    assert resp.status_code == 404
+    assert "No sweep runs found" in resp.json()["detail"]
+    conn.really_close()
+
+
+def test_apply_best_sweep_params_invalid_sort_by_returns_422(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post(
+        "/backtest/sweep/ma_cross/apply-best-params",
+        json={"sort_by": "not_a_metric"},
+    )
+    assert resp.status_code == 422
+
+
+def _persist_sweep_run(
+    conn, strategy: str = "ma_cross", symbol: str = "BTCUSDT",
+    order_qty: float = 0.003, sharpe: float = 1.5, trade_count: int = 5,
+) -> None:
+    """Insert a synthetic sweep row without needing real candles."""
+    result = {
+        "symbol": symbol,
+        "strategy_name": strategy,
+        "candle_count": 100,
+        "trade_count": trade_count,
+        "metrics": {
+            "initial_capital": 10000.0,
+            "final_equity": 10500.0,
+            "total_return_pct": 5.0,
+            "max_drawdown_pct": 2.0,
+            "sharpe_ratio": sharpe,
+            "win_rate_pct": 60.0,
+            "profit_factor": 1.8,
+            "round_trips": trade_count // 2,
+        },
+    }
+    params = {"order_qty": order_qty, "max_position_qty": order_qty * 2}
+    persist_run(conn, "sweep", result, params=params)
+
+
+def test_apply_best_sweep_params_golden_path(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    _persist_sweep_run(conn, order_qty=0.003)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["strategy"] == "ma_cross"
+    assert data["source_run"]["params_applied"]["order_qty"] == 0.003
+    assert "config" in data
+    assert data["config"]["order_qty"] == 0.003
+    conn.really_close()
+
+
+def test_apply_best_sweep_params_min_trade_count_filter(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    # Insert a run with only 1 trade — should be filtered out by min_trade_count=5
+    _persist_sweep_run(conn, order_qty=0.001, trade_count=1)
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.post(
+        "/backtest/sweep/ma_cross/apply-best-params",
+        json={"min_trade_count": 5},
+    )
+    assert resp.status_code == 404
     conn.really_close()
