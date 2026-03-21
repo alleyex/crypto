@@ -165,10 +165,10 @@
   交付物：simulator。
   備註：`run_backtest()` 核心引擎（in-memory SQLite、fill_on close/next_open）、`compute_metrics()`（Sharpe/drawdown/win_rate/profit_factor）、`load_candles_from_db()`、`run_parameter_sweep()`、`run_walk_forward()` 及對應 API endpoints（GET /backtest、POST /backtest/sweep、POST /backtest/walk-forward）均已完成；回測結果持久化至 `backtest_runs`（migration 020），`GET /backtest/history` 支援 symbol/strategy/run_type 篩選與分頁；`POST /backtest/sweep/{strategy}/apply-best-params` 讀取最佳 sweep 結果並自動更新 risk_configs。（2026-03-21）
 
-- [~] 建立實驗追蹤
+- [x] 建立實驗追蹤
   目標：管理研究結果。
   交付物：tracking system。
-  備註：第一至四組已完成（experiment_name、tags/notes、compare、leaderboard、champion promote/get，migrations 021-023）；剩餘：equity curve 持久化（第五組）、walk-forward fold 分組（第六組）。（2026-03-21）
+  備註：第一至六組全部完成（migrations 021-024）；涵蓋 experiment_name 分組、tags/notes、compare、leaderboard、champion promote/get、WF fold grouping + 聚合統計；剩餘可選：equity curve 持久化（第五組，nice-to-have）。（2026-03-21）
 
 - [ ] 建立訓練流程
   目標：讓訓練可重現。
@@ -237,16 +237,14 @@
   目標：前端 / 腳本可直接取歷史 equity curve 畫圖。
   交付物：endpoint + 測試。
 
-### 第六組：Walk-forward Fold 分組（實驗完整性）
+### 第六組：Walk-forward Fold 分組（實驗完整性）✅
 
-- [ ] **migration 025：`backtest_runs` 加入 `wf_group_id` 與 `fold_index` 欄位**
-  目標：讓同一次 walk-forward 的各 fold 可以聚合分析。
-  作法：`wf_group_id TEXT`（UUID 或 timestamp）、`fold_index INTEGER`。
-  交付物：migration + `run_walk_forward()` 更新 + 測試。
+- [x] **migration 024：`backtest_runs` 加入 `wf_group_id` 與 `fold_index` 欄位**
+- [x] **`POST /backtest/walk-forward` 生成 UUID `wf_group_id`，各 fold 攜帶 `fold_index` 持久化，response 回傳 `wf_group_id`**
+- [x] **`GET /backtest/walk-forward/groups` — 列出所有 WF group 摘要**
+- [x] **`GET /backtest/walk-forward/groups/{wf_group_id}` — 取得各折 + 聚合統計（avg/min/max sharpe、return、drawdown 等）**
 
-- [ ] **`GET /backtest/walk-forward/{wf_group_id}` — 聚合 WF 各折結果**
-  目標：看全折平均 sharpe / drawdown，評估策略穩定性。
-  交付物：endpoint + 測試。
+  備註：第六組已於 2026-03-21 完成，9 條測試通過（403 total）。
 
 ---
 
