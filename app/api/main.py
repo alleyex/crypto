@@ -1015,6 +1015,13 @@ def update_risk_config_for_strategy(strategy_name: str, body: RiskConfigUpdateRe
             cooldown_seconds=body.cooldown_seconds,
             max_daily_loss=body.max_daily_loss,
         )
+        log_event(
+            event_type="risk_config",
+            status="ok",
+            source="api",
+            message=f"Risk config updated for strategy={strategy_name!r}.",
+            payload=cfg.to_dict(),
+        )
         return {"status": "ok", "config": cfg.to_dict()}
     finally:
         connection.close()
@@ -1027,6 +1034,13 @@ def reset_risk_config_for_strategy(strategy_name: str) -> dict:
     try:
         run_migrations(connection)
         deleted = delete_risk_config(connection, strategy_name)
+        log_event(
+            event_type="risk_config",
+            status="ok",
+            source="api",
+            message=f"Risk config override deleted for strategy={strategy_name!r}. deleted={deleted}",
+            payload={"strategy_name": strategy_name, "deleted": deleted},
+        )
         return {"status": "ok", "deleted": deleted}
     finally:
         connection.close()
@@ -1107,6 +1121,13 @@ def update_portfolio_config(body: PortfolioConfigUpdateRequest) -> dict:
             total_capital=body.total_capital,
             max_strategy_allocation_pct=body.max_strategy_allocation_pct,
             max_total_exposure_pct=body.max_total_exposure_pct,
+        )
+        log_event(
+            event_type="portfolio_config",
+            status="ok",
+            source="api",
+            message="Portfolio config updated.",
+            payload=cfg.to_dict(),
         )
         return {"status": "ok", "config": cfg.to_dict()}
     finally:
@@ -1703,7 +1724,7 @@ def apply_best_sweep_params(
             cooldown_seconds=int(params["cooldown_seconds"]) if "cooldown_seconds" in params else None,
             max_daily_loss=float(params["max_daily_loss"]) if "max_daily_loss" in params else None,
         )
-        return {
+        result = {
             "status": "ok",
             "strategy": strategy,
             "source_run": {
@@ -1717,5 +1738,23 @@ def apply_best_sweep_params(
             },
             "config": cfg.to_dict(),
         }
+        log_event(
+            event_type="param_sync",
+            status="ok",
+            source="api",
+            message=(
+                f"Best sweep params applied to strategy={strategy!r} "
+                f"from run_id={best['id']} (sort_by={body.sort_by}, "
+                f"value={best['metrics'].get(body.sort_by)})."
+            ),
+            payload={
+                "strategy": strategy,
+                "source_run_id": best["id"],
+                "sort_by": body.sort_by,
+                "sort_value": best["metrics"].get(body.sort_by),
+                "params_applied": params,
+            },
+        )
+        return result
     finally:
         connection.close()

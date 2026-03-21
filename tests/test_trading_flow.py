@@ -8691,3 +8691,111 @@ def test_build_soak_report_flags_low_actionable_rate_as_issue(monkeypatch, tmp_p
     monkeypatch.setattr("app.validation.soak_report.build_soak_history_summary", lambda: {})
     report = build_soak_validation_report()
     assert any("actionable rate" in issue.lower() for issue in report["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Audit log integration tests
+# ---------------------------------------------------------------------------
+
+
+class _SharedConn:
+    """Wraps a sqlite3 connection, exposing close() as no-op for TestClient reuse."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def close(self):
+        pass
+
+    def really_close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _make_audit_conn():
+    raw = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(raw)
+    return _SharedConn(raw)
+
+
+def _audit_rows(conn, event_type=None):
+    q = "SELECT event_type, status, source, message, payload_json FROM audit_events"
+    if event_type:
+        rows = conn._conn.execute(q + " WHERE event_type = ?", (event_type,)).fetchall()
+    else:
+        rows = conn._conn.execute(q).fetchall()
+    return rows
+
+
+def _patch_conn(monkeypatch, conn):
+    """Patch both the API and audit service get_connection to use shared conn."""
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.audit.service.get_connection", lambda: conn)
+
+
+def test_audit_log_portfolio_config_update(monkeypatch) -> None:
+    conn = _make_audit_conn()
+    _patch_conn(monkeypatch, conn)
+    client = TestClient(app)
+    resp = client.post("/portfolio/config", json={"total_capital": 10000.0})
+    assert resp.status_code == 200
+    rows = _audit_rows(conn, "portfolio_config")
+    assert len(rows) == 1
+    assert rows[0][1] == "ok"
+    assert rows[0][2] == "api"
+    conn.really_close()
+
+
+def test_audit_log_risk_config_update(monkeypatch) -> None:
+    conn = _make_audit_conn()
+    _patch_conn(monkeypatch, conn)
+    client = TestClient(app)
+    resp = client.post("/risk-config/ma_cross", json={"order_qty": 0.002})
+    assert resp.status_code == 200
+    rows = _audit_rows(conn, "risk_config")
+    assert len(rows) == 1
+    assert rows[0][1] == "ok"
+    assert "ma_cross" in rows[0][3]
+    conn.really_close()
+
+
+def test_audit_log_risk_config_delete(monkeypatch) -> None:
+    conn = _make_audit_conn()
+    _patch_conn(monkeypatch, conn)
+    client = TestClient(app)
+    # First create an override, then delete it
+    client.post("/risk-config/ma_cross", json={"order_qty": 0.002})
+    resp = client.delete("/risk-config/ma_cross")
+    assert resp.status_code == 200
+    rows = _audit_rows(conn, "risk_config")
+    assert len(rows) == 2  # one for update, one for delete
+    messages = [r[3] for r in rows]
+    assert any("deleted" in m for m in messages)
+    conn.really_close()
+
+
+def test_audit_log_param_sync(monkeypatch) -> None:
+    import json as _json
+    conn = _make_audit_conn()
+    # Seed a sweep run directly
+    params = {"order_qty": 0.003, "max_position_qty": 0.006}
+    conn._conn.execute(
+        """INSERT INTO backtest_runs
+           (run_type, symbol, strategy_name, timeframe, candle_count, trade_count,
+            fill_on, sharpe_ratio, params_json)
+           VALUES ('sweep', 'BTCUSDT', 'ma_cross', '1m', 100, 5, 'close', 1.5, ?)""",
+        (_json.dumps(params),),
+    )
+    conn._conn.commit()
+    _patch_conn(monkeypatch, conn)
+    client = TestClient(app)
+    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    assert resp.status_code == 200
+    rows = _audit_rows(conn, "param_sync")
+    assert len(rows) == 1
+    assert rows[0][1] == "ok"
+    assert "ma_cross" in rows[0][3]
+    payload = _json.loads(rows[0][4])
+    assert payload["params_applied"]["order_qty"] == 0.003
+    conn.really_close()
