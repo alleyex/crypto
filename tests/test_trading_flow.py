@@ -1260,29 +1260,32 @@ def test_run_validation_mode_dispatches_smoke(monkeypatch) -> None:
 
 def test_run_validation_mode_dispatches_compose_soak(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
-    compose_result = {
-        "mode": "compose-runtime",
-        "ok": True,
-        "base_url": "http://127.0.0.1:8012",
-        "health": {"status": "ok", "database": "postgresql://crypto:crypto@postgres:5432/crypto"},
-        "pipeline": {"steps": []},
-        "orders": [],
-        "audit_events": [],
-        "scheduler_logs": [],
-        "docker_logs": "api-1 | up\nscheduler-1 | up\n",
-        "api_logs": "api-1 | ready\n",
-        "scheduler_logs_full": "scheduler-1 | tick\n",
-        "postgres_logs": "postgres-1 | healthy\n",
-    }
+
+    def fake_validate_compose_runtime(**kwargs):
+        calls.append(("compose", kwargs))
+        result = {
+            "mode": "compose-runtime",
+            "ok": True,
+            "base_url": "http://127.0.0.1:8012",
+            "health": {"status": "ok", "database": "postgresql://crypto:crypto@postgres:5432/crypto"},
+            "pipeline": {"steps": []},
+            "orders": [],
+            "audit_events": [],
+            "scheduler_logs": [],
+            "docker_logs": "api-1 | up\nscheduler-1 | up\n",
+            "api_logs": "api-1 | ready\n",
+            "scheduler_logs_full": "scheduler-1 | tick\n",
+            "postgres_logs": "postgres-1 | healthy\n",
+        }
+        if kwargs.get("include_soak"):
+            result["mode"] = "compose-soak-readability"
+            result["soak_validation"] = {"status": "ok"}
+            result["soak_history"] = []
+        return result
 
     monkeypatch.setattr(
         "scripts.run_postgres_compose_validation.validate_compose_runtime",
-        lambda **kwargs: calls.append(("compose", kwargs)) or dict(compose_result),
-    )
-    monkeypatch.setattr(
-        "scripts.run_postgres_compose_validation.request_json",
-        lambda method, url: calls.append((method, url))
-        or ({"status": "ok"} if url.endswith("/validation/soak") else []),
+        fake_validate_compose_runtime,
     )
 
     class Args:
@@ -1302,8 +1305,8 @@ def test_run_validation_mode_dispatches_compose_soak(monkeypatch) -> None:
     assert result["api_logs"] == "api-1 | ready\n"
     assert result["scheduler_logs_full"] == "scheduler-1 | tick\n"
     assert result["postgres_logs"] == "postgres-1 | healthy\n"
-    assert any(call[0] == "GET" and str(call[1]).endswith("/validation/soak") for call in calls)
-    assert any(call[0] == "GET" and str(call[1]).endswith("/validation/soak/history") for call in calls)
+    compose_call = next(c for c in calls if c[0] == "compose")
+    assert compose_call[1].get("include_soak") is True
 
 
 def test_auto_id_column_sql_supports_sqlite_and_postgres() -> None:

@@ -245,6 +245,7 @@ def validate_compose_runtime(
     database_url: str,
     startup_timeout: float,
     keep_up: bool,
+    include_soak: bool = False,
 ) -> dict[str, Any]:
     work_dir = Path(tempfile.mkdtemp(prefix="crypto-pg-validate-"))
     for name in ("storage", "logs", "runtime"):
@@ -281,7 +282,7 @@ def validate_compose_runtime(
         api_logs = collect_service_logs(compose_args, env, "api")
         scheduler_logs_full = collect_service_logs(compose_args, env, "scheduler")
         postgres_logs = collect_service_logs(compose_args, env, "postgres")
-        return {
+        result = {
             "mode": "compose-runtime",
             "ok": True,
             "base_url": base_url,
@@ -296,6 +297,11 @@ def validate_compose_runtime(
             "scheduler_logs_full": scheduler_logs_full,
             "postgres_logs": postgres_logs,
         }
+        if include_soak:
+            result["mode"] = "compose-soak-readability"
+            result["soak_validation"] = request_json("GET", f"{base_url}/validation/soak")
+            result["soak_history"] = request_json("GET", f"{base_url}/validation/soak/history")
+        return result
     finally:
         if not keep_up:
             try:
@@ -311,20 +317,14 @@ def validate_compose_soak_readability(
     startup_timeout: float,
     keep_up: bool,
 ) -> dict[str, Any]:
-    result = validate_compose_runtime(
+    return validate_compose_runtime(
         api_port=api_port,
         project_name=project_name,
         database_url=database_url,
         startup_timeout=startup_timeout,
         keep_up=keep_up,
+        include_soak=True,
     )
-    base_url = result["base_url"]
-    soak_validation = request_json("GET", f"{base_url}/validation/soak")
-    soak_history = request_json("GET", f"{base_url}/validation/soak/history")
-    result["mode"] = "compose-soak-readability"
-    result["soak_validation"] = soak_validation
-    result["soak_history"] = soak_history
-    return result
 
 
 def validate_smoke(database_url: str) -> dict[str, Any]:
