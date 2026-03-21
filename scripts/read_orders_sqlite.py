@@ -9,6 +9,8 @@ SELECT_ORDERS_SQL = """
 SELECT
     id,
     client_order_id,
+    broker_name,
+    broker_order_id,
     symbol,
     timeframe,
     strategy_name,

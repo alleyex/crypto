@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY,
     client_order_id TEXT NOT NULL UNIQUE,
     risk_event_id INTEGER UNIQUE,
+    broker_name TEXT,
+    broker_order_id TEXT,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     strategy_name TEXT NOT NULL,
@@ -73,6 +75,8 @@ INSERT_ORDER_SQL = """
 INSERT INTO orders (
     client_order_id,
     risk_event_id,
+    broker_name,
+    broker_order_id,
     symbol,
     timeframe,
     strategy_name,
@@ -80,7 +84,7 @@ INSERT INTO orders (
     qty,
     price,
     status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -154,6 +158,8 @@ def execute_risk_event_id(
         (
             client_order_id,
             risk_event_id,
+            "paper",
+            None,
             symbol,
             timeframe,
             strategy_name,

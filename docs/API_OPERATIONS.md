@@ -305,6 +305,7 @@ Validate Binance account connectivity:
 ```bash
 curl -s http://127.0.0.1:8000/execution/backend/check | python -m json.tool
 python scripts/check_binance_backend.py
+python scripts/check_binance_order.py --symbol BTCUSDT --side BUY --qty 0.001
 ```
 
 Behavior:
@@ -312,6 +313,7 @@ Behavior:
 - returns `status=skipped` when the active backend is not `binance`
 - returns `status=ok` with account capability fields when signed Binance auth succeeds
 - returns `status=error` when credentials are missing or the remote request fails
+- `scripts/check_binance_order.py` uses Binance `POST /api/v3/order/test`, so it validates signing and order parameters without creating a real testnet order
 
 ## 11. Broker Protection Workflow
 

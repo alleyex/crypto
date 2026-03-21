@@ -3586,6 +3586,20 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
+        from app.core import job_queue as job_queue_module
+
+        original_status = job_queue_module.get_execution_backend_status
+        original_name = job_queue_module.get_execution_adapter_name
+        job_queue_module.get_execution_backend_status = lambda: {
+            "backend": "paper",
+            "description": "Paper broker execution backend.",
+            "dry_run": False,
+            "can_execute_orders": True,
+            "is_live": False,
+            "placeholder": False,
+            "status": "ok",
+        }
+        job_queue_module.get_execution_adapter_name = lambda: "paper"
         market_job_id = enqueue_job(connection, "market_data", payload={"symbol_names": ["BTCUSDT"]})
         strategy_job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
         execution_job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["ETHUSDT"]})
@@ -3648,6 +3662,10 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         assert summary["latest_jobs"][0]["payload"]["execution_backend"] == "paper"
         assert execution_job_id in [job["id"] for job in summary["latest_jobs"]]
     finally:
+        if "original_status" in locals():
+            job_queue_module.get_execution_backend_status = original_status
+        if "original_name" in locals():
+            job_queue_module.get_execution_adapter_name = original_name
         connection.close()
 
 
@@ -3694,6 +3712,28 @@ def test_get_job_queue_summary_includes_batch_age_seconds(monkeypatch) -> None:
         assert summary["recent_batches"][0]["created_at"] == "2026-03-19 10:00:00"
         assert summary["recent_batches"][0]["age_seconds"] == 300
         assert summary["latest_incomplete_batch"]["age_seconds"] == 300
+    finally:
+        connection.close()
+
+
+def test_get_job_queue_summary_tolerates_non_json_payload_rows() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO job_queue (job_type, status, payload_json, result_json, error_message, attempt_count)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            ("pipeline_run", "completed", "pipeline", "Pipeline run completed.", None, 1),
+        )
+        connection.commit()
+
+        summary = get_job_queue_summary(connection)
+
+        assert summary["latest_jobs"][0]["job_type"] == "pipeline_run"
+        assert summary["latest_jobs"][0]["payload"] is None
+        assert summary["latest_jobs"][0]["result"] is None
     finally:
         connection.close()
 
@@ -5992,6 +6032,37 @@ def test_binance_broker_client_check_account_connectivity_calls_api(monkeypatch)
     assert result["balance_count"] == 1
 
 
+def test_binance_broker_client_check_order_request_calls_test_endpoint(monkeypatch) -> None:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    requested: list = []
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {}
+
+    def fake_request(method, url, headers=None, timeout=None):
+        requested.append((method, url))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.execution.binance_broker.requests.request", fake_request)
+
+    client = BinanceBrokerClient(api_key="test-key", api_secret="test-secret", testnet=True)
+    result = client.check_order_request(symbol="BTCUSDT", side="BUY", qty=0.001)
+
+    assert requested[0][0] == "POST"
+    assert "/api/v3/order/test" in requested[0][1]
+    assert result == {
+        "status": "ok",
+        "broker": "binance",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "qty": 0.001,
+        "validated": True,
+    }
+
+
 def test_binance_broker_client_weighted_avg_fill_price() -> None:
     from app.execution.binance_broker import _weighted_avg_fill_price
 
@@ -6036,14 +6107,64 @@ def test_live_broker_execute_risk_event_id_writes_order_and_fill() -> None:
         assert result["side"] == "BUY"
         assert result["qty"] == 0.001
         assert result["broker"] == "simulated"
+        assert result["broker_order_id"] is None
 
         orders = get_orders(connection, limit=5)
         assert len(orders) == 1
         assert orders[0]["status"] == "FILLED"
+        assert orders[0]["broker_name"] == "simulated"
+        assert orders[0]["broker_order_id"] is None
 
         fills = get_fills(connection, limit=5)
         assert len(fills) == 1
         assert fills[0]["price"] == result["price"]
+    finally:
+        connection.close()
+
+
+def test_order_migration_adds_broker_metadata_columns() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        columns = set(get_table_columns(connection, "orders"))
+        assert "broker_name" in columns
+        assert "broker_order_id" in columns
+    finally:
+        connection.close()
+
+
+def test_live_broker_persists_external_broker_order_id() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        class FakeBroker:
+            broker_name = "binance"
+
+            def place_order(self, symbol, side, qty, ref_price):
+                return {
+                    "status": "FILLED",
+                    "fill_price": ref_price,
+                    "fill_qty": qty,
+                    "order_id": "binance-123",
+                }
+
+        result = live_broker.execute_risk_event_id(connection, int(risk["id"]), FakeBroker())
+
+        assert result is not None
+        assert result["broker"] == "binance"
+        assert result["broker_order_id"] == "binance-123"
+
+        order = get_orders(connection, limit=1)[0]
+        assert order["broker_name"] == "binance"
+        assert order["broker_order_id"] == "binance-123"
     finally:
         connection.close()
 
@@ -6405,6 +6526,37 @@ def test_check_binance_backend_script_prints_connectivity_result(monkeypatch) ->
         "status": "ok",
         "broker": "binance",
         "balance_count": 2,
+    }
+
+
+def test_check_binance_order_script_prints_validation_result(monkeypatch) -> None:
+    import scripts.check_binance_order as script
+
+    class FakeClient:
+        def check_order_request(self, symbol, side, qty):
+            return {
+                "status": "ok",
+                "broker": "binance",
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "validated": True,
+            }
+
+    monkeypatch.setattr("scripts.check_binance_order.BinanceBrokerClient", FakeClient)
+    monkeypatch.setattr("scripts.check_binance_order.parse_args", lambda: SimpleNamespace(symbol="BTCUSDT", side="BUY", qty=0.001))
+
+    buffer = StringIO()
+    with contextlib.redirect_stdout(buffer):
+        script.main()
+
+    assert json.loads(buffer.getvalue()) == {
+        "status": "ok",
+        "broker": "binance",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "qty": 0.001,
+        "validated": True,
     }
 
 

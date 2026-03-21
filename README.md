@@ -162,6 +162,7 @@ curl -s -X POST http://127.0.0.1:8000/execution/backend \
   -d '{"backend":"binance"}'
 curl -s http://127.0.0.1:8000/execution/backend/check
 python scripts/check_binance_backend.py
+python scripts/check_binance_order.py --symbol BTCUSDT --side BUY --qty 0.001
 ```
 
 Binance backend configuration:
@@ -173,6 +174,7 @@ export CRYPTO_BINANCE_TESTNET=true
 ```
 
 `GET /execution/backend/check` and `python scripts/check_binance_backend.py` perform a signed Binance account call when testnet credentials are configured.
+`python scripts/check_binance_order.py` performs a signed Binance `order/test` validation so you can verify symbol, side, quantity, and signature without placing a real testnet order.
 
 Set the active runtime strategy set used by pipeline and strategy-only scheduler loops:
 

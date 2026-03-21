@@ -107,6 +107,7 @@ def execute_risk_event_id(
     fill_price = float(fill_result["fill_price"])
     fill_qty = float(fill_result["fill_qty"])
     order_status = str(fill_result["status"])
+    broker_order_id = fill_result.get("order_id")
 
     client_order_id = str(uuid.uuid4())
     order_id = insert_and_get_rowid(
@@ -115,6 +116,8 @@ def execute_risk_event_id(
         (
             client_order_id,
             risk_event_id,
+            broker_client.broker_name,
+            str(broker_order_id) if broker_order_id not in (None, "") else None,
             symbol,
             timeframe,
             strategy_name,
@@ -141,6 +144,7 @@ def execute_risk_event_id(
         "price": fill_price,
         "status": order_status,
         "broker": broker_client.broker_name,
+        "broker_order_id": str(broker_order_id) if broker_order_id not in (None, "") else None,
     }
 
 

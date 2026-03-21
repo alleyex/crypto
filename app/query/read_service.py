@@ -17,6 +17,17 @@ def _fetch_all(connection: DBConnection, query: str, limit: int = 5) -> list[dic
     return fetch_all_as_dicts(connection, query, (limit,))
 
 
+def _decode_json_field(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
 SELECT_CANDLES_SQL = """
 SELECT
     id,
@@ -74,6 +85,8 @@ SELECT
     id,
     client_order_id,
     risk_event_id,
+    broker_name,
+    broker_order_id,
     symbol,
     timeframe,
     strategy_name,
@@ -201,8 +214,8 @@ def get_job_queue_jobs(connection: DBConnection, limit: int = 20) -> list[dict[s
     normalized: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        item["payload"] = item["payload_json"] and json.loads(item["payload_json"])
-        item["result"] = item["result_json"] and json.loads(item["result_json"])
+        item["payload"] = _decode_json_field(item.get("payload_json"))
+        item["result"] = _decode_json_field(item.get("result_json"))
         normalized.append(item)
     return normalized
 

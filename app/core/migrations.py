@@ -107,6 +107,8 @@ def _create_orders_and_fills_tables(connection: DBConnection) -> None:
             {_auto_id_column_sql(backend)},
             client_order_id TEXT NOT NULL UNIQUE,
             risk_event_id INTEGER UNIQUE,
+            broker_name TEXT,
+            broker_order_id TEXT,
             symbol TEXT NOT NULL,
             timeframe TEXT NOT NULL,
             strategy_name TEXT NOT NULL,
@@ -140,6 +142,16 @@ def _add_orders_risk_event_id(connection: DBConnection) -> None:
     connection.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_risk_event_id ON orders(risk_event_id);"
     )
+
+
+def _add_orders_broker_metadata(connection: DBConnection) -> None:
+    if not table_exists(connection, "orders"):
+        return
+    columns = get_table_columns(connection, "orders")
+    if "broker_name" not in columns:
+        connection.execute("ALTER TABLE orders ADD COLUMN broker_name TEXT;")
+    if "broker_order_id" not in columns:
+        connection.execute("ALTER TABLE orders ADD COLUMN broker_order_id TEXT;")
 
 
 def _create_positions_table(connection: DBConnection) -> None:
@@ -311,6 +323,7 @@ MIGRATIONS: list[Migration] = [
     ("015_add_job_queue_depends_on", _add_job_queue_depends_on),
     ("016_create_risk_configs_table", _create_risk_configs_table),
     ("017_create_portfolio_config_table", _create_portfolio_config_table),
+    ("018_add_orders_broker_metadata", _add_orders_broker_metadata),
 ]
 
 

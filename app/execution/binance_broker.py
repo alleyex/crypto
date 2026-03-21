@@ -26,6 +26,7 @@ MAINNET_BASE_URL = "https://api.binance.com"
 
 _ORDER_ENDPOINT = "/api/v3/order"
 _ACCOUNT_ENDPOINT = "/api/v3/account"
+_ORDER_TEST_ENDPOINT = "/api/v3/order/test"
 
 
 def _sign(query_string: str, secret: str) -> str:
@@ -97,6 +98,33 @@ class BinanceBrokerClient:
             "can_deposit": bool(data.get("canDeposit", False)),
             "can_withdraw": bool(data.get("canWithdraw", False)),
             "balance_count": len(balances),
+        }
+
+    def check_order_request(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+    ) -> Dict[str, Union[str, float, bool]]:
+        timestamp = int(time.time() * 1000)
+        self._signed_request(
+            "POST",
+            _ORDER_TEST_ENDPOINT,
+            {
+                "symbol": symbol,
+                "side": side.upper(),
+                "type": "MARKET",
+                "quantity": qty,
+                "timestamp": timestamp,
+            },
+        )
+        return {
+            "status": "ok",
+            "broker": self.broker_name,
+            "symbol": symbol,
+            "side": side.upper(),
+            "qty": float(qty),
+            "validated": True,
         }
 
     def place_order(
