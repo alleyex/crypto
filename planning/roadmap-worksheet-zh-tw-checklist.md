@@ -128,10 +128,10 @@
   交付物：adapter interface。
   備註：`BrokerClient` Protocol、`SimulatedBrokerClient`、`BinanceBrokerClient`（HMAC-SHA256、MARKET order、weighted-avg fill price）、`BinanceLiveExecutionAdapter` 均已完成；testnet 端到端驗證通過（帳號連線 → dry-run order → 完整 pipeline 7 步）；切換 `CRYPTO_EXECUTION_BACKEND=binance` 即可上線。（2026-03-21）
 
-- [ ] 風控服務獨立化
+- [x] 風控服務獨立化
   目標：提高風控一致性。
   交付物：risk service。
-  備註：風控必須高於策略。
+  備註：`run_risk_job()` 獨立成 `app/pipeline/risk_job.py`；pipeline 固定為 `market_data → strategy → risk → execution` 四步；`_propagate_dependent_job_payload` 自動將 `signal_ids`/`risk_event_ids` 傳遞到下游 queue job；LEFT JOIN 偵測未評估訊號，無需 schema 變更；strategy_job 不再含風控邏輯。（2026-03-21）
 
 - [ ] 建立投組服務
   目標：管理跨策略資金分配。
@@ -163,7 +163,7 @@
 - [x] 建立回測與模擬器
   目標：建立接近真實的研究環境。
   交付物：simulator。
-  備註：`run_backtest()` 核心引擎（in-memory SQLite、fill_on close/next_open）、`compute_metrics()`（Sharpe/drawdown/win_rate/profit_factor）、`load_candles_from_db()`、`run_parameter_sweep()`、`run_walk_forward()` 及對應 API endpoints（GET /backtest、POST /backtest/sweep、POST /backtest/walk-forward）均已完成。（2026-03-21）
+  備註：`run_backtest()` 核心引擎（in-memory SQLite、fill_on close/next_open）、`compute_metrics()`（Sharpe/drawdown/win_rate/profit_factor）、`load_candles_from_db()`、`run_parameter_sweep()`、`run_walk_forward()` 及對應 API endpoints（GET /backtest、POST /backtest/sweep、POST /backtest/walk-forward）均已完成；回測結果持久化至 `backtest_runs`（migration 020），`GET /backtest/history` 支援 symbol/strategy/run_type 篩選與分頁；`POST /backtest/sweep/{strategy}/apply-best-params` 讀取最佳 sweep 結果並自動更新 risk_configs。（2026-03-21）
 
 - [ ] 建立實驗追蹤
   目標：管理研究結果。
@@ -237,4 +237,4 @@
 - [~] M3：風控、pause、kill switch 可用，系統可連跑數天。
   備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；multi-strategy double-execution 修復；剩餘缺口為一週連跑 soak validation 驗收。
 - [~] M4：API 與監控可用，系統可進入小額實盤準備階段。
-  備註：Stage 2 全部項目已完成（API、worker 分離、queue、multi-symbol、multi-strategy、alerting）；`BrokerClient` Protocol groundwork 完成；待完成真實交易所 adapter、風控服務獨立化、投組服務。
+  備註：Stage 2 全部項目已完成（API、worker 分離、queue、multi-symbol、multi-strategy、alerting）；Binance testnet 端到端驗證通過；風控服務獨立化完成（4-step pipeline）；回測持久化與 strategy param 自動同步完成；待完成投組服務、audit log 擴充。
