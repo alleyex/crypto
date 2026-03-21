@@ -777,6 +777,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div class="message" id="soak-message">No soak validation snapshot recorded from this page yet.</div>
           <pre id="soak-json">Loading...</pre>
         </article>
+        <article class="panel data-card">
+          <h2>Risk Config Overrides</h2>
+          <p>Per-strategy risk parameter overrides. Strategies without an override use global defaults.</p>
+          <div id="risk-config-board">Loading...</div>
+        </article>
+        <article class="panel data-card">
+          <h2>Portfolio Exposure</h2>
+          <p>Cross-strategy position exposure and capital limit enforcement status.</p>
+          <div id="portfolio-board">Loading...</div>
+        </article>
       </section>
 
       <div class="footer-note">
@@ -1194,6 +1204,92 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           current_report: currentReport,
           recent_history: history,
         });
+      }
+
+      function updateRiskConfig(data) {
+        const board = el("risk-config-board");
+        if (!board) return;
+        const global = data.global_defaults || {};
+        const overrides = data.overrides || [];
+        const fields = ["order_qty", "max_position_qty", "cooldown_seconds", "max_daily_loss"];
+        const fieldLabels = { order_qty: "Order Qty", max_position_qty: "Max Pos Qty", cooldown_seconds: "Cooldown (s)", max_daily_loss: "Max Daily Loss" };
+
+        const rows = overrides.map((cfg) => {
+          const cells = fields.map((f) => {
+            const val = cfg[f];
+            const def = global[f];
+            const changed = val !== def;
+            return `<td style="text-align:right;${changed ? "font-weight:bold;color:var(--accent);" : ""}">${val ?? "—"}</td>`;
+          }).join("");
+          return `<tr><td><strong>${cfg.strategy_name}</strong></td>${cells}<td style="font-size:0.75em;color:var(--muted)">${cfg.updated_at || ""}</td></tr>`;
+        });
+
+        const defaultRow = `<tr style="color:var(--muted);font-style:italic"><td>defaults</td>${fields.map((f) => `<td style="text-align:right">${global[f] ?? "—"}</td>`).join("")}<td></td></tr>`;
+
+        board.innerHTML = overrides.length === 0
+          ? `<p style="color:var(--muted);font-style:italic">No per-strategy overrides. All strategies use global defaults.</p><pre>${formatJson(global)}</pre>`
+          : `<table style="width:100%;border-collapse:collapse;font-size:0.85em">
+              <thead><tr><th style="text-align:left">Strategy</th>${fields.map((f) => `<th style="text-align:right">${fieldLabels[f]}</th>`).join("")}<th style="text-align:left">Updated</th></tr></thead>
+              <tbody>${defaultRow}${rows.join("")}</tbody>
+            </table>`;
+      }
+
+      function updatePortfolio(data) {
+        const board = el("portfolio-board");
+        if (!board) return;
+        const cfg = data.config || {};
+        const positions = data.open_positions || [];
+        const perStrategy = Array.isArray(data.per_strategy) ? data.per_strategy : [];
+        const violations = data.violations || [];
+        const withinLimits = data.within_limits !== false;
+
+        const enforced = cfg.enforcement_active ? "ENFORCED" : "INACTIVE (total_capital=0)";
+        const enforcedClass = cfg.enforcement_active ? (withinLimits ? "ok" : "bad") : "warn";
+
+        const posRows = positions.map((p) => `<tr>
+          <td><strong>${p.symbol}</strong></td>
+          <td style="text-align:right">${Number(p.qty || 0).toFixed(4)}</td>
+          <td style="text-align:right">${p.notional != null ? Number(p.notional).toFixed(2) : "—"}</td>
+          <td style="text-align:right;color:${Number(p.unrealized_pnl || 0) >= 0 ? "var(--ok)" : "var(--bad)"}">${p.unrealized_pnl != null ? Number(p.unrealized_pnl).toFixed(4) : "—"}</td>
+        </tr>`).join("");
+
+        const stratRows = perStrategy.map((s) => {
+          const symbols = Object.keys(s.open_symbols || {}).join(", ") || "—";
+          const withinClass = s.within_limit ? "" : "color:var(--bad);font-weight:bold";
+          const pct = cfg.max_strategy_notional ? (Number(s.total_notional || 0) / Number(cfg.max_strategy_notional) * 100).toFixed(1) + "%" : "—";
+          return `<tr>
+            <td>${s.strategy_name}</td>
+            <td style="text-align:right">${symbols}</td>
+            <td style="text-align:right">${s.total_notional != null ? Number(s.total_notional).toFixed(2) : "—"}</td>
+            <td style="text-align:right">${s.limit_notional != null ? Number(s.limit_notional).toFixed(2) : "—"}</td>
+            <td style="text-align:right;${withinClass}">${pct}</td>
+          </tr>`;
+        }).join("");
+
+        const violationHtml = violations.length
+          ? `<p style="color:var(--bad);margin-bottom:8px">⚠ ${violations.join("; ")}</p>`
+          : "";
+
+        board.innerHTML = `
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+            <div class="side-stat"><label>Enforcement</label><div class="value ${enforcedClass}">${enforced}</div></div>
+            <div class="side-stat"><label>Total Capital</label><div class="value">${cfg.total_capital != null ? Number(cfg.total_capital).toLocaleString() + " USDT" : "—"}</div></div>
+            <div class="side-stat"><label>Max Strategy %</label><div class="value">${cfg.max_strategy_allocation_pct != null ? (Number(cfg.max_strategy_allocation_pct) * 100).toFixed(0) + "%" : "—"}</div></div>
+            <div class="side-stat"><label>Max Total %</label><div class="value">${cfg.max_total_exposure_pct != null ? (Number(cfg.max_total_exposure_pct) * 100).toFixed(0) + "%" : "—"}</div></div>
+          </div>
+          ${violationHtml}
+          ${positions.length ? `
+          <p style="font-weight:bold;margin-bottom:4px">Open Positions (${positions.length})</p>
+          <table style="width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:12px">
+            <thead><tr><th style="text-align:left">Symbol</th><th style="text-align:right">Qty</th><th style="text-align:right">Notional (USDT)</th><th style="text-align:right">Unreal. PnL</th></tr></thead>
+            <tbody>${posRows}</tbody>
+          </table>` : `<p style="color:var(--muted);font-style:italic;margin-bottom:12px">No open positions.</p>`}
+          ${perStrategy.length ? `
+          <p style="font-weight:bold;margin-bottom:4px">Per-Strategy Exposure</p>
+          <table style="width:100%;border-collapse:collapse;font-size:0.85em">
+            <thead><tr><th style="text-align:left">Strategy</th><th style="text-align:right">Symbols</th><th style="text-align:right">Notional</th><th style="text-align:right">Limit</th><th style="text-align:right">Used %</th></tr></thead>
+            <tbody>${stratRows}</tbody>
+          </table>` : ""}`;
       }
 
       function updateStrategySummary(strategySummary) {
@@ -1767,7 +1863,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols, queueSummary] = await Promise.all([
+        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -1783,6 +1879,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/scheduler/strategy"),
           api("/scheduler/symbols"),
           api("/queue/summary"),
+          api("/risk-config").catch(() => ({ global_defaults: {}, overrides: [] })),
+          api("/portfolio").catch(() => ({ config: {}, open_positions: [], per_strategy: {}, violations: [], within_limits: true })),
         ]);
 
         window.__latestHealth = health;
@@ -1841,6 +1939,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
         updateSoakValidation(soakReport, soakHistory);
+        updateRiskConfig(riskConfig);
+        updatePortfolio(portfolio);
         updateStrategySummary(strategySummary);
         updateClosedTrades(closedTrades);
         updateSchedulerControlActivity(auditEvents);

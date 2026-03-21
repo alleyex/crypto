@@ -251,8 +251,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         """
         SELECT
             job_type,
-            AVG(attempt_count) AS avg_attempt_count,
-            MAX(attempt_count) AS max_attempt_count
+            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
+            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
         FROM job_queue
         GROUP BY job_type
         ORDER BY job_type ASC;
@@ -262,8 +262,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         connection,
         """
         SELECT
-            AVG(attempt_count) AS avg_attempt_count,
-            MAX(attempt_count) AS max_attempt_count
+            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
+            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
         FROM job_queue;
         """,
     )[0]
@@ -292,18 +292,20 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         type_terminal_jobs = [job for job in type_latest_jobs if job["status"] in {"completed", "failed"}]
         entry["success_ratio"] = round(completed / total, 4) if total else 0.0
         entry["failure_ratio"] = round(failed / total, 4) if total else 0.0
-        entry["avg_attempt_count"] = round(float(attempts.get("avg_attempt_count") or 0.0), 2)
-        entry["max_attempt_count"] = int(attempts.get("max_attempt_count") or 0)
+        raw_avg = attempts.get("avg_attempt_count")
+        raw_max = attempts.get("max_attempt_count")
+        entry["avg_attempt_count"] = round(float(raw_avg), 2) if isinstance(raw_avg, (int, float)) else 0.0
+        entry["max_attempt_count"] = int(raw_max) if isinstance(raw_max, int) else 0
         entry["latest_failed_job"] = next((job for job in type_latest_jobs if job["status"] == "failed"), None)
-        entry["latest_retry_job"] = next((job for job in type_latest_jobs if int(job.get("attempt_count") or 0) > 1), None)
+        entry["latest_retry_job"] = next((job for job in type_latest_jobs if (int(job["attempt_count"]) if isinstance(job.get("attempt_count"), int) else 0) > 1), None)
         entry["recent_terminal_statuses"] = [
             "F" if job["status"] == "failed" else "C"
             for job in type_terminal_jobs[:3]
         ]
         entry["recent_terminal_trend"] = "".join(entry["recent_terminal_statuses"])
-    retry_jobs = [job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1]
+    retry_jobs = [job for job in latest_jobs if (int(job["attempt_count"]) if isinstance(job.get("attempt_count"), int) else 0) > 1]
     latest_failed_job = next((job for job in latest_jobs if job["status"] == "failed"), None)
-    latest_retry_job = next((job for job in latest_jobs if int(job.get("attempt_count") or 0) > 1), None)
+    latest_retry_job = next((job for job in latest_jobs if (int(job["attempt_count"]) if isinstance(job.get("attempt_count"), int) else 0) > 1), None)
     failure_streak = 0
     terminal_jobs = [job for job in latest_jobs if job["status"] in {"completed", "failed"}]
     for job in terminal_jobs:

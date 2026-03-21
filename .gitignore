@@ -7,3 +7,4 @@ runtime/
 *.pyc
 
 .DS_Store
+.env
