@@ -72,7 +72,7 @@
 - [ ] 完成 paper trading 驗證
   目標：連續運行至少一週。
   交付物：驗證紀錄。
-  備註：已提供 soak validation 摘要腳本，但尚未累積一週連跑紀錄。
+  備註：soak validation 摘要腳本已完成，`build_soak_validation_report()` 已含 signal quality（BUY/SELL/HOLD 分佈、approval rate、execution rate、per-strategy breakdown）；尚未累積完整 72h 連跑紀錄。
 
 ## Stage 2 Growth
 
@@ -155,10 +155,10 @@
 
 ## Stage 4 AI / RL
 
-- [ ] 建立回測與模擬器
+- [x] 建立回測與模擬器
   目標：建立接近真實的研究環境。
   交付物：simulator。
-  備註：RL 前必做。
+  備註：`run_backtest()` 核心引擎（in-memory SQLite、fill_on close/next_open）、`compute_metrics()`（Sharpe/drawdown/win_rate/profit_factor）、`load_candles_from_db()`、`run_parameter_sweep()`、`run_walk_forward()` 及對應 API endpoints（GET /backtest、POST /backtest/sweep、POST /backtest/walk-forward）均已完成。（2026-03-21）
 
 - [ ] 建立實驗追蹤
   目標：管理研究結果。
@@ -205,9 +205,17 @@
   目標：讓單日損益限制不再依賴保守版邏輯。
   備註：`daily_realized_pnl` 已落地，風控已接入，且已用 2026-03-17 到 2026-03-20 的實際 `fills` 對帳驗證。
 
+- [x] 補齊 soak report signal quality
+  目標：讓 soak validation 涵蓋訊號品質分析。
+  備註：`_signal_quality_check()` 已加入 `build_soak_validation_report()`，涵蓋 actionable_rate、approval_rate、duplicate_rejection_rate、execution_rate 及 per-strategy breakdown；三道 issue 偵測已上線。（2026-03-21）
+
+- [x] 新增 RSI、Bollinger Bands、MACD 策略
+  目標：擴充策略庫，提供更多 signal 來源。
+  備註：三個策略已加入 STRATEGY_REGISTRY，支援所有現有 endpoints（backtest、sweep、walk-forward、pipeline/run）。（2026-03-21）
+
 - [ ] 累積一週 paper trading / soak validation 紀錄
   目標：關閉 Stage 1 驗證缺口。
-  備註：目前已有 soak validation 與摘要，但尚未累積完整一週紀錄。
+  備註：目前已有 soak validation 與摘要，但尚未累積完整 72h 連跑紀錄。
 
 - [x] 推進 broker adapter groundwork
   目標：讓 `simulated_live` 不再只是 placeholder。
