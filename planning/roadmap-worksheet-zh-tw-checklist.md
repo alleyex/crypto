@@ -168,7 +168,7 @@
 - [ ] 建立實驗追蹤
   目標：管理研究結果。
   交付物：tracking system。
-  備註：概念類似 MLflow。
+  備註：概念類似 MLflow。基礎（`backtest_runs` + history API）已完成；細項見下方「Stage 4 實驗追蹤細項」。
 
 - [ ] 建立訓練流程
   目標：讓訓練可重現。
@@ -194,6 +194,108 @@
   目標：驗證 RL 是否值得投入。
   交付物：RL strategy report。
   備註：最後再做。
+
+## Stage 4 實驗追蹤細項
+
+> 基礎層（`backtest_runs` 表 + `GET /backtest/history` + `apply-best-params`）已就位。
+> 以下按優先順序列出，每組可獨立實作。
+
+### 第一組：實驗命名與分組（低成本、高價值）
+
+- [ ] **migration 021：`backtest_runs` 加入 `experiment_name` 欄位**
+  目標：讓相關 runs 可以用名稱歸在同一個實驗下（例如 `btc_q1_sweep`）。
+  作法：`ALTER TABLE backtest_runs ADD COLUMN experiment_name TEXT;`
+  交付物：migration function + 測試。
+
+- [ ] **`GET /backtest`、`POST /backtest/sweep`、`POST /backtest/walk-forward` 接受 `experiment_name` 參數**
+  目標：建立 run 時可標記所屬實驗。
+  作法：request body / query param 傳入，寫入 `persist_run()`。
+  交付物：3 個 endpoint 更新 + 測試。
+
+- [ ] **`GET /backtest/history` 新增 `experiment_name` 篩選**
+  目標：可以只撈特定實驗的所有 runs。
+  交付物：query param + SQL WHERE + 測試。
+
+- [ ] **`GET /backtest/experiments` — 列出所有 experiment_name**
+  目標：快速瀏覽有哪些實驗。
+  作法：`SELECT DISTINCT experiment_name FROM backtest_runs WHERE experiment_name IS NOT NULL`。
+  交付物：endpoint + 測試。
+
+### 第二組：Run 標籤與備註（彈性標記）
+
+- [ ] **migration 022：`backtest_runs` 加入 `tags_json` 與 `notes` 欄位**
+  目標：讓每個 run 可附上任意 key-value 標籤和人工備註。
+  作法：`tags_json TEXT`（JSON object）、`notes TEXT`。
+  交付物：migration + 測試。
+
+- [ ] **`PATCH /backtest/runs/{id}` — 更新 notes 和 tags**
+  目標：run 完成後仍可補充說明或標記。
+  作法：只允許更新 `notes` / `tags_json`，不允許改 metrics。
+  交付物：endpoint + 測試。
+
+### 第三組：Run 比較 API（研究核心）
+
+- [ ] **`GET /backtest/compare?ids=1,2,3` — 多 run 並排比較**
+  目標：一次取回多個 run 的 metrics，方便選參數。
+  作法：`SELECT * FROM backtest_runs WHERE id IN (...)` + 回傳 list + diff 摘要（哪個 metric 最佳）。
+  交付物：endpoint + 測試（含欄位對齊、id 不存在處理）。
+
+- [ ] **`GET /backtest/leaderboard/{strategy}` — 策略最佳 run 排行榜**
+  目標：快速找出 sharpe / return / drawdown 前 N 的參數組合。
+  作法：`sort_by` + `limit` query params，支援所有 metric 欄位。
+  交付物：endpoint + 測試。
+
+### 第四組：Champion Run 管理（與 apply-best-params 整合）
+
+- [ ] **migration 023：`backtest_runs` 加入 `promoted_at` 欄位**
+  目標：記錄哪個 run 的參數被正式採用上線。
+  作法：`promoted_at TEXT`（timestamp，NULL 表示未 promote）。
+  交付物：migration + 測試。
+
+- [ ] **`POST /backtest/runs/{id}/promote` — 標記為 champion**
+  目標：顯式記錄「這組參數已被採用」，並同步更新 risk_config。
+  作法：set `promoted_at = CURRENT_TIMESTAMP`，同時呼叫 `set_risk_config()`；同策略舊 champion 清除。
+  交付物：endpoint + audit log + 測試。
+
+- [ ] **`GET /backtest/champion/{strategy}` — 取得目前 champion run**
+  目標：隨時可查「線上正在跑的是哪組參數」。
+  作法：`WHERE strategy_name = ? AND promoted_at IS NOT NULL ORDER BY promoted_at DESC LIMIT 1`。
+  交付物：endpoint + 測試。
+
+### 第五組：Equity Curve 持久化（可選，資料較大）
+
+- [ ] **migration 024：`backtest_runs` 加入 `equity_curve_json` 欄位**
+  目標：存下 equity curve，不用重跑就能畫圖。
+  備註：每條 curve 可能有幾百個點（~幾 KB），可按需要才做。
+  交付物：migration + `persist_run()` 更新 + 測試。
+
+- [ ] **`GET /backtest/runs/{id}/equity-curve` — 取回 equity curve**
+  目標：前端 / 腳本可直接取歷史 equity curve 畫圖。
+  交付物：endpoint + 測試。
+
+### 第六組：Walk-forward Fold 分組（實驗完整性）
+
+- [ ] **migration 025：`backtest_runs` 加入 `wf_group_id` 與 `fold_index` 欄位**
+  目標：讓同一次 walk-forward 的各 fold 可以聚合分析。
+  作法：`wf_group_id TEXT`（UUID 或 timestamp）、`fold_index INTEGER`。
+  交付物：migration + `run_walk_forward()` 更新 + 測試。
+
+- [ ] **`GET /backtest/walk-forward/{wf_group_id}` — 聚合 WF 各折結果**
+  目標：看全折平均 sharpe / drawdown，評估策略穩定性。
+  交付物：endpoint + 測試。
+
+---
+
+### 實作優先順序建議
+
+| 順序 | 組 | 理由 |
+|---|---|---|
+| 1 | 第一組（實驗命名） | 成本最低（1 個 migration），立即提升整理能力 |
+| 2 | 第三組（比較 + 排行榜） | 核心研究工具，不依賴其他組 |
+| 3 | 第四組（Champion 管理） | 讓 apply-best-params 有完整稽核鏈 |
+| 4 | 第二組（標籤備註） | 方便但非關鍵，可晚做 |
+| 5 | 第六組（WF 分組） | 補完 walk-forward 可用性 |
+| 6 | 第五組（Equity curve） | 資料量較大，最後再做 |
 
 ## 建議補充欄位
 
