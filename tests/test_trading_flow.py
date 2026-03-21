@@ -2181,7 +2181,7 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         "paper_execute",
         "update_positions",
         "update_pnl",
-        "check_orphan_orders",
+        "reconcile_orphan_orders",
     ]
 
     connection = sqlite3.connect(db_path)
@@ -3226,11 +3226,13 @@ def test_execute_risk_event_id_writes_audit_event_on_fill() -> None:
     assert captured[0]["payload"]["price"] == 50000.0
 
 
-def test_execution_job_writes_audit_event_for_orphan_orders() -> None:
+def test_execution_job_reconciles_orphan_order_and_emits_audit_event() -> None:
+    """reconcile_orphan_orders synthesizes a fill for a paper-mode orphan and emits an audit event."""
     import app.pipeline.execution_job as execution_job_mod
 
     connection = make_connection()
     run_migrations(connection)
+    seed_candles(connection, [50000.0] * 5)
     captured: list[dict] = []
 
     original = execution_job_mod.insert_event
@@ -3249,11 +3251,11 @@ def test_execution_job_writes_audit_event_for_orphan_orders() -> None:
         execution_job_mod.insert_event = original
         connection.close()
 
-    orphan_events = [e for e in captured if e["event_type"] == "orphan_orders"]
-    assert len(orphan_events) == 1
-    assert orphan_events[0]["status"] == "warning"
-    assert orphan_events[0]["source"] == "execution_job"
-    assert len(orphan_events[0]["payload"]["order_ids"]) == 1
+    reconciled_events = [e for e in captured if e["event_type"] == "orphan_order_reconciled"]
+    assert len(reconciled_events) == 1
+    assert reconciled_events[0]["status"] == "reconciled"
+    assert reconciled_events[0]["source"] == "execution_job"
+    assert reconciled_events[0]["payload"]["fill_price"] == 50000.0
 
 
 def test_admin_page_is_served() -> None:
@@ -5632,7 +5634,7 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
             "symbol_results": [{"symbol": "BTCUSDT", "saved_klines": 5}],
         }
         assert [step["step"] for step in strategy_result["steps"]] == ["generate_signal", "evaluate_risk"]
-        assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl", "check_orphan_orders"]
+        assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl", "reconcile_orphan_orders"]
     finally:
         connection.close()
 
@@ -5664,7 +5666,7 @@ def test_run_execution_job_executes_multiple_pending_risk_events() -> None:
             "paper_execute",
             "update_positions",
             "update_pnl",
-            "check_orphan_orders",
+            "reconcile_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
     finally:
@@ -5710,7 +5712,7 @@ def test_run_execution_job_with_selected_risk_events_only_executes_current_run()
             "paper_execute",
             "update_positions",
             "update_pnl",
-            "check_orphan_orders",
+            "reconcile_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
         order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
@@ -5754,7 +5756,7 @@ def test_run_execution_job_with_selected_symbols_only_executes_matching_pending_
             "paper_execute",
             "update_positions",
             "update_pnl",
-            "check_orphan_orders",
+            "reconcile_orphan_orders",
         ]
         assert [step["symbol"] for step in execution_result["steps"][:2]] == ["BTCUSDT", "ETHUSDT"]
         order_symbols = [order["symbol"] for order in get_orders(connection, limit=10)]
@@ -5769,6 +5771,7 @@ def test_run_execution_job_uses_execution_adapter(monkeypatch) -> None:
 
     class FakeExecutionAdapter:
         name = "fake"
+        is_live = False
 
         def ensure_tables(self, conn) -> None:
             adapter_calls.append(("ensure_tables", conn))
@@ -5801,7 +5804,7 @@ def test_run_execution_job_uses_execution_adapter(monkeypatch) -> None:
             {"step": "paper_execute", "status": "FILLED", "symbol": "BTCUSDT", "risk_event_id": 1, "order_id": 7},
             {"step": "update_positions", "updated_symbols": ["BTCUSDT"]},
             {"step": "update_pnl", "snapshot_count": 1},
-            {"step": "check_orphan_orders", "status": "ok", "unfilled_order_count": 0},
+            {"step": "reconcile_orphan_orders", "status": "ok", "reconciled_count": 0},
         ]
     finally:
         connection.close()
@@ -5855,13 +5858,14 @@ def test_scan_orphan_orders_ignores_terminal_orders() -> None:
         connection.close()
 
 
-def test_execution_job_check_orphan_orders_step_warns_when_orphan_present() -> None:
-    """run_execution_job step check_orphan_orders has status=warning when orphans exist."""
+def test_execution_job_reconcile_step_synthesizes_fill_for_orphan() -> None:
+    """run_execution_job reconciles orphan order by creating a fill and rebuilding PnL."""
     from app.core.migrations import run_migrations
 
     connection = make_connection()
     try:
         run_migrations(connection)
+        seed_candles(connection, [50000.0] * 5)
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
@@ -5871,12 +5875,81 @@ def test_execution_job_check_orphan_orders_step_warns_when_orphan_present() -> N
 
         result = run_execution_job(connection)
 
-        orphan_step = next(s for s in result["steps"] if s["step"] == "check_orphan_orders")
-        assert orphan_step["status"] == "warning"
-        assert orphan_step["unfilled_order_count"] == 1
-        order_id = connection.execute("SELECT id FROM orders").fetchone()[0]
-        assert order_id in orphan_step["order_ids"]
+        reconcile_step = next(s for s in result["steps"] if s["step"] == "reconcile_orphan_orders")
+        assert reconcile_step["status"] == "reconciled"
+        assert reconcile_step["reconciled_count"] == 1
+        assert reconcile_step["results"][0]["action"] == "fill_synthesized"
+        assert reconcile_step["results"][0]["fill_price"] == 50000.0
+
+        # Verify fill was actually inserted
+        fill_count = connection.execute("SELECT COUNT(*) FROM fills;").fetchone()[0]
+        assert fill_count == 1
     finally:
+        connection.close()
+
+
+def test_execution_job_reconcile_step_skips_orphan_when_no_candle_data() -> None:
+    """If no candle data is available, orphan reconcile is skipped gracefully."""
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        # No candles seeded
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            ("test-coid-nocandle", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+        )
+        connection.commit()
+
+        result = run_execution_job(connection)
+
+        reconcile_step = next(s for s in result["steps"] if s["step"] == "reconcile_orphan_orders")
+        assert reconcile_step["reconciled_count"] == 1
+        assert reconcile_step["results"][0]["action"] == "skipped"
+        assert reconcile_step["results"][0]["reason"] == "no_candle_data"
+        # No fill should have been inserted
+        fill_count = connection.execute("SELECT COUNT(*) FROM fills;").fetchone()[0]
+        assert fill_count == 0
+    finally:
+        connection.close()
+
+
+def test_execution_job_reconcile_flags_live_orphan_for_manual_review() -> None:
+    """For live backends, orphan orders are flagged for manual review, not auto-filled."""
+    from app.core.migrations import run_migrations
+    from app.pipeline.execution_job import reconcile_orphan_orders
+
+    connection = make_connection()
+    captured_events: list[dict] = []
+    import app.pipeline.execution_job as ejmod
+    original = ejmod.insert_event
+    ejmod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured_events.append(
+        {"event_type": event_type, "status": status}
+    ) or 1
+    try:
+        run_migrations(connection)
+        seed_candles(connection, [50000.0] * 5)
+        connection.execute(
+            "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            ("test-live-orphan", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "NEW", 1),
+        )
+        connection.commit()
+
+        results = reconcile_orphan_orders(connection, is_live=True)
+
+        assert len(results) == 1
+        assert results[0]["action"] == "flagged_for_manual_review"
+        # No fill should be inserted for live backends
+        fill_count = connection.execute("SELECT COUNT(*) FROM fills;").fetchone()[0]
+        assert fill_count == 0
+        live_events = [e for e in captured_events if e["event_type"] == "orphan_order_live"]
+        assert len(live_events) == 1
+        assert live_events[0]["status"] == "critical"
+    finally:
+        ejmod.insert_event = original
         connection.close()
 
 

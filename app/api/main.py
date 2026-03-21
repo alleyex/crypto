@@ -55,6 +55,8 @@ from app.execution.runtime import set_execution_backend
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
+from app.execution.adapter import get_execution_adapter
+from app.pipeline.execution_job import reconcile_orphan_orders
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
@@ -1204,6 +1206,8 @@ def rebuild_positions() -> dict[str, int]:
 def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[str, Any]:
     connection = get_connection()
     try:
+        adapter = get_execution_adapter()
+        orphan_results = reconcile_orphan_orders(connection, is_live=adapter.is_live)
         ensure_positions_table(connection)
         updated_symbols = update_positions(connection)
         ensure_pnl_table(connection)
@@ -1216,6 +1220,7 @@ def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[s
             message=payload.audit_message if payload is not None and payload.audit_message is not None else "Order reconciliation completed.",
             payload={
                 "action": payload.audit_action if payload is not None and payload.audit_action is not None else "reconcile_orders",
+                "orphan_reconcile_count": len(orphan_results),
                 "updated_symbols": updated_symbols,
                 "snapshot_count": snapshot_count,
                 "latest_order_count": len(latest_orders),
@@ -1223,6 +1228,7 @@ def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[s
         )
         return {
             "status": "reconciled",
+            "orphan_results": orphan_results,
             "updated_symbols": updated_symbols,
             "snapshot_count": snapshot_count,
             "orders": latest_orders,
