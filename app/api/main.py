@@ -107,6 +107,7 @@ from app.metrics.metrics_service import build_metrics
 from app.backtest.history_service import compare_runs as compare_backtest_runs
 from app.backtest.history_service import get_best_sweep_run
 from app.backtest.history_service import get_champion_run
+from app.backtest.history_service import get_equity_curve as get_backtest_equity_curve
 from app.backtest.history_service import get_run as get_backtest_run
 from app.backtest.history_service import get_walk_forward_group
 from app.backtest.history_service import leaderboard_runs as leaderboard_backtest_runs
@@ -1551,7 +1552,11 @@ def backtest(
             max_position_qty=max_position_qty,
             fill_on=fill_on,
         )
-        persist_backtest_run(connection, run_type="single", result=result, days=days, fill_on=fill_on, experiment_name=experiment_name)
+        persist_backtest_run(
+            connection, run_type="single", result=result, days=days,
+            fill_on=fill_on, experiment_name=experiment_name,
+            equity_curve=result.get("equity_curve"),
+        )
         return result
     finally:
         connection.close()
@@ -1646,6 +1651,21 @@ def backtest_get_run(run_id: int) -> Dict[str, Any]:
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
         return run
+    finally:
+        connection.close()
+
+
+@app.get("/backtest/runs/{run_id}/equity-curve")
+def backtest_run_equity_curve(run_id: int) -> Dict[str, Any]:
+    """Return the stored equity curve for a run.
+    Returns an empty list if the run exists but has no stored curve."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        curve = get_backtest_equity_curve(connection, run_id)
+        if curve is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+        return {"run_id": run_id, "equity_curve": curve}
     finally:
         connection.close()
 
@@ -1848,6 +1868,7 @@ def backtest_walk_forward(req: BacktestWalkForwardRequest) -> Dict[str, Any]:
                 experiment_name=req.experiment_name,
                 wf_group_id=wf_group_id,
                 fold_index=split.get("fold"),
+                equity_curve=split.get("test_equity_curve"),
             )
         wf_result["wf_group_id"] = wf_group_id
         return wf_result

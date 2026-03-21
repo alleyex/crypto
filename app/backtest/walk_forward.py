@@ -92,6 +92,7 @@ def run_walk_forward(
             "test_metrics": test_result["metrics"],
             "train_trade_count": train_result["trade_count"],
             "test_trade_count": test_result["trade_count"],
+            "test_equity_curve": test_result.get("equity_curve", []),
         })
 
     oos_metrics = _aggregate_oos(splits)

@@ -389,6 +389,11 @@ def _add_backtest_runs_wf_columns(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN fold_index INTEGER;")
 
 
+def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
+    if table_exists(connection, "backtest_runs") and "equity_curve_json" not in get_table_columns(connection, "backtest_runs"):
+        connection.execute("ALTER TABLE backtest_runs ADD COLUMN equity_curve_json TEXT;")
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -414,6 +419,7 @@ MIGRATIONS: list[Migration] = [
     ("022_add_backtest_runs_tags_notes", _add_backtest_runs_tags_notes),
     ("023_add_backtest_runs_promoted_at", _add_backtest_runs_promoted_at),
     ("024_add_backtest_runs_wf_columns", _add_backtest_runs_wf_columns),
+    ("025_add_backtest_runs_equity_curve", _add_backtest_runs_equity_curve),
 ]
 
 

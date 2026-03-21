@@ -994,6 +994,7 @@ from app.backtest.history_service import (
     compare_runs,
     get_best_sweep_run,
     get_champion_run,
+    get_equity_curve,
     get_run,
     get_walk_forward_group,
     leaderboard_runs,
@@ -1732,4 +1733,96 @@ def test_walk_forward_endpoint_returns_wf_group_id(monkeypatch) -> None:
     group = get_walk_forward_group(conn._conn, data["wf_group_id"])
     assert group is not None
     assert group["fold_count"] >= 1
+    conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Group 5: Equity curve persistence — service + API
+# ---------------------------------------------------------------------------
+
+
+def test_persist_run_stores_equity_curve() -> None:
+    conn = _make_history_conn_with_migrations()
+    candles = _make_candles([100.0 + i for i in range(10)])
+    result = run_backtest("BTCUSDT", "ma_cross", candles)
+    curve = result.get("equity_curve", [])
+    run_id = persist_run(conn, "single", result, equity_curve=curve)
+    stored = get_equity_curve(conn, run_id)
+    assert stored is not None
+    assert len(stored) == len(curve)
+    if curve:
+        assert "equity" in stored[0]
+        assert "timestamp" in stored[0]
+    conn.close()
+
+
+def test_get_equity_curve_returns_empty_list_when_not_stored() -> None:
+    conn = _make_history_conn_with_migrations()
+    run_id = _insert_run(conn)  # no equity_curve passed
+    stored = get_equity_curve(conn, run_id)
+    assert stored == []
+    conn.close()
+
+
+def test_get_equity_curve_returns_none_for_missing_run() -> None:
+    conn = _make_history_conn_with_migrations()
+    assert get_equity_curve(conn, 9999) is None
+    conn.close()
+
+
+def test_equity_curve_endpoint_returns_curve(monkeypatch) -> None:
+    candles = _make_candles([100.0 + i for i in range(30)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    # run a backtest — should persist equity_curve
+    resp = client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
+    assert resp.status_code == 200
+    # get the run id from history
+    history = client.get("/backtest/history").json()
+    run_id = history["runs"][0]["id"]
+    # fetch equity curve
+    resp = client.get(f"/backtest/runs/{run_id}/equity-curve")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == run_id
+    assert isinstance(data["equity_curve"], list)
+    conn.really_close()
+
+
+def test_equity_curve_endpoint_not_found(monkeypatch) -> None:
+    conn = _make_seeded_conn([], "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    client = TestClient(app)
+    resp = client.get("/backtest/runs/9999/equity-curve")
+    assert resp.status_code == 404
+    conn.really_close()
+
+
+def test_walk_forward_folds_store_equity_curve(monkeypatch) -> None:
+    """Each WF fold should persist its test equity curve."""
+    candles = _make_candles([100.0 + i for i in range(60)])
+    conn = _make_seeded_conn(candles, "BTCUSDT")
+    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    client = TestClient(app)
+    resp = client.post(
+        "/backtest/walk-forward",
+        json={"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 30, "n_splits": 2},
+    )
+    assert resp.status_code == 200
+    wf_group_id = resp.json()["wf_group_id"]
+    # Check that folds in DB have equity_curve_json stored
+    rows = conn._conn.execute(
+        "SELECT id, equity_curve_json FROM backtest_runs WHERE wf_group_id = ?",
+        (wf_group_id,),
+    ).fetchall()
+    assert len(rows) >= 1
+    # equity_curve_json should be a non-null JSON array (may be empty if no trades)
+    for _, ecj in rows:
+        assert ecj is not None
+        import json as _json
+        curve = _json.loads(ecj)
+        assert isinstance(curve, list)
     conn.really_close()

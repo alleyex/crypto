@@ -16,8 +16,8 @@ INSERT INTO backtest_runs (
     trade_count, fill_on, initial_capital, final_equity,
     total_return_pct, max_drawdown_pct, sharpe_ratio, win_rate_pct,
     profit_factor, round_trips, params_json, experiment_name,
-    wf_group_id, fold_index
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    wf_group_id, fold_index, equity_curve_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -45,6 +45,7 @@ def persist_run(
     experiment_name: Optional[str] = None,
     wf_group_id: Optional[str] = None,
     fold_index: Optional[int] = None,
+    equity_curve: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """Persist a single backtest result row and return its id."""
     metrics = result.get("metrics") or {}
@@ -72,6 +73,7 @@ def persist_run(
             experiment_name,
             wf_group_id,
             fold_index,
+            json.dumps(equity_curve) if equity_curve is not None else None,
         ),
     )
     connection.commit()
@@ -139,6 +141,21 @@ def get_run(connection: DBConnection, run_id: int) -> Optional[Dict[str, Any]]:
         connection, "SELECT * FROM backtest_runs WHERE id = ?;", (run_id,)
     )
     return rows[0] if rows else None
+
+
+def get_equity_curve(
+    connection: DBConnection, run_id: int
+) -> Optional[List[Dict[str, Any]]]:
+    """Return the equity curve for a run, or None if not stored / run not found."""
+    row = connection.execute(
+        "SELECT equity_curve_json FROM backtest_runs WHERE id = ?;", (run_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    if raw is None:
+        return []
+    return json.loads(raw)
 
 
 def update_run(
