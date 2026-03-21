@@ -3003,6 +3003,124 @@ def test_maybe_send_broker_alert_clears_state_when_protection_recovers(monkeypat
     assert not state_file.exists()
 
 
+def test_alert_state_write_stamps_written_at(tmp_path) -> None:
+    """write_alert_state() always writes a written_at ISO timestamp."""
+    from app.alerting.state import write_alert_state, read_alert_state
+    import json
+
+    state_file = tmp_path / "test_state.json"
+    write_alert_state(state_file, {"fingerprint": "abc"})
+
+    raw = json.loads(state_file.read_text())
+    assert "written_at" in raw
+    assert "fingerprint" in raw
+
+
+def test_alert_state_read_returns_none_when_expired(tmp_path) -> None:
+    """read_alert_state() returns None when the state is older than ttl_seconds."""
+    from app.alerting.state import write_alert_state, read_alert_state
+    from datetime import datetime, timezone, timedelta
+    import json
+
+    state_file = tmp_path / "test_state.json"
+    # Write a state with written_at 2 hours ago
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    state_file.write_text(
+        json.dumps({"fingerprint": "abc", "written_at": old_time}),
+        encoding="utf-8",
+    )
+
+    # TTL of 1 hour → state is expired
+    result = read_alert_state(state_file, ttl_seconds=3600)
+    assert result is None
+
+
+def test_alert_state_read_returns_state_when_not_expired(tmp_path) -> None:
+    """read_alert_state() returns the state when it is within ttl_seconds."""
+    from app.alerting.state import write_alert_state, read_alert_state
+
+    state_file = tmp_path / "test_state.json"
+    write_alert_state(state_file, {"fingerprint": "abc"})
+
+    # TTL of 24 hours — just-written state should not be expired
+    result = read_alert_state(state_file, ttl_seconds=86400)
+    assert result is not None
+    assert result["fingerprint"] == "abc"
+
+
+def test_alert_state_read_never_expires_when_ttl_zero(tmp_path) -> None:
+    """read_alert_state() with ttl_seconds=0 never expires the state."""
+    from app.alerting.state import read_alert_state
+    from datetime import datetime, timezone, timedelta
+    import json
+
+    state_file = tmp_path / "test_state.json"
+    # Write a state with written_at 30 days ago
+    old_time = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    state_file.write_text(
+        json.dumps({"fingerprint": "abc", "written_at": old_time}),
+        encoding="utf-8",
+    )
+
+    result = read_alert_state(state_file, ttl_seconds=0)
+    assert result is not None
+    assert result["fingerprint"] == "abc"
+
+
+def test_broker_alert_refires_after_ttl_expires(monkeypatch, tmp_path) -> None:
+    """Same alert condition re-fires when the saved state TTL has elapsed."""
+    from datetime import datetime, timezone, timedelta
+    from app.alerting.state import write_alert_state
+    import app.alerting.broker as broker_mod
+
+    state_file = tmp_path / "broker_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.broker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+    # Override TTL to 1 second so we can test expiry without sleeping
+    monkeypatch.setattr("app.alerting.broker.ALERT_REFIRE_SECONDS", 1)
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    report = {
+        "checks": {
+            "broker_protection": {
+                "status": "degraded",
+                "backend": "noop",
+                "reason": "Execution backend cannot execute approved orders.",
+                "reason_code": "backend_cannot_execute",
+                "severity": "critical",
+                "recommended_action": "switch_to_paper_backend",
+                "approved_risk_count": 1,
+            }
+        }
+    }
+
+    # First call — alert fires, state written
+    first = maybe_send_broker_alert(report)
+    assert first["sent"] is True
+
+    # Second call immediately — deduplicated (state not yet expired)
+    second = maybe_send_broker_alert(report)
+    assert second["sent"] is False
+
+    # Simulate expired state by back-dating written_at
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+    import json
+    current = json.loads(state_file.read_text())
+    current["written_at"] = old_time
+    state_file.write_text(json.dumps(current), encoding="utf-8")
+
+    # Third call — TTL elapsed, alert re-fires
+    third = maybe_send_broker_alert(report)
+    assert third["sent"] is True
+    assert len(sent_messages) == 2
+
+
 def test_pipeline_check_includes_latest_fill_and_unfilled_order_count() -> None:
     connection = make_connection()
     try:

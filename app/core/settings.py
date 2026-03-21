@@ -55,3 +55,6 @@ DEFAULT_PIPELINE_ORCHESTRATION = _get_choice(
     ("direct", "queue_dispatch", "queue_drain", "queue_batch"),
 )
 JOB_LEASE_TIMEOUT_SECONDS = _get_int("CRYPTO_JOB_LEASE_TIMEOUT_SECONDS", 300)
+# How long an alert state is valid before the same condition re-fires an alert.
+# Default: 86400 seconds (24 hours). Set to 0 to disable TTL (never re-fire).
+ALERT_REFIRE_SECONDS = _get_int("CRYPTO_ALERT_REFIRE_SECONDS", 86400)

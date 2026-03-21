@@ -8,6 +8,7 @@ from app.alerting.state import clear_alert_state
 from app.alerting.state import read_alert_state
 from app.alerting.state import write_alert_state
 from app.alerting.telegram import send_telegram_message
+from app.core.settings import ALERT_REFIRE_SECONDS
 
 
 RUNTIME_DIR = Path("runtime")
@@ -57,7 +58,7 @@ def _build_fingerprint(report: dict[str, Any]) -> str:
 
 
 def _read_state() -> Optional[dict[str, Any]]:
-    return read_alert_state(HEALTH_ALERT_STATE_FILE)
+    return read_alert_state(HEALTH_ALERT_STATE_FILE, ttl_seconds=ALERT_REFIRE_SECONDS)
 
 
 def _write_state(state: dict[str, Any]) -> None:
