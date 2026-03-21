@@ -133,10 +133,10 @@
   交付物：risk service。
   備註：`run_risk_job()` 獨立成 `app/pipeline/risk_job.py`；pipeline 固定為 `market_data → strategy → risk → execution` 四步；`_propagate_dependent_job_payload` 自動將 `signal_ids`/`risk_event_ids` 傳遞到下游 queue job；LEFT JOIN 偵測未評估訊號，無需 schema 變更；strategy_job 不再含風控邏輯。（2026-03-21）
 
-- [ ] 建立投組服務
+- [x] 建立投組服務
   目標：管理跨策略資金分配。
   交付物：portfolio service。
-  備註：多帳戶前應先完成。
+  備註：`app/portfolio/portfolio_service.py` 完整實作；`PortfolioConfig`（`total_capital`、`max_strategy_allocation_pct`、`max_total_exposure_pct`）、`get/set_portfolio_config()`、`get_portfolio_summary()`（per-symbol notional + per-strategy exposure）、`check_portfolio_limits()`（total exposure + per-strategy allocation，含 pending approved BUY 防止 concurrent over-allocation）；`GET /portfolio`、`GET /portfolio/config`、`POST /portfolio/config` 均已完成；`check_portfolio_limits()` 已整合至 `risk_service._evaluate_signal()` BUY 路徑；`total_capital=0` 時不強制執行（純資訊模式）。（2026-03-21）
 
 - [x] 建立監控能力
   目標：提高可觀測性。
@@ -237,4 +237,4 @@
 - [~] M3：風控、pause、kill switch 可用，系統可連跑數天。
   備註：pause、基本風控、正式 daily ledger、自動與手動 kill switch、告警、admin UI 已完成；multi-strategy double-execution 修復；剩餘缺口為一週連跑 soak validation 驗收。
 - [~] M4：API 與監控可用，系統可進入小額實盤準備階段。
-  備註：Stage 2 全部項目已完成（API、worker 分離、queue、multi-symbol、multi-strategy、alerting）；Binance testnet 端到端驗證通過；風控服務獨立化完成（4-step pipeline）；回測持久化與 strategy param 自動同步完成；待完成投組服務、audit log 擴充。
+  備註：Stage 2 全部項目已完成；Binance testnet 端到端驗證通過；風控服務獨立化完成（4-step pipeline）；回測持久化與 strategy param 自動同步完成；投組服務完成（`check_portfolio_limits` 整合至 risk 路徑）；Stage 3 剩餘缺口：audit log 擴充、event bus（可延後）。
