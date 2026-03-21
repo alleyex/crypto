@@ -82,6 +82,7 @@ from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import print_pipeline_result
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
+from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
@@ -1913,6 +1914,7 @@ def test_evaluate_latest_signal_rejects_when_daily_loss_limit_is_breached() -> N
         insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{today} 10:00:00")
         insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{today} 10:05:00")
         connection.commit()
+        rebuild_daily_realized_pnl(connection)
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
         risk_result = evaluate_latest_signal(
@@ -1970,6 +1972,7 @@ def test_evaluate_latest_signal_auto_enables_kill_switch_when_daily_loss_limit_i
         insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{today} 11:00:00")
         insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{today} 11:05:00")
         connection.commit()
+        rebuild_daily_realized_pnl(connection)
 
         insert_signal(connection, "BUY", strategy_name="manual_test")
         risk_result = evaluate_latest_signal(
@@ -2015,6 +2018,7 @@ def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
         insert_fill(connection, 1, "BTCUSDT", "BUY", 1.0, 100.0, f"{previous_day} 10:00:00")
         insert_fill(connection, 2, "BTCUSDT", "SELL", 1.0, 25.0, f"{previous_day} 10:05:00")
         connection.commit()
+        rebuild_daily_realized_pnl(connection)
 
         assert get_daily_realized_pnl(connection, "BTCUSDT", pnl_date=previous_day) == -75.0
 
@@ -7939,6 +7943,7 @@ def test_daily_loss_breach_emits_audit_event(monkeypatch) -> None:
             "INSERT INTO fills (order_id, symbol, side, qty, price, created_at) VALUES (0,'BTCUSDT','SELL',0.001,30000.0,CURRENT_TIMESTAMP);"
         )
         connection.commit()
+        rebuild_daily_realized_pnl(connection)
 
         signal_id = insert_and_get_rowid(
             connection,

@@ -100,8 +100,13 @@ def get_daily_realized_pnl(
     symbol: str,
     pnl_date: Optional[str] = None,
 ) -> float:
+    """Read daily realized PnL from the pre-built ledger table.
+
+    The table is kept current by rebuild_daily_realized_pnl(), which brokers
+    call after every fill.  This function is a fast point-read only — it does
+    not trigger a rebuild.
+    """
     ensure_table(connection)
-    rebuild_daily_realized_pnl(connection)
     target_date = pnl_date or datetime.now(timezone.utc).date().isoformat()
     row = connection.execute(
         """

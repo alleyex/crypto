@@ -154,6 +154,27 @@ def _add_orders_broker_metadata(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE orders ADD COLUMN broker_order_id TEXT;")
 
 
+def _add_performance_indexes(connection: DBConnection) -> None:
+    # fills(symbol) — daily PnL lookup and position reconstruction
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fills_symbol ON fills(symbol);"
+    )
+    # fills(order_id) — unfilled order count LEFT JOIN
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);"
+    )
+    # signals(symbol, timeframe, strategy_name, id) — previous signal lookup
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signals_lookup"
+        " ON signals(symbol, timeframe, strategy_name, id);"
+    )
+    # risk_events(decision, id) — rejection streak scan
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_risk_events_decision_id"
+        " ON risk_events(decision, id);"
+    )
+
+
 def _create_positions_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -324,6 +345,7 @@ MIGRATIONS: list[Migration] = [
     ("016_create_risk_configs_table", _create_risk_configs_table),
     ("017_create_portfolio_config_table", _create_portfolio_config_table),
     ("018_add_orders_broker_metadata", _add_orders_broker_metadata),
+    ("019_add_performance_indexes", _add_performance_indexes),
 ]
 
 
