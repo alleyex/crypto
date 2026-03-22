@@ -40,6 +40,10 @@ SELECT
     close,
     volume,
     close_time,
+    quote_asset_volume,
+    number_of_trades,
+    taker_buy_base_volume,
+    taker_buy_quote_volume,
     created_at
 FROM candles
 ORDER BY open_time DESC
@@ -177,7 +181,12 @@ LIMIT ?;
 """
 
 
-def get_candles(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
+def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None) -> list[dict[str, Any]]:
+    if symbol:
+        query = SELECT_CANDLES_SQL.replace(
+            "FROM candles", "FROM candles WHERE symbol = ?"
+        )
+        return fetch_all_as_dicts(connection, query, (symbol, limit))
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
 

@@ -33,6 +33,7 @@ def _epoch_millis_column_sql(backend: str) -> str:
 
 def _create_candles_table(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
+    numeric = "NUMERIC(20,8)"
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS candles (
@@ -40,16 +41,16 @@ def _create_candles_table(connection: DBConnection) -> None:
             symbol TEXT NOT NULL,
             timeframe TEXT NOT NULL,
             open_time {_epoch_millis_column_sql(backend)} NOT NULL,
-            open TEXT NOT NULL,
-            high TEXT NOT NULL,
-            low TEXT NOT NULL,
-            close TEXT NOT NULL,
-            volume TEXT NOT NULL,
+            open {numeric} NOT NULL,
+            high {numeric} NOT NULL,
+            low {numeric} NOT NULL,
+            close {numeric} NOT NULL,
+            volume {numeric} NOT NULL,
             close_time {_epoch_millis_column_sql(backend)} NOT NULL,
-            quote_asset_volume TEXT,
+            quote_asset_volume {numeric},
             number_of_trades INTEGER,
-            taker_buy_base_volume TEXT,
-            taker_buy_quote_volume TEXT,
+            taker_buy_base_volume {numeric},
+            taker_buy_quote_volume {numeric},
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(symbol, timeframe, open_time)
         );
@@ -113,8 +114,8 @@ def _create_orders_and_fills_tables(connection: DBConnection) -> None:
             timeframe TEXT NOT NULL,
             strategy_name TEXT NOT NULL,
             side TEXT NOT NULL,
-            qty REAL NOT NULL,
-            price REAL NOT NULL,
+            qty NUMERIC(20,8) NOT NULL,
+            price NUMERIC(20,8) NOT NULL,
             status TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -127,8 +128,8 @@ def _create_orders_and_fills_tables(connection: DBConnection) -> None:
             order_id INTEGER NOT NULL,
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
-            qty REAL NOT NULL,
-            price REAL NOT NULL,
+            qty NUMERIC(20,8) NOT NULL,
+            price NUMERIC(20,8) NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(order_id) REFERENCES orders(id)
         );
@@ -180,9 +181,9 @@ def _create_positions_table(connection: DBConnection) -> None:
         """
         CREATE TABLE IF NOT EXISTS positions (
             symbol TEXT PRIMARY KEY,
-            qty REAL NOT NULL,
-            avg_price REAL NOT NULL,
-            realized_pnl REAL NOT NULL DEFAULT 0,
+            qty NUMERIC(20,8) NOT NULL,
+            avg_price NUMERIC(20,8) NOT NULL,
+            realized_pnl NUMERIC(20,8) NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
@@ -289,10 +290,10 @@ def _create_risk_configs_table(connection: DBConnection) -> None:
         """
         CREATE TABLE IF NOT EXISTS risk_configs (
             strategy_name TEXT PRIMARY KEY,
-            order_qty REAL NOT NULL,
-            max_position_qty REAL NOT NULL,
+            order_qty NUMERIC(20,8) NOT NULL,
+            max_position_qty NUMERIC(20,8) NOT NULL,
             cooldown_seconds INTEGER NOT NULL,
-            max_daily_loss REAL NOT NULL,
+            max_daily_loss NUMERIC(20,8) NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
@@ -304,9 +305,9 @@ def _create_portfolio_config_table(connection: DBConnection) -> None:
         """
         CREATE TABLE IF NOT EXISTS portfolio_config (
             id INTEGER PRIMARY KEY,
-            total_capital REAL NOT NULL DEFAULT 0,
-            max_strategy_allocation_pct REAL NOT NULL DEFAULT 0.5,
-            max_total_exposure_pct REAL NOT NULL DEFAULT 0.8,
+            total_capital NUMERIC(20,8) NOT NULL DEFAULT 0,
+            max_strategy_allocation_pct NUMERIC(20,8) NOT NULL DEFAULT 0.5,
+            max_total_exposure_pct NUMERIC(20,8) NOT NULL DEFAULT 0.8,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
@@ -327,13 +328,13 @@ def _create_backtest_runs_table(connection: DBConnection) -> None:
             candle_count INTEGER NOT NULL,
             trade_count INTEGER NOT NULL,
             fill_on TEXT NOT NULL DEFAULT 'close',
-            initial_capital REAL,
-            final_equity REAL,
-            total_return_pct REAL,
-            max_drawdown_pct REAL,
-            sharpe_ratio REAL,
-            win_rate_pct REAL,
-            profit_factor REAL,
+            initial_capital NUMERIC(20,8),
+            final_equity NUMERIC(20,8),
+            total_return_pct NUMERIC(20,8),
+            max_drawdown_pct NUMERIC(20,8),
+            sharpe_ratio NUMERIC(20,8),
+            win_rate_pct NUMERIC(20,8),
+            profit_factor NUMERIC(20,8),
             round_trips INTEGER,
             params_json TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -471,6 +472,222 @@ def _create_model_registry_table(connection: DBConnection) -> None:
     )
 
 
+_CANDLES_NUMERIC_COLS = [
+    "open", "high", "low", "close", "volume",
+    "quote_asset_volume", "taker_buy_base_volume", "taker_buy_quote_volume",
+]
+
+
+def _migrate_candles_columns_to_numeric(connection: DBConnection) -> None:
+    if not table_exists(connection, "candles"):
+        return
+    backend = get_backend_name(connection)
+    if backend == "postgres":
+        for col in _CANDLES_NUMERIC_COLS:
+            connection.execute(
+                f"ALTER TABLE candles ALTER COLUMN {col} TYPE NUMERIC(20,8)"
+                f" USING {col}::NUMERIC;"
+            )
+    else:
+        # SQLite does not support ALTER COLUMN — rebuild the table
+        connection.execute("ALTER TABLE candles RENAME TO candles_old;")
+        connection.execute(
+            f"""
+            CREATE TABLE candles (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                open_time INTEGER NOT NULL,
+                open NUMERIC(20,8) NOT NULL,
+                high NUMERIC(20,8) NOT NULL,
+                low NUMERIC(20,8) NOT NULL,
+                close NUMERIC(20,8) NOT NULL,
+                volume NUMERIC(20,8) NOT NULL,
+                close_time INTEGER NOT NULL,
+                quote_asset_volume NUMERIC(20,8),
+                number_of_trades INTEGER,
+                taker_buy_base_volume NUMERIC(20,8),
+                taker_buy_quote_volume NUMERIC(20,8),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, timeframe, open_time)
+            );
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO candles
+              (id, symbol, timeframe, open_time, open, high, low, close, volume,
+               close_time, quote_asset_volume, number_of_trades,
+               taker_buy_base_volume, taker_buy_quote_volume, created_at)
+            SELECT
+              id, symbol, timeframe, open_time,
+              CAST(open AS REAL), CAST(high AS REAL),
+              CAST(low AS REAL), CAST(close AS REAL), CAST(volume AS REAL),
+              close_time,
+              CAST(quote_asset_volume AS REAL),
+              number_of_trades,
+              CAST(taker_buy_base_volume AS REAL),
+              CAST(taker_buy_quote_volume AS REAL),
+              created_at
+            FROM candles_old;
+            """
+        )
+        connection.execute("DROP TABLE candles_old;")
+
+
+def _migrate_financial_columns_to_numeric(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        # SQLite uses type affinity; NUMERIC affinity already works for numbers
+        # stored as REAL. No rebuild needed.
+        return
+
+    _FINANCIAL_COLS: dict[str, list[str]] = {
+        "positions": ["qty", "avg_price", "realized_pnl"],
+        "orders": ["qty", "price"],
+        "fills": ["qty", "price"],
+        "pnl_snapshots": ["qty", "avg_price", "market_price", "unrealized_pnl"],
+        "daily_realized_pnl": ["realized_pnl"],
+        "signals": ["short_ma", "long_ma"],
+    }
+    for table, cols in _FINANCIAL_COLS.items():
+        if not table_exists(connection, table):
+            continue
+        existing = get_table_columns(connection, table)
+        for col in cols:
+            if col not in existing:
+                continue
+            connection.execute(
+                f"ALTER TABLE {table} ALTER COLUMN {col}"
+                f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
+            )
+
+
+def _add_candles_symbol_timeframe_index(connection: DBConnection) -> None:
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candles_symbol_timeframe"
+        " ON candles(symbol, timeframe);"
+    )
+
+
+def _migrate_timestamps_to_timestamptz(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+
+    _TABLES_WITH_CREATED_AT = [
+        "candles",
+        "signals",
+        "orders",
+        "fills",
+        "pnl_snapshots",
+        "audit_events",
+        "feature_vectors",
+        "training_jobs",
+        "model_registry",
+        "job_queue",
+    ]
+    for table in _TABLES_WITH_CREATED_AT:
+        if not table_exists(connection, table):
+            continue
+        if "created_at" not in get_table_columns(connection, table):
+            continue
+        connection.execute(
+            f"ALTER TABLE {table} ALTER COLUMN created_at"
+            f" TYPE TIMESTAMPTZ USING created_at::TIMESTAMPTZ;"
+        )
+
+
+def _migrate_feature_vectors_open_time_to_bigint(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, "feature_vectors"):
+        return
+    if "open_time" not in get_table_columns(connection, "feature_vectors"):
+        return
+    connection.execute(
+        "ALTER TABLE feature_vectors ALTER COLUMN open_time"
+        " TYPE BIGINT USING open_time::BIGINT;"
+    )
+
+
+def _migrate_remaining_real_columns_to_numeric(connection: DBConnection) -> None:
+    """Migrate REAL → NUMERIC(20,8) for risk_configs, portfolio_config, backtest_runs."""
+    if get_backend_name(connection) != "postgres":
+        return
+    _COLS: dict[str, list[str]] = {
+        "risk_configs": ["order_qty", "max_position_qty", "max_daily_loss"],
+        "portfolio_config": ["total_capital", "max_strategy_allocation_pct", "max_total_exposure_pct"],
+        "backtest_runs": [
+            "initial_capital", "final_equity", "total_return_pct",
+            "max_drawdown_pct", "sharpe_ratio", "win_rate_pct", "profit_factor",
+        ],
+    }
+    for table, cols in _COLS.items():
+        if not table_exists(connection, table):
+            continue
+        existing = get_table_columns(connection, table)
+        for col in cols:
+            if col not in existing:
+                continue
+            connection.execute(
+                f"ALTER TABLE {table} ALTER COLUMN {col}"
+                f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
+            )
+
+
+def _add_retention_and_heartbeat_indexes(connection: DBConnection) -> None:
+    """Add indexes to support efficient data retention queries."""
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runtime_heartbeats_component"
+        " ON runtime_heartbeats(component, last_seen_at);"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_source_created"
+        " ON audit_events(source, created_at);"
+    )
+
+
+def _migrate_remaining_timestamps_to_timestamptz(connection: DBConnection) -> None:
+    """Migrate updated_at / last_seen_at columns missed by migration 033."""
+    if get_backend_name(connection) != "postgres":
+        return
+    targets = {
+        "positions": "updated_at",
+        "runtime_heartbeats": "last_seen_at",
+        "daily_realized_pnl": "updated_at",
+        "risk_configs": "updated_at",
+        "portfolio_config": "updated_at",
+    }
+    for table, col in targets.items():
+        if not table_exists(connection, table):
+            continue
+        if col not in get_table_columns(connection, table):
+            continue
+        connection.execute(
+            f"ALTER TABLE {table} ALTER COLUMN {col}"
+            f" TYPE TIMESTAMPTZ USING {col}::TIMESTAMPTZ;"
+        )
+
+
+def _add_missing_performance_indexes(connection: DBConnection) -> None:
+    """Add indexes for common time-based and lookup queries."""
+    indexes = [
+        ("idx_candles_symbol_tf_open_time",
+         "candles(symbol, timeframe, open_time)"),
+        ("idx_orders_created_at",
+         "orders(created_at)"),
+        ("idx_fills_created_at",
+         "fills(created_at)"),
+        ("idx_audit_events_created_at",
+         "audit_events(created_at)"),
+        ("idx_audit_events_event_type",
+         "audit_events(event_type, created_at)"),
+    ]
+    for name, definition in indexes:
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {name} ON {definition};"
+        )
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -501,6 +718,15 @@ MIGRATIONS: list[Migration] = [
     ("027_create_training_jobs_table", _create_training_jobs_table),
     ("028_create_model_registry_table", _create_model_registry_table),
     ("029_add_training_jobs_job_type", _add_training_jobs_job_type),
+    ("030_migrate_candles_columns_to_numeric", _migrate_candles_columns_to_numeric),
+    ("031_migrate_financial_columns_to_numeric", _migrate_financial_columns_to_numeric),
+    ("032_add_candles_symbol_timeframe_index", _add_candles_symbol_timeframe_index),
+    ("033_migrate_timestamps_to_timestamptz", _migrate_timestamps_to_timestamptz),
+    ("034_migrate_feature_vectors_open_time_to_bigint", _migrate_feature_vectors_open_time_to_bigint),
+    ("035_migrate_remaining_timestamps_to_timestamptz", _migrate_remaining_timestamps_to_timestamptz),
+    ("036_add_missing_performance_indexes", _add_missing_performance_indexes),
+    ("037_migrate_remaining_real_columns_to_numeric", _migrate_remaining_real_columns_to_numeric),
+    ("038_add_retention_and_heartbeat_indexes", _add_retention_and_heartbeat_indexes),
 ]
 
 

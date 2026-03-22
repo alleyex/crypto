@@ -168,7 +168,9 @@ def get_connection() -> DBConnection:
         raise RuntimeError(f"Unsupported database backend: {DB_BACKEND}")
 
     ensure_storage_dir()
-    return sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
 
 
 def list_tables(connection: DBConnection, backend: Optional[str] = None) -> list[str]:

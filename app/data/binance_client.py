@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Optional
 
 import requests
 
@@ -50,14 +51,19 @@ def _build_fake_klines(
     return klines
 
 
-def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1m", limit: int = 5) -> list[list]:
+def fetch_klines(
+    symbol: str = "BTCUSDT",
+    interval: str = "1m",
+    limit: int = 5,
+    start_ms: Optional[int] = None,
+) -> list[list]:
     if os.getenv("CRYPTO_USE_FAKE_KLINES", "").strip().lower() in ("1", "true", "yes", "on"):
         return _build_fake_klines(symbol=symbol, interval=interval, limit=limit)
 
-    response = requests.get(
-        BASE_URL,
-        params={"symbol": symbol, "interval": interval, "limit": limit},
-        timeout=10,
-    )
+    params: dict = {"symbol": symbol, "interval": interval, "limit": limit}
+    if start_ms is not None:
+        params["startTime"] = start_ms
+
+    response = requests.get(BASE_URL, params=params, timeout=10)
     response.raise_for_status()
     return response.json()
