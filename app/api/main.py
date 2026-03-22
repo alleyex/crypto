@@ -310,6 +310,76 @@ def _broker_protection_check(
     latest_risk = pipeline_check.get("latest_risk") if isinstance(pipeline_check, dict) else None
     if isinstance(latest_risk, dict):
         result["latest_risk"] = latest_risk
+    observed_symbol = None
+    observed_strategy = None
+    for candidate in (latest_risk, latest_fill, latest_order, latest_run):
+        if not isinstance(candidate, dict):
+            continue
+        observed_symbol = observed_symbol or candidate.get("symbol")
+        observed_strategy = observed_strategy or candidate.get("strategy_name")
+    if observed_symbol and table_exists(connection, "positions"):
+        position_row = connection.execute(
+            """
+            SELECT qty, avg_price, realized_pnl, updated_at
+            FROM positions
+            WHERE symbol = ?
+            LIMIT 1;
+            """,
+            (observed_symbol,),
+        ).fetchone()
+        if position_row is not None:
+            result["current_position"] = {
+                "symbol": observed_symbol,
+                "qty": position_row[0],
+                "avg_price": position_row[1],
+                "realized_pnl": position_row[2],
+                "updated_at": position_row[3],
+                "age_seconds": int((_utc_now() - parse_db_timestamp(position_row[3])).total_seconds()),
+            }
+        else:
+            result["current_position"] = {
+                "symbol": observed_symbol,
+                "qty": 0.0,
+                "avg_price": 0.0,
+                "realized_pnl": 0.0,
+                "updated_at": None,
+                "age_seconds": None,
+            }
+    if observed_symbol and table_exists(connection, "risk_events"):
+        if observed_strategy:
+            recent_rejection_rows = connection.execute(
+                """
+                SELECT signal_type, reason, created_at
+                FROM risk_events
+                WHERE symbol = ?
+                  AND strategy_name = ?
+                  AND decision = 'REJECTED'
+                ORDER BY id DESC
+                LIMIT 5;
+                """,
+                (observed_symbol, observed_strategy),
+            ).fetchall()
+        else:
+            recent_rejection_rows = connection.execute(
+                """
+                SELECT signal_type, reason, created_at
+                FROM risk_events
+                WHERE symbol = ?
+                  AND decision = 'REJECTED'
+                ORDER BY id DESC
+                LIMIT 5;
+                """,
+                (observed_symbol,),
+            ).fetchall()
+        result["recent_rejection_reasons"] = [
+            {
+                "signal_type": row[0],
+                "reason": row[1],
+                "created_at": row[2],
+                "age_seconds": int((_utc_now() - parse_db_timestamp(row[2])).total_seconds()),
+            }
+            for row in recent_rejection_rows
+        ]
 
     if not result["can_execute_orders"] and approved_risk_count > 0:
         result["status"] = "degraded"
@@ -405,7 +475,7 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     ).fetchone()
     latest_risk = connection.execute(
         """
-        SELECT decision, reason, created_at
+        SELECT symbol, strategy_name, signal_type, decision, reason, created_at
         FROM risk_events
         ORDER BY id DESC
         LIMIT 1;
@@ -478,10 +548,13 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
         }
     if latest_risk is not None:
         result["latest_risk"] = {
-            "decision": latest_risk[0],
-            "reason": latest_risk[1],
-            "created_at": latest_risk[2],
-            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_risk[2])).total_seconds()),
+            "symbol": latest_risk[0],
+            "strategy_name": latest_risk[1],
+            "signal_type": latest_risk[2],
+            "decision": latest_risk[3],
+            "reason": latest_risk[4],
+            "created_at": latest_risk[5],
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_risk[5])).total_seconds()),
         }
     if latest_order is not None:
         result["latest_order"] = {

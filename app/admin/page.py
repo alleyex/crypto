@@ -151,6 +151,21 @@ def render_admin_page() -> str:
         background: rgba(255, 184, 77, 0.08);
         border-color: rgba(255, 184, 77, 0.28);
       }
+      .broker-context-list {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .broker-context-line {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .broker-context-line strong {
+        color: var(--text);
+        font-weight: 600;
+      }
 
       .side-stat {
         padding: 14px 16px;
@@ -1470,6 +1485,13 @@ def render_admin_page() -> str:
               <div class="value" id="execution-backend-status">Loading</div>
               <div class="inline-note" id="execution-backend-detail">Checking execution backend...</div>
             </div>
+            <div class="hero-stat-card wide">
+              <label>Broker Context</label>
+              <div class="value" id="broker-context-status">Loading</div>
+              <div class="broker-context-list" id="broker-context-detail">
+                <div class="broker-context-line">Inspecting latest fill, current position, and recent rejected reasons...</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -2539,6 +2561,43 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           }
         }
         el("execution-backend-detail").innerHTML = renderInlineDetails(executionDetail);
+        const brokerContextStatus = brokerProtection.status === "degraded"
+          ? "ANOMALOUS"
+          : (brokerProtection.expected_rejected_risk_streak !== undefined ? "EXPECTED" : "CLEAR");
+        el("broker-context-status").textContent = brokerContextStatus;
+        el("broker-context-status").className = `value ${brokerProtection.status === "degraded" ? statusClass("degraded") : (brokerProtection.expected_rejected_risk_streak !== undefined ? "" : statusClass("ok"))}`;
+        const brokerContextLines = [];
+        const latestFill = brokerProtection.latest_fill || null;
+        if (latestFill) {
+          brokerContextLines.push(
+            `<div class="broker-context-line"><strong>Latest fill</strong> ${latestFill.symbol || "n/a"} ${latestFill.side || "n/a"} qty=${latestFill.qty ?? "n/a"} price=${latestFill.price ?? "n/a"} age=${latestFill.age_seconds ?? "n/a"}s</div>`
+          );
+        } else {
+          brokerContextLines.push('<div class="broker-context-line"><strong>Latest fill</strong> none</div>');
+        }
+        const currentPosition = brokerProtection.current_position || null;
+        if (currentPosition) {
+          const updatedSuffix = currentPosition.updated_at ? ` updated=${currentPosition.updated_at}` : "";
+          brokerContextLines.push(
+            `<div class="broker-context-line"><strong>Current position</strong> ${currentPosition.symbol || "n/a"} qty=${currentPosition.qty ?? "n/a"} avg=${currentPosition.avg_price ?? "n/a"} realized_pnl=${currentPosition.realized_pnl ?? "n/a"}${updatedSuffix}</div>`
+          );
+        } else {
+          brokerContextLines.push('<div class="broker-context-line"><strong>Current position</strong> unavailable</div>');
+        }
+        const recentRejects = Array.isArray(brokerProtection.recent_rejection_reasons)
+          ? brokerProtection.recent_rejection_reasons
+          : [];
+        if (recentRejects.length) {
+          const rejectSummary = recentRejects
+            .map((item) => `${item.signal_type || "n/a"}: ${item.reason || "n/a"}`)
+            .join(" | ");
+          brokerContextLines.push(
+            `<div class="broker-context-line"><strong>Recent rejects</strong> ${rejectSummary}</div>`
+          );
+        } else {
+          brokerContextLines.push('<div class="broker-context-line"><strong>Recent rejects</strong> none</div>');
+        }
+        el("broker-context-detail").innerHTML = brokerContextLines.join("");
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 

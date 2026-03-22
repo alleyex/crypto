@@ -419,6 +419,122 @@ def test_momentum_3bar_generates_buy_signal() -> None:
         connection.close()
 
 
+def test_momentum_3bar_generates_hold_when_long_position_already_open() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_positions_table(connection)
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
+            VALUES ('BTCUSDT', 0.001, 100.0, 0.0, CURRENT_TIMESTAMP);
+            """
+        )
+        connection.commit()
+        base_open_time = 1_710_000_000_000
+        klines = []
+        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
+            open_time = base_open_time + (index * 60_000)
+            klines.append(
+                [
+                    open_time,
+                    str(close - 1.0),
+                    str(close + 1.0),
+                    str(close - 2.0),
+                    str(close),
+                    "100",
+                    open_time + 59_000,
+                    "1000",
+                    10,
+                    "50",
+                    "500",
+                    "0",
+                ]
+            )
+
+        save_klines(connection, klines)
+
+        result = generate_momentum_3bar_signal(connection)
+
+        assert result is not None
+        assert result["signal_type"] == "HOLD"
+    finally:
+        connection.close()
+
+
+def test_momentum_3bar_generates_hold_when_no_position_available_to_sell() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_positions_table(connection)
+        base_open_time = 1_710_000_000_000
+        klines = []
+        for index, close in enumerate((104.0, 103.0, 102.0, 100.0)):
+            open_time = base_open_time + (index * 60_000)
+            klines.append(
+                [
+                    open_time,
+                    str(close - 1.0),
+                    str(close + 1.0),
+                    str(close - 2.0),
+                    str(close),
+                    "100",
+                    open_time + 59_000,
+                    "1000",
+                    10,
+                    "50",
+                    "500",
+                    "0",
+                ]
+            )
+
+        save_klines(connection, klines)
+
+        result = generate_momentum_3bar_signal(connection)
+
+        assert result is not None
+        assert result["signal_type"] == "HOLD"
+    finally:
+        connection.close()
+
+
+def test_momentum_3bar_generates_hold_when_previous_signal_has_same_direction() -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_positions_table(connection)
+        base_open_time = 1_710_000_000_000
+        klines = []
+        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
+            open_time = base_open_time + (index * 60_000)
+            klines.append(
+                [
+                    open_time,
+                    str(close - 1.0),
+                    str(close + 1.0),
+                    str(close - 2.0),
+                    str(close),
+                    "100",
+                    open_time + 59_000,
+                    "1000",
+                    10,
+                    "50",
+                    "500",
+                    "0",
+                ]
+            )
+
+        save_klines(connection, klines)
+        insert_signal(connection, "BUY", symbol="BTCUSDT", timeframe="1m", strategy_name="momentum_3bar", short_ma=103.0, long_ma=100.0)
+
+        result = generate_momentum_3bar_signal(connection)
+
+        assert result is not None
+        assert result["signal_type"] == "HOLD"
+    finally:
+        connection.close()
+
+
 def test_run_postgres_smoke_requires_database_url() -> None:
     try:
         run_postgres_smoke("")
@@ -2971,6 +3087,12 @@ def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(m
     try:
         run_migrations(connection)
         monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
+            VALUES ('BTCUSDT', 0.001, 101000.0, -4.2, '2026-03-20 10:09:00');
+            """
+        )
         for index in range(3):
             connection.execute(
                 """
@@ -2994,7 +3116,14 @@ def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(m
         result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
             connection,
             {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
-            {"latest_risk": {"decision": "REJECTED", "reason": "Existing long position already open (pending_qty=0.0)."}},
+            {
+                "latest_risk": {
+                    "symbol": "BTCUSDT",
+                    "strategy_name": "ma_cross",
+                    "decision": "REJECTED",
+                    "reason": "Existing long position already open (pending_qty=0.0).",
+                }
+            },
         )
 
         assert result["status"] == "degraded"
@@ -3004,6 +3133,10 @@ def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(m
         assert result["recommended_action"] == "inspect_risk_rules"
         assert result["rejected_risk_streak"] == 3
         assert result["anomalous_rejected_risk_streak"] == 3
+        assert result["current_position"]["symbol"] == "BTCUSDT"
+        assert result["current_position"]["qty"] == 0.001
+        assert len(result["recent_rejection_reasons"]) == 3
+        assert result["recent_rejection_reasons"][0]["reason"] == "Existing long position already open (pending_qty=0.0)."
     finally:
         connection.close()
 
