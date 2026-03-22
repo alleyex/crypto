@@ -49,6 +49,7 @@ def render_admin_page() -> str:
       body {
         margin: 0;
         font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+        line-height: 1.45;
         color: var(--text);
         background:
           radial-gradient(circle at top left, rgba(119, 208, 255, 0.16), transparent 28%),
@@ -59,7 +60,7 @@ def render_admin_page() -> str:
       .shell {
         max-width: 1280px;
         margin: 0 auto;
-        padding: 32px 20px 48px;
+        padding: 88px 20px 48px;
       }
 
       .hero {
@@ -74,6 +75,7 @@ def render_admin_page() -> str:
         border: 1px solid var(--line);
         border-radius: 22px;
         box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
       }
 
       .hero-main {
@@ -82,9 +84,6 @@ def render_admin_page() -> str:
 
       .hero-side {
         padding: 24px;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
       }
 
       .eyebrow {
@@ -105,6 +104,7 @@ def render_admin_page() -> str:
         color: var(--muted);
         max-width: 60ch;
         margin: 0 0 20px;
+        font-size: 15px;
       }
 
       .status-strip {
@@ -123,10 +123,10 @@ def render_admin_page() -> str:
       .chip {
         border: 1px solid var(--line);
         border-radius: 999px;
-        padding: 8px 12px;
-        font-size: 13px;
+        padding: 7px 11px;
+        font-size: 12px;
         color: var(--muted);
-        background: rgba(255, 255, 255, 0.02);
+        background: rgba(255, 255, 255, 0.03);
       }
 
       .chip strong { color: var(--text); }
@@ -164,9 +164,243 @@ def render_admin_page() -> str:
 
       .controls {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.2fr) minmax(280px, 0.75fr);
         gap: 20px;
         margin-bottom: 20px;
+      }
+
+      .hero-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        height: 100%;
+      }
+
+      .hero-stat-card {
+        padding: 18px;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(119, 208, 255, 0.08), rgba(119, 208, 255, 0.02)),
+          var(--panel-2);
+        border: 1px solid rgba(119, 208, 255, 0.12);
+        min-height: 132px;
+      }
+
+      .hero-stat-card.wide {
+        grid-column: span 2;
+      }
+
+      .hero-stat-card label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 8px;
+      }
+
+      .hero-stat-card .value {
+        font-size: 24px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .section-block {
+        margin-bottom: 28px;
+      }
+
+      .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 16px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }
+
+      .section-header h2 {
+        margin: 4px 0 0;
+        font-size: 24px;
+      }
+
+      .section-header p {
+        margin: 0;
+        color: var(--muted);
+        max-width: 72ch;
+      }
+
+      .section-kicker {
+        color: var(--accent-2);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-size: 11px;
+      }
+
+      .status-board {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+
+      .status-card {
+        padding: 16px 18px;
+        border-radius: 18px;
+        background: rgba(11, 18, 25, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .status-card label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+
+      .status-card .value {
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .metric-board {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 24px;
+      }
+
+      .metric-card {
+        padding: 18px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(19, 27, 36, 0.98), rgba(10, 16, 23, 0.98));
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+      }
+
+      .metric-card label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 8px;
+      }
+
+      .metric-primary {
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .metric-secondary {
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 6px;
+      }
+
+      .metric-detail {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .overview {
+        margin-bottom: 20px;
+      }
+
+      .overview-panel {
+        padding: 24px;
+      }
+
+      .overview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        margin-bottom: 18px;
+        flex-wrap: wrap;
+      }
+
+      .overview-header p {
+        margin: 0;
+        max-width: 72ch;
+      }
+
+      .pipeline-ribbon {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .pipeline-step {
+        position: relative;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(119, 208, 255, 0.18);
+        background:
+          linear-gradient(180deg, rgba(119, 208, 255, 0.08), rgba(119, 208, 255, 0.02)),
+          #0b1219;
+      }
+
+      .pipeline-step:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .pipeline-step strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .pipeline-step span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .feature-card {
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: #0b1219;
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+      }
+
+      .feature-card h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+
+      .feature-card p {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .feature-points {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
       }
 
       .control-card {
@@ -211,18 +445,20 @@ def render_admin_page() -> str:
       button {
         border: 0;
         border-radius: 12px;
-        padding: 12px 16px;
+        padding: 11px 15px;
         font: inherit;
         font-weight: 700;
         color: #08111a;
         background: linear-gradient(135deg, var(--accent), var(--accent-2));
         cursor: pointer;
-        transition: transform 120ms ease, opacity 120ms ease;
+        transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+        box-shadow: 0 10px 24px rgba(119, 208, 255, 0.16);
       }
 
       button.secondary {
         color: var(--text);
         background: #223142;
+        box-shadow: none;
       }
 
       input[type="number"] {
@@ -250,7 +486,7 @@ def render_admin_page() -> str:
         background: linear-gradient(135deg, #ff7a7a, #ff4d6d);
       }
 
-      button:hover { transform: translateY(-1px); }
+      button:hover { transform: translateY(-1px); box-shadow: 0 14px 30px rgba(119, 208, 255, 0.2); }
       button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
       .message {
@@ -301,6 +537,134 @@ def render_admin_page() -> str:
         padding: 16px;
       }
 
+      .ops-card {
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: #0b1219;
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+      }
+
+      .ops-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+
+      .ops-card-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .ops-card-meta {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+
+      .ops-card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 12px;
+        font-size: 12px;
+      }
+
+      .ops-card-grid strong {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--text);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .ops-card-note {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .stats-inline {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+
+      .table-title {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .table-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .data-table-wrap {
+        overflow: auto;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
+        background: #0b1219;
+        margin-bottom: 14px;
+      }
+
+      .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      .data-table th,
+      .data-table td {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .data-table th {
+        text-align: left;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .data-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .data-table td.num,
+      .data-table th.num {
+        text-align: right;
+      }
+
+      .mini-trade-grid {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .mini-trade-card {
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+        padding: 12px 14px;
+      }
+
+      .mini-trade-card strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
       .strategy-card.clickable {
         cursor: pointer;
         transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
@@ -314,6 +678,76 @@ def render_admin_page() -> str:
       .strategy-card.selected {
         border-color: rgba(119, 208, 255, 0.85);
         box-shadow: inset 0 0 0 1px rgba(119, 208, 255, 0.25);
+      }
+
+      .strategy-hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+
+      .strategy-hero-main {
+        display: grid;
+        gap: 10px;
+      }
+
+      .strategy-rank {
+        color: var(--accent);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+
+      .strategy-name-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .strategy-name-row strong {
+        font-size: 20px;
+      }
+
+      .strategy-summary-line {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .strategy-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .strategy-kpi {
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+      }
+
+      .strategy-kpi strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .strategy-kpi span {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .strategy-secondary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px 12px;
+        font-size: 12px;
       }
 
       .strategy-card-header {
@@ -389,6 +823,45 @@ def render_admin_page() -> str:
         max-height: 340px;
       }
 
+      details.collapsible {
+        margin-top: 14px;
+      }
+
+      details.collapsible summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: #0b1219;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      details.collapsible summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.collapsible summary::after {
+        content: "Show";
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      details.collapsible[open] summary::after {
+        content: "Hide";
+      }
+
+      details.collapsible .collapsible-body {
+        margin-top: 10px;
+      }
+
       .footer-note {
         margin-top: 20px;
         color: var(--muted);
@@ -407,19 +880,115 @@ def render_admin_page() -> str:
       @media (max-width: 960px) {
         .hero,
         .controls,
+        .hero-stat-grid,
+        .pipeline-ribbon,
+        .feature-grid,
+        .metric-board,
+        .status-board,
+        .strategy-hero,
+        .strategy-secondary-grid,
         .grid,
         .worker-grid {
           grid-template-columns: 1fr;
         }
 
+        .pipeline-step:not(:last-child)::after {
+          content: "";
+        }
+
         .shell {
-          padding: 20px 14px 36px;
+          padding: 18px 12px 32px;
+        }
+
+        .hero-main,
+        .hero-side,
+        .overview-panel,
+        .control-card,
+        .data-card {
+          padding: 18px;
+        }
+
+        .metric-primary,
+        .hero-stat-card .value {
+          font-size: 22px;
         }
       }
+      /* ---- Tab navigation ---- */
+      /* ---- Fixed top navbar ---- */
+      .topbar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 200;
+        height: 56px;
+        background: rgba(12, 17, 23, 0.92);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+      }
+      .topbar-inner {
+        max-width: 1280px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 0 20px;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+      .topbar-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .topbar-nav {
+        display: flex;
+        gap: 2px;
+        flex: 1;
+      }
+      .tab-btn {
+        padding: 7px 16px;
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        white-space: nowrap;
+      }
+      .tab-btn:hover { background: var(--panel-2); color: var(--text); }
+      .tab-btn.active {
+        background: var(--panel-2);
+        color: var(--accent);
+        border-bottom: 2px solid var(--accent);
+        border-radius: 8px 8px 0 0;
+      }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
     </style>
   </head>
   <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <span class="topbar-title">Crypto Admin</span>
+        <nav class="topbar-nav">
+          <button class="tab-btn active" data-tab="overview">總覽</button>
+          <button class="tab-btn" data-tab="controls">控制</button>
+          <button class="tab-btn" data-tab="market">市場資料</button>
+          <button class="tab-btn" data-tab="monitor">監控</button>
+          <button class="tab-btn" data-tab="ml">ML / AI</button>
+          <button class="tab-btn" data-tab="diagnostics">診斷</button>
+        </nav>
+      </div>
+    </header>
     <main class="shell">
+      <div class="tab-panel active" id="tab-overview">
       <section class="hero">
         <div class="panel hero-main">
           <div class="eyebrow">Crypto Trading MVP</div>
@@ -436,58 +1005,184 @@ def render_admin_page() -> str:
           </div>
         </div>
         <div class="panel hero-side">
-          <div class="side-stat">
-            <label>Health</label>
-            <div class="value" id="health-status">Loading</div>
-          </div>
-          <div class="side-stat">
-            <label>Scheduler</label>
-            <div class="value" id="scheduler-status">Loading</div>
-            <div class="inline-note" id="scheduler-detail">Checking scheduler runtime state...</div>
-          </div>
-          <div class="side-stat">
-            <label>Kill Switch</label>
-            <div class="value" id="kill-switch-status">Loading</div>
-          </div>
-          <div class="side-stat">
-            <label>Last Refresh</label>
-            <div class="value" id="last-refresh">Never</div>
-          </div>
-          <div class="side-stat">
-            <label>Alerts</label>
-            <div class="value" id="alerts-status">Loading</div>
-            <div class="inline-note" id="alerts-detail">Checking Telegram delivery state...</div>
-          </div>
-          <div class="side-stat">
-            <label>Last Pipeline</label>
-            <div class="value" id="pipeline-status">Loading</div>
-            <div class="inline-note" id="pipeline-detail">Checking pipeline run summary...</div>
-            <div class="inline-note" id="pipeline-symbols">Symbols: loading...</div>
-            <div class="inline-note" id="pipeline-counts">Counts: loading...</div>
-          </div>
-          <div class="side-stat">
-            <label>Market Data</label>
-            <div class="value" id="market-data-status">Loading</div>
-            <div class="inline-note" id="market-data-detail">Checking market data heartbeat...</div>
-          </div>
-          <div class="side-stat">
-            <label>Alerting</label>
-            <div class="value" id="alerting-runtime-status">Loading</div>
-            <div class="inline-note" id="alerting-runtime-detail">Checking alerting heartbeat...</div>
-          </div>
-          <div class="side-stat">
-            <label>Queue</label>
-            <div class="value" id="queue-status">Loading</div>
-            <div class="inline-note" id="queue-detail">Checking queued worker jobs...</div>
-          </div>
-          <div class="side-stat">
-            <label>Execution Backend</label>
-            <div class="value" id="execution-backend-status">Loading</div>
-            <div class="inline-note" id="execution-backend-detail">Checking execution backend...</div>
+          <div class="hero-stat-grid">
+            <div class="hero-stat-card">
+              <label>System Health</label>
+              <div class="value" id="health-status">Loading</div>
+              <div class="inline-note">Top-level runtime health across scheduler, DB, queue, and execution.</div>
+            </div>
+            <div class="hero-stat-card">
+              <label>Scheduler</label>
+              <div class="value" id="scheduler-status">Loading</div>
+              <div class="inline-note" id="scheduler-detail">Checking scheduler runtime state...</div>
+            </div>
+            <div class="hero-stat-card wide">
+              <label>Last Pipeline</label>
+              <div class="value" id="pipeline-status">Loading</div>
+              <div class="inline-note" id="pipeline-detail">Checking pipeline run summary...</div>
+              <div class="inline-note" id="pipeline-symbols">Symbols: loading...</div>
+              <div class="inline-note" id="pipeline-counts">Counts: loading...</div>
+            </div>
+            <div class="hero-stat-card wide">
+              <label>Execution Backend</label>
+              <div class="value" id="execution-backend-status">Loading</div>
+              <div class="inline-note" id="execution-backend-detail">Checking execution backend...</div>
+            </div>
           </div>
         </div>
       </section>
 
+      <section class="status-board">
+        <div class="status-card">
+          <label>Queue</label>
+          <div class="value" id="queue-status">Loading</div>
+          <div class="inline-note" id="queue-detail">Checking queued worker jobs...</div>
+        </div>
+        <div class="status-card">
+          <label>Kill Switch</label>
+          <div class="value" id="kill-switch-status">Loading</div>
+          <div class="inline-note">Emergency block on new execution cycles.</div>
+        </div>
+        <div class="status-card">
+          <label>Alerts</label>
+          <div class="value" id="alerts-status">Loading</div>
+          <div class="inline-note" id="alerts-detail">Checking Telegram delivery state...</div>
+        </div>
+        <div class="status-card">
+          <label>Market Data</label>
+          <div class="value" id="market-data-status">Loading</div>
+          <div class="inline-note" id="market-data-detail">Checking market data heartbeat...</div>
+        </div>
+        <div class="status-card">
+          <label>Alerting Runtime</label>
+          <div class="value" id="alerting-runtime-status">Loading</div>
+          <div class="inline-note" id="alerting-runtime-detail">Checking alerting heartbeat...</div>
+        </div>
+        <div class="status-card">
+          <label>Last Refresh</label>
+          <div class="value" id="last-refresh">Never</div>
+          <div class="inline-note">Dashboard auto-refresh cadence.</div>
+        </div>
+      </section>
+
+      <section class="metric-board">
+        <div class="metric-card">
+          <label>Pipeline Throughput</label>
+          <div class="metric-primary" id="pipeline-kpi-primary">Loading</div>
+          <div class="metric-secondary" id="pipeline-kpi-secondary">Checking latest pipeline counts...</div>
+          <div class="metric-detail" id="pipeline-kpi-detail">Waiting for runtime summary.</div>
+        </div>
+        <div class="metric-card">
+          <label>Queue Pressure</label>
+          <div class="metric-primary" id="queue-kpi-primary">Loading</div>
+          <div class="metric-secondary" id="queue-kpi-secondary">Checking queued and failed jobs...</div>
+          <div class="metric-detail" id="queue-kpi-detail">Waiting for queue summary.</div>
+        </div>
+        <div class="metric-card">
+          <label>Alert Readiness</label>
+          <div class="metric-primary" id="alerts-kpi-primary">Loading</div>
+          <div class="metric-secondary" id="alerts-kpi-secondary">Checking delivery posture...</div>
+          <div class="metric-detail" id="alerts-kpi-detail">Waiting for alert status.</div>
+        </div>
+        <div class="metric-card">
+          <label>Soak Progress</label>
+          <div class="metric-primary" id="soak-kpi-primary">Loading</div>
+          <div class="metric-secondary" id="soak-kpi-secondary">Checking accumulated healthy runtime...</div>
+          <div class="metric-detail" id="soak-kpi-detail">Waiting for soak summary.</div>
+        </div>
+      </section>
+
+      <section class="overview">
+        <div class="panel overview-panel">
+          <div class="overview-header">
+            <div>
+              <div class="eyebrow">Capability Overview</div>
+              <h2>What This System Does</h2>
+              <p>
+                This admin surface runs the current trading runtime end to end: ingest market data,
+                generate strategy signals, apply risk controls, execute via broker adapters, and keep
+                the whole flow observable from one page.
+              </p>
+            </div>
+            <div class="feature-points">
+              <span class="chip"><strong>Queue-native</strong> orchestration</span>
+              <span class="chip"><strong>Paper-first</strong> validation</span>
+              <span class="chip"><strong>Multi-strategy</strong> runtime</span>
+            </div>
+          </div>
+          <div class="pipeline-ribbon">
+            <div class="pipeline-step">
+              <strong>Market Data</strong>
+              <span>Fetch candles, update symbols, and feed the next cycle with fresh inputs.</span>
+            </div>
+            <div class="pipeline-step">
+              <strong>Strategy</strong>
+              <span>Run registered strategies across active symbols and persist trade signals.</span>
+            </div>
+            <div class="pipeline-step">
+              <strong>Risk</strong>
+              <span>Approve, reject, and size signals before any order reaches execution.</span>
+            </div>
+            <div class="pipeline-step">
+              <strong>Execution</strong>
+              <span>Route approved intents to paper, noop, simulated live, or Binance adapters.</span>
+            </div>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>Runtime Control</h3>
+              <p>Operate the scheduler without shell commands and keep emergency controls close to the live state.</p>
+              <div class="feature-points">
+                <span class="chip">Start / stop scheduler</span>
+                <span class="chip">Kill switch</span>
+                <span class="chip">Execution backend switching</span>
+                <span class="chip">Strategy and symbol selection</span>
+              </div>
+            </article>
+            <article class="feature-card">
+              <h3>Execution and Risk</h3>
+              <p>Inspect how a signal moves through approval, rejection, order creation, fill capture, and position updates.</p>
+              <div class="feature-points">
+                <span class="chip">Risk worker</span>
+                <span class="chip">Broker protection</span>
+                <span class="chip">Portfolio exposure</span>
+                <span class="chip">PnL snapshots</span>
+              </div>
+            </article>
+            <article class="feature-card">
+              <h3>Queue Operations</h3>
+              <p>Run direct or queued orchestration modes and intervene on stale or failed jobs from the dashboard.</p>
+              <div class="feature-points">
+                <span class="chip">direct</span>
+                <span class="chip">queue_dispatch</span>
+                <span class="chip">queue_drain</span>
+                <span class="chip">queue_batch</span>
+              </div>
+            </article>
+            <article class="feature-card">
+              <h3>Observability</h3>
+              <p>Track health, heartbeats, audit events, alerts, soak validation, and strategy-by-strategy outcomes in one place.</p>
+              <div class="feature-points">
+                <span class="chip">Runtime heartbeats</span>
+                <span class="chip">Audit trail</span>
+                <span class="chip">Alert delivery</span>
+                <span class="chip">Soak validation</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-controls">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Operations</div>
+            <h2>Execution Controls</h2>
+          </div>
+          <p>Operational controls stay near the top, while low-level diagnostics move further down the page.</p>
+        </div>
       <section class="controls">
         <div class="panel control-card">
           <h2>Pipeline</h2>
@@ -590,50 +1285,19 @@ __STRATEGY_OPTIONS__
           <div class="message" id="kill-message"></div>
         </div>
       </section>
+      </section>
+      </div>
 
-      <section class="grid">
-        <article class="panel data-card">
-          <h2>Health Report</h2>
-          <p>Full health payload from the API.</p>
-          <pre id="health-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Runtime Heartbeats</h2>
-          <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
-          <div class="worker-grid">
-            <div class="side-stat">
-              <label>Data Worker</label>
-              <div class="value" id="data-worker-status">Loading</div>
-              <div class="inline-note" id="data-worker-detail">Checking data worker heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Strategy Worker</label>
-              <div class="value" id="strategy-worker-status">Loading</div>
-              <div class="inline-note" id="strategy-worker-detail">Checking strategy worker heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Risk Worker</label>
-              <div class="value" id="risk-worker-status">Loading</div>
-              <div class="inline-note" id="risk-worker-detail">Checking risk worker heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Execution Worker</label>
-              <div class="value" id="execution-worker-status">Loading</div>
-              <div class="inline-note" id="execution-worker-detail">Checking execution worker heartbeat...</div>
-            </div>
+      <div class="tab-panel" id="tab-monitor">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Monitoring</div>
+            <h2>Live Runtime View</h2>
           </div>
-          <pre id="heartbeats-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Positions</h2>
-          <p>Current position and realized PnL state.</p>
-          <pre id="positions-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Orders</h2>
-          <p>Latest paper-trading orders.</p>
-          <pre id="orders-json">Loading...</pre>
-        </article>
+          <p>Priority views for trading activity, worker liveness, queue flow, and recent execution behavior.</p>
+        </div>
+      <section class="grid">
         <article class="panel data-card">
           <h2>Strategy Activity</h2>
           <p>Latest signal, risk, fills, and trade outcomes grouped by strategy.</p>
@@ -664,75 +1328,8 @@ __STRATEGY_OPTIONS__
           </div>
         </article>
         <article class="panel data-card">
-          <h2>Recent Closed Trades</h2>
-          <p>Latest realized trade outcomes grouped by strategy.</p>
-          <div class="inline-controls">
-            <label for="closed-trades-strategy-select">Strategy</label>
-            <select id="closed-trades-strategy-select">
-__CLOSED_TRADE_STRATEGY_OPTIONS__
-            </select>
-            <button class="secondary" type="button" id="closed-trades-reset-button">Reset</button>
-          </div>
-          <div class="trade-list" id="strategy-closed-trades-board">
-            <div class="strategy-card">Loading...</div>
-          </div>
-        </article>
-        <article class="panel data-card">
-          <h2>Selected Strategy Details</h2>
-          <p>Focused detail view for the strategy currently selected from the leaderboard or closed-trades filter.</p>
-          <div class="strategy-board" id="selected-strategy-board">
-            <div class="strategy-card">Select a strategy card to inspect a single strategy.</div>
-          </div>
-        </article>
-        <article class="panel data-card">
-          <h2>PnL Snapshots</h2>
-          <p>Latest mark-to-market snapshots.</p>
-          <pre id="pnl-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Scheduler Logs</h2>
-          <p>Recent scheduler output lines.</p>
-          <div class="inline-controls">
-            <label for="logs-mode-select">Mode</label>
-            <select id="logs-mode-select">
-              <option value="all">all</option>
-              <option value="pipeline">pipeline</option>
-              <option value="market-data-only">market-data-only</option>
-              <option value="strategy-only">strategy-only</option>
-              <option value="risk-only">risk-only</option>
-              <option value="execution-only">execution-only</option>
-            </select>
-          </div>
-          <pre id="logs-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Pipeline Result</h2>
-          <p>Last manual pipeline action run from this page.</p>
-          <pre id="pipeline-json">No manual pipeline run yet.</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Control Activity</h2>
-          <p>Recent scheduler and execution backend operations extracted from structured audit actions.</p>
-          <div class="inline-controls" id="scheduler-preset-quick-actions">
-            <span class="chip">Recent presets loading...</span>
-          </div>
-          <div class="inline-controls">
-            <label for="scheduler-control-filter-select">Filter</label>
-            <select id="scheduler-control-filter-select">
-              <option value="all">all</option>
-              <option value="priority">priority</option>
-              <option value="limit">limit</option>
-              <option value="enable_disable">enable/disable</option>
-            </select>
-            <button class="secondary" type="button" id="scheduler-control-reset-button">Reset</button>
-          </div>
-          <div class="trade-list" id="scheduler-control-board">
-            <div class="strategy-card">Loading...</div>
-          </div>
-        </article>
-        <article class="panel data-card">
           <h2>Queue Summary</h2>
-          <p>Queued worker job counts and the latest queue entries.</p>
+          <p>Queued worker job counts, the latest queue entries, and direct queue recovery actions.</p>
           <div class="inline-controls">
             <label for="queue-filter-select">Filter</label>
             <select id="queue-filter-select">
@@ -764,9 +1361,346 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <pre id="queue-json">Loading...</pre>
         </article>
         <article class="panel data-card">
+          <h2>Runtime Heartbeats</h2>
+          <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
+          <div class="worker-grid">
+            <div class="side-stat">
+              <label>Data Worker</label>
+              <div class="value" id="data-worker-status">Loading</div>
+              <div class="inline-note" id="data-worker-detail">Checking data worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Strategy Worker</label>
+              <div class="value" id="strategy-worker-status">Loading</div>
+              <div class="inline-note" id="strategy-worker-detail">Checking strategy worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Risk Worker</label>
+              <div class="value" id="risk-worker-status">Loading</div>
+              <div class="inline-note" id="risk-worker-detail">Checking risk worker heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Execution Worker</label>
+              <div class="value" id="execution-worker-status">Loading</div>
+              <div class="inline-note" id="execution-worker-detail">Checking execution worker heartbeat...</div>
+            </div>
+          </div>
+          <details class="collapsible">
+            <summary>View heartbeat event feed</summary>
+            <div class="collapsible-body">
+              <pre id="heartbeats-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>Scheduler Logs</h2>
+          <p>Recent scheduler output lines.</p>
+          <div class="inline-controls">
+            <label for="logs-mode-select">Mode</label>
+            <select id="logs-mode-select">
+              <option value="all">all</option>
+              <option value="pipeline">pipeline</option>
+              <option value="market-data-only">market-data-only</option>
+              <option value="strategy-only">strategy-only</option>
+              <option value="risk-only">risk-only</option>
+              <option value="execution-only">execution-only</option>
+            </select>
+          </div>
+          <pre id="logs-json">Loading...</pre>
+        </article>
+        <article class="panel data-card">
+          <h2>Orders</h2>
+          <p>Latest paper-trading orders.</p>
+          <details class="collapsible">
+            <summary>View raw orders payload</summary>
+            <div class="collapsible-body">
+              <pre id="orders-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>Positions</h2>
+          <p>Current position and realized PnL state.</p>
+          <details class="collapsible">
+            <summary>View raw positions payload</summary>
+            <div class="collapsible-body">
+              <pre id="positions-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>Recent Closed Trades</h2>
+          <p>Latest realized trade outcomes grouped by strategy.</p>
+          <div class="inline-controls">
+            <label for="closed-trades-strategy-select">Strategy</label>
+            <select id="closed-trades-strategy-select">
+__CLOSED_TRADE_STRATEGY_OPTIONS__
+            </select>
+            <button class="secondary" type="button" id="closed-trades-reset-button">Reset</button>
+          </div>
+          <div class="trade-list" id="strategy-closed-trades-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+        <article class="panel data-card">
+          <h2>Selected Strategy Details</h2>
+          <p>Focused detail view for the strategy currently selected from the leaderboard or closed-trades filter.</p>
+          <div class="strategy-board" id="selected-strategy-board">
+            <div class="strategy-card">Select a strategy card to inspect a single strategy.</div>
+          </div>
+        </article>
+        <article class="panel data-card">
+          <h2>Portfolio Exposure</h2>
+          <p>Cross-strategy position exposure and capital limit enforcement status.</p>
+          <div id="portfolio-board">Loading...</div>
+        </article>
+        <article class="panel data-card">
+          <h2>Risk Config Overrides</h2>
+          <p>Per-strategy risk parameter overrides. Strategies without an override use global defaults.</p>
+          <div id="risk-config-board">Loading...</div>
+        </article>
+      </section>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-market">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Data Layer</div>
+            <h2>市場資料</h2>
+          </div>
+          <p>管理市場資料的抓取、儲存狀態與特徵計算。</p>
+        </div>
+      <section class="grid">
+
+        <article class="panel data-card">
+          <h2>資料狀態</h2>
+          <p>每個交易對的 candle 數量、最新時間與缺口估計。</p>
+          <div class="button-row">
+            <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
+          </div>
+          <div id="market-status-board" style="margin-top:12px;">
+            <span style="color:var(--muted);font-size:13px;">Click Refresh Status to load.</span>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>抓取市場資料</h2>
+          <p>獨立觸發市場資料抓取，不需跑完整 pipeline。</p>
+          <div class="inline-controls">
+            <label for="market-fetch-symbols-input">Symbols（逗號分隔，留空使用 active symbols）</label>
+            <input id="market-fetch-symbols-input" type="text" placeholder="BTCUSDT,ETHUSDT" />
+          </div>
+          <div class="button-row">
+            <button data-action="market-fetch">Fetch Now</button>
+          </div>
+          <div class="message" id="market-fetch-message"></div>
+          <pre id="market-fetch-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Feature Store</h2>
+          <p>從已儲存的 candle 計算並更新特徵向量。</p>
+          <div class="inline-controls">
+            <label for="market-fs-symbol-input">Symbol</label>
+            <input id="market-fs-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+          </div>
+          <div class="inline-controls">
+            <label for="market-fs-timeframe-input">Timeframe</label>
+            <input id="market-fs-timeframe-input" type="text" placeholder="1m" value="1m" />
+          </div>
+          <div class="button-row">
+            <button data-action="market-fs-materialize">Materialize Features</button>
+            <button class="secondary" data-action="market-fs-latest">Latest Feature Vector</button>
+          </div>
+          <div class="message" id="market-fs-message"></div>
+          <pre id="market-fs-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+      </section>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-ml">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Machine Learning</div>
+            <h2>ML / AI</h2>
+          </div>
+          <p>Feature store, training jobs, model registry, inference, and RL experiments.</p>
+        </div>
+      <section class="grid">
+
+        <article class="panel data-card">
+          <h2>Training Jobs</h2>
+          <p>Trigger a supervised logistic regression training job on stored features.</p>
+          <div class="inline-controls">
+            <label for="ml-train-symbol-input">Symbol</label>
+            <input id="ml-train-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-train-timeframe-input">Timeframe</label>
+            <input id="ml-train-timeframe-input" type="text" placeholder="1m" value="1m" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-train-epochs-input">Epochs</label>
+            <input id="ml-train-epochs-input" type="number" value="50" min="1" max="500" />
+          </div>
+          <div class="button-row">
+            <button data-action="ml-train">Start Training</button>
+            <button class="secondary" data-action="ml-train-list">View Recent Jobs</button>
+          </div>
+          <div class="message" id="ml-train-message"></div>
+          <pre id="ml-train-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Model Registry</h2>
+          <p>View champion model and promote or archive model versions.</p>
+          <div class="inline-controls">
+            <label for="ml-registry-symbol-input">Symbol</label>
+            <input id="ml-registry-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-registry-timeframe-input">Timeframe</label>
+            <input id="ml-registry-timeframe-input" type="text" placeholder="1m" value="1m" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-registry-model-id-input">Model ID (for promote/archive)</label>
+            <input id="ml-registry-model-id-input" type="number" placeholder="1" />
+          </div>
+          <div class="button-row">
+            <button class="secondary" data-action="ml-champion">View Champion</button>
+            <button class="secondary" data-action="ml-registry-list">List Models</button>
+            <button data-action="ml-promote">Promote</button>
+            <button class="danger" data-action="ml-archive">Archive</button>
+          </div>
+          <div class="message" id="ml-registry-message"></div>
+          <pre id="ml-registry-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Inference</h2>
+          <p>Get latest prediction from the champion model.</p>
+          <div class="inline-controls">
+            <label for="ml-infer-symbol-input">Symbol</label>
+            <input id="ml-infer-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-infer-timeframe-input">Timeframe</label>
+            <input id="ml-infer-timeframe-input" type="text" placeholder="1m" value="1m" />
+          </div>
+          <div class="button-row">
+            <button data-action="ml-infer-status">Inference Status</button>
+            <button data-action="ml-infer-predict">Predict Latest</button>
+          </div>
+          <div class="message" id="ml-infer-message"></div>
+          <pre id="ml-infer-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+        <article class="panel data-card">
+          <h2>RL Experiment</h2>
+          <p>Train a REINFORCE agent and benchmark it against buy-and-hold and supervised champion.</p>
+          <div class="inline-controls">
+            <label for="ml-rl-symbol-input">Symbol</label>
+            <input id="ml-rl-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-rl-timeframe-input">Timeframe</label>
+            <input id="ml-rl-timeframe-input" type="text" placeholder="1m" value="1m" />
+          </div>
+          <div class="inline-controls">
+            <label for="ml-rl-episodes-input">Episodes</label>
+            <input id="ml-rl-episodes-input" type="number" value="100" min="1" max="1000" />
+          </div>
+          <div class="inline-controls">
+            <label>
+              <input id="ml-rl-auto-promote" type="checkbox" />
+              Auto-promote to champion
+            </label>
+          </div>
+          <div class="button-row">
+            <button data-action="ml-rl-train">Run RL Experiment</button>
+          </div>
+          <div class="message" id="ml-rl-message"></div>
+          <pre id="ml-rl-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+      </section>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-diagnostics">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Diagnostics</div>
+            <h2>Deep Inspection</h2>
+          </div>
+          <p>Raw payloads, audit history, validation snapshots, and lower-level artifacts for incident analysis.</p>
+        </div>
+      <section class="grid">
+        <article class="panel data-card">
+          <h2>Health Report</h2>
+          <p>Full health payload from the API.</p>
+          <details class="collapsible">
+            <summary>View raw health payload</summary>
+            <div class="collapsible-body">
+              <pre id="health-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>PnL Snapshots</h2>
+          <p>Latest mark-to-market snapshots.</p>
+          <details class="collapsible">
+            <summary>View raw PnL payload</summary>
+            <div class="collapsible-body">
+              <pre id="pnl-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>Pipeline Result</h2>
+          <p>Last manual pipeline action run from this page.</p>
+          <details class="collapsible">
+            <summary>View manual pipeline result</summary>
+            <div class="collapsible-body">
+              <pre id="pipeline-json">No manual pipeline run yet.</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
+          <h2>Control Activity</h2>
+          <p>Recent scheduler and execution backend operations extracted from structured audit actions.</p>
+          <div class="inline-controls" id="scheduler-preset-quick-actions">
+            <span class="chip">Recent presets loading...</span>
+          </div>
+          <div class="inline-controls">
+            <label for="scheduler-control-filter-select">Filter</label>
+            <select id="scheduler-control-filter-select">
+              <option value="all">all</option>
+              <option value="priority">priority</option>
+              <option value="limit">limit</option>
+              <option value="enable_disable">enable/disable</option>
+            </select>
+            <button class="secondary" type="button" id="scheduler-control-reset-button">Reset</button>
+          </div>
+          <div class="trade-list" id="scheduler-control-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+        <article class="panel data-card">
           <h2>Audit Events</h2>
           <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
-          <pre id="audit-json">Loading...</pre>
+          <details class="collapsible">
+            <summary>View raw audit event payload</summary>
+            <div class="collapsible-body">
+              <pre id="audit-json">Loading...</pre>
+            </div>
+          </details>
         </article>
         <article class="panel data-card">
           <h2>Alert Delivery</h2>
@@ -775,7 +1709,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button data-action="alert-test">Send Test Alert</button>
           </div>
           <div class="message" id="alerts-message">No test alert sent from this page yet.</div>
-          <pre id="alerts-json">Loading...</pre>
+          <details class="collapsible">
+            <summary>View raw alert payload</summary>
+            <div class="collapsible-body">
+              <pre id="alerts-json">Loading...</pre>
+            </div>
+          </details>
         </article>
         <article class="panel data-card">
           <h2>Soak Validation</h2>
@@ -784,19 +1723,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button data-action="soak-record">Record Snapshot</button>
           </div>
           <div class="message" id="soak-message">No soak validation snapshot recorded from this page yet.</div>
-          <pre id="soak-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Risk Config Overrides</h2>
-          <p>Per-strategy risk parameter overrides. Strategies without an override use global defaults.</p>
-          <div id="risk-config-board">Loading...</div>
-        </article>
-        <article class="panel data-card">
-          <h2>Portfolio Exposure</h2>
-          <p>Cross-strategy position exposure and capital limit enforcement status.</p>
-          <div id="portfolio-board">Loading...</div>
+          <details class="collapsible">
+            <summary>View raw soak payload</summary>
+            <div class="collapsible-body">
+              <pre id="soak-json">Loading...</pre>
+            </div>
+          </details>
         </article>
       </section>
+      </section>
+
+      </div>
 
       <div class="footer-note">
         Auto refresh runs every 10 seconds. Use Pause Auto Refresh before inspecting a fixed snapshot.
@@ -1135,6 +2072,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           alert_status: alertStatus,
           latest_delivery: latest,
         });
+
+        el("alerts-kpi-primary").textContent = configured ? "READY" : "DISABLED";
+        el("alerts-kpi-primary").className = `metric-primary ${configured ? "ok" : "warn"}`;
+        el("alerts-kpi-secondary").textContent = latest
+          ? `${latest.status.toUpperCase()} | ${latest.created_at}`
+          : configured
+            ? "Telegram configured. No delivery attempts yet."
+            : "Bot token or chat id missing.";
+        el("alerts-kpi-detail").textContent = latest
+          ? latest.message
+          : configured
+            ? "Alert transport is configured and waiting for the next event."
+            : "Configure Telegram before relying on automated notifications.";
       }
 
       function updatePipelineSummary(auditEvents) {
@@ -1148,6 +2098,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           el("pipeline-detail").textContent = "No pipeline runs recorded yet.";
           el("pipeline-symbols").textContent = "Symbols: none";
           el("pipeline-counts").textContent = "Counts: none";
+          el("pipeline-kpi-primary").textContent = "0 fills";
+          el("pipeline-kpi-primary").className = "metric-primary warn";
+          el("pipeline-kpi-secondary").textContent = "No completed runtime cycles yet.";
+          el("pipeline-kpi-detail").textContent = "Run a pipeline manually or wait for the scheduler to complete a cycle.";
           return;
         }
 
@@ -1171,6 +2125,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             `approved=${latestPipelineRun.approved_risk_count ?? 0}, ` +
             `rejected=${latestPipelineRun.rejected_risk_count ?? 0}, ` +
             `fills=${latestPipelineRun.filled_execution_count ?? 0}`;
+          el("pipeline-kpi-primary").textContent = `${latestPipelineRun.filled_execution_count ?? 0} fills`;
+          el("pipeline-kpi-primary").className = `metric-primary ${statusClass(latestPipelineRun.status)}`;
+          el("pipeline-kpi-secondary").textContent =
+            `${latestPipelineRun.generated_signal_count ?? 0} signals | ` +
+            `${latestPipelineRun.approved_risk_count ?? 0} approved | ` +
+            `${latestPipelineRun.rejected_risk_count ?? 0} rejected`;
+          el("pipeline-kpi-detail").textContent =
+            `${displayStatus} on ${symbolLabel} via ${executionBackend} for ${strategyLabel}.`;
           return;
         }
 
@@ -1180,6 +2142,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("pipeline-detail").textContent = `${latestCompleted.created_at} | ${latestCompleted.message}`;
         el("pipeline-symbols").textContent = "Symbols: unavailable";
         el("pipeline-counts").textContent = "Counts: unavailable";
+        el("pipeline-kpi-primary").textContent = displayStatus;
+        el("pipeline-kpi-primary").className = `metric-primary ${statusClass(latestCompleted.status)}`;
+        el("pipeline-kpi-secondary").textContent = latestCompleted.created_at || "Completed pipeline event found.";
+        el("pipeline-kpi-detail").textContent = latestCompleted.message || "Latest pipeline event did not include summary counts.";
       }
 
       function renderSchedulerPriorityControls(schedulerStrategy) {
@@ -1217,11 +2183,36 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         `).join("");
       }
 
-      function updateSoakValidation(currentReport, history) {
+      function updateSoakValidation(currentReport, history, summary) {
         el("soak-json").textContent = formatJson({
           current_report: currentReport,
+          summary,
           recent_history: history,
         });
+        const soakStatus = String(currentReport?.status || summary?.status || "unknown").toUpperCase();
+        el("soak-kpi-primary").textContent = `${summary?.accumulated_ok_hours ?? 0}h`;
+        el("soak-kpi-primary").className = `metric-primary ${statusClass(currentReport?.status || "degraded")}`;
+        el("soak-kpi-secondary").textContent =
+          `${soakStatus} | remaining ${summary?.remaining_accumulated_hours ?? "n/a"}h`;
+        el("soak-kpi-detail").textContent =
+          `continuous=${summary?.continuous_span_hours ?? "n/a"}h | ok_rate=${summary?.ok_rate ?? "n/a"} | longest_ok=${summary?.longest_ok_streak_hours ?? "n/a"}h`;
+      }
+
+      function updateQueueMetrics(queueSummary) {
+        const counts = queueSummary?.counts || {};
+        const queued = counts.queued ?? 0;
+        const leased = counts.leased ?? 0;
+        const failed = counts.failed ?? 0;
+        const recentBatch = queueSummary?.recent_batches?.[0] || null;
+        const primaryLabel = failed > 0 ? `${failed} failed` : `${queued} queued`;
+        const primaryClass = failed > 0 ? "bad" : queued > 0 || leased > 0 ? "warn" : "ok";
+        el("queue-kpi-primary").textContent = primaryLabel;
+        el("queue-kpi-primary").className = `metric-primary ${primaryClass}`;
+        el("queue-kpi-secondary").textContent =
+          `queued=${queued} | leased=${leased} | completed=${counts.completed ?? 0}`;
+        el("queue-kpi-detail").textContent = recentBatch
+          ? `latest batch: ${recentBatch.batch_id || "n/a"} | ${recentBatch.orchestration || "n/a"} | ${recentBatch.status || "unknown"}`
+          : "No recent queue batch recorded.";
       }
 
       function updateRiskConfig(data) {
@@ -1237,19 +2228,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const val = cfg[f];
             const def = global[f];
             const changed = val !== def;
-            return `<td style="text-align:right;${changed ? "font-weight:bold;color:var(--accent);" : ""}">${val ?? "—"}</td>`;
+            return `<td class="num" style="${changed ? "font-weight:bold;color:var(--accent);" : ""}">${val ?? "—"}</td>`;
           }).join("");
-          return `<tr><td><strong>${cfg.strategy_name}</strong></td>${cells}<td style="font-size:0.75em;color:var(--muted)">${cfg.updated_at || ""}</td></tr>`;
+          return `<tr><td><strong>${cfg.strategy_name}</strong></td>${cells}<td class="table-note">${cfg.updated_at || ""}</td></tr>`;
         });
 
-        const defaultRow = `<tr style="color:var(--muted);font-style:italic"><td>defaults</td>${fields.map((f) => `<td style="text-align:right">${global[f] ?? "—"}</td>`).join("")}<td></td></tr>`;
+        const defaultRow = `<tr style="color:var(--muted);font-style:italic"><td>defaults</td>${fields.map((f) => `<td class="num">${global[f] ?? "—"}</td>`).join("")}<td></td></tr>`;
 
         board.innerHTML = overrides.length === 0
-          ? `<p style="color:var(--muted);font-style:italic">No per-strategy overrides. All strategies use global defaults.</p><pre>${formatJson(global)}</pre>`
-          : `<table style="width:100%;border-collapse:collapse;font-size:0.85em">
-              <thead><tr><th style="text-align:left">Strategy</th>${fields.map((f) => `<th style="text-align:right">${fieldLabels[f]}</th>`).join("")}<th style="text-align:left">Updated</th></tr></thead>
-              <tbody>${defaultRow}${rows.join("")}</tbody>
-            </table>`;
+          ? `<div class="ops-card"><div class="ops-card-title">No strategy overrides configured.</div><div class="ops-card-note">All strategies currently inherit the global defaults below.</div><details class="collapsible"><summary>View global defaults</summary><div class="collapsible-body"><pre>${formatJson(global)}</pre></div></details></div>`
+          : `<div class="ops-card">
+              <div class="ops-card-header">
+                <div class="ops-card-title">Strategy Risk Overrides</div>
+                <div class="chip">${overrides.length} override${overrides.length === 1 ? "" : "s"}</div>
+              </div>
+              <div class="ops-card-note">Values highlighted in accent differ from the global defaults row.</div>
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>Strategy</th>${fields.map((f) => `<th class="num">${fieldLabels[f]}</th>`).join("")}<th>Updated</th></tr></thead>
+                  <tbody>${defaultRow}${rows.join("")}</tbody>
+                </table>
+              </div>
+            </div>`;
       }
 
       function updatePortfolio(data) {
@@ -1266,9 +2266,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         const posRows = positions.map((p) => `<tr>
           <td><strong>${p.symbol}</strong></td>
-          <td style="text-align:right">${Number(p.qty || 0).toFixed(4)}</td>
-          <td style="text-align:right">${p.notional != null ? Number(p.notional).toFixed(2) : "—"}</td>
-          <td style="text-align:right;color:${Number(p.unrealized_pnl || 0) >= 0 ? "var(--ok)" : "var(--bad)"}">${p.unrealized_pnl != null ? Number(p.unrealized_pnl).toFixed(4) : "—"}</td>
+          <td class="num">${Number(p.qty || 0).toFixed(4)}</td>
+          <td class="num">${p.notional != null ? Number(p.notional).toFixed(2) : "—"}</td>
+          <td class="num" style="color:${Number(p.unrealized_pnl || 0) >= 0 ? "var(--ok)" : "var(--bad)"}">${p.unrealized_pnl != null ? Number(p.unrealized_pnl).toFixed(4) : "—"}</td>
         </tr>`).join("");
 
         const stratRows = perStrategy.map((s) => {
@@ -1277,19 +2277,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const pct = cfg.max_strategy_notional ? (Number(s.total_notional || 0) / Number(cfg.max_strategy_notional) * 100).toFixed(1) + "%" : "—";
           return `<tr>
             <td>${s.strategy_name}</td>
-            <td style="text-align:right">${symbols}</td>
-            <td style="text-align:right">${s.total_notional != null ? Number(s.total_notional).toFixed(2) : "—"}</td>
-            <td style="text-align:right">${s.limit_notional != null ? Number(s.limit_notional).toFixed(2) : "—"}</td>
-            <td style="text-align:right;${withinClass}">${pct}</td>
+            <td class="num">${symbols}</td>
+            <td class="num">${s.total_notional != null ? Number(s.total_notional).toFixed(2) : "—"}</td>
+            <td class="num">${s.limit_notional != null ? Number(s.limit_notional).toFixed(2) : "—"}</td>
+            <td class="num" style="${withinClass}">${pct}</td>
           </tr>`;
         }).join("");
 
         const violationHtml = violations.length
-          ? `<p style="color:var(--bad);margin-bottom:8px">⚠ ${violations.join("; ")}</p>`
+          ? `<div class="ops-card" style="margin-bottom:12px;border-color:rgba(255,107,107,0.3)"><div class="ops-card-title bad">Exposure Violations</div><div class="ops-card-note">${violations.join("; ")}</div></div>`
           : "";
 
         board.innerHTML = `
-          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+          <div class="stats-inline">
             <div class="side-stat"><label>Enforcement</label><div class="value ${enforcedClass}">${enforced}</div></div>
             <div class="side-stat"><label>Total Capital</label><div class="value">${cfg.total_capital != null ? Number(cfg.total_capital).toLocaleString() + " USDT" : "—"}</div></div>
             <div class="side-stat"><label>Max Strategy %</label><div class="value">${cfg.max_strategy_allocation_pct != null ? (Number(cfg.max_strategy_allocation_pct) * 100).toFixed(0) + "%" : "—"}</div></div>
@@ -1297,17 +2297,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           </div>
           ${violationHtml}
           ${positions.length ? `
-          <p style="font-weight:bold;margin-bottom:4px">Open Positions (${positions.length})</p>
-          <table style="width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:12px">
-            <thead><tr><th style="text-align:left">Symbol</th><th style="text-align:right">Qty</th><th style="text-align:right">Notional (USDT)</th><th style="text-align:right">Unreal. PnL</th></tr></thead>
-            <tbody>${posRows}</tbody>
-          </table>` : `<p style="color:var(--muted);font-style:italic;margin-bottom:12px">No open positions.</p>`}
+          <p class="table-title">Open Positions (${positions.length})</p>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Symbol</th><th class="num">Qty</th><th class="num">Notional (USDT)</th><th class="num">Unreal. PnL</th></tr></thead>
+              <tbody>${posRows}</tbody>
+            </table>
+          </div>` : `<p class="table-note" style="margin-bottom:12px">No open positions.</p>`}
           ${perStrategy.length ? `
-          <p style="font-weight:bold;margin-bottom:4px">Per-Strategy Exposure</p>
-          <table style="width:100%;border-collapse:collapse;font-size:0.85em">
-            <thead><tr><th style="text-align:left">Strategy</th><th style="text-align:right">Symbols</th><th style="text-align:right">Notional</th><th style="text-align:right">Limit</th><th style="text-align:right">Used %</th></tr></thead>
-            <tbody>${stratRows}</tbody>
-          </table>` : ""}`;
+          <p class="table-title">Per-Strategy Exposure</p>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Strategy</th><th class="num">Symbols</th><th class="num">Notional</th><th class="num">Limit</th><th class="num">Used %</th></tr></thead>
+              <tbody>${stratRows}</tbody>
+            </table>
+          </div>` : ""}`;
       }
 
       function updateStrategySummary(strategySummary) {
@@ -1335,7 +2339,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
-        board.innerHTML = sortedStrategies.map((item) => {
+        board.innerHTML = sortedStrategies.map((item, index) => {
           const activityState = classifyStrategyActivity(item);
           const strategyEntry = strategyEntryMap[item.strategy_name] || {};
           const latestSignal = item.latest_signal?.signal_type || "none";
@@ -1378,30 +2382,47 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const disabledReason = strategyEntry.disabled_reason || "none";
           const canPromote = strategyEntry.active;
           const canDemote = strategyEntry.active;
+          const winRate = Number(item.realized_trade_count || 0) > 0
+            ? `${((Number(item.winning_trade_count || 0) / Number(item.realized_trade_count || 0)) * 100).toFixed(1)}%`
+            : "n/a";
+          const summaryLine = [
+            `signal=${latestSignal}`,
+            `risk=${latestRisk}`,
+            `order=${latestOrder}`,
+            `fill=${latestFill}`,
+          ].join(" | ");
 
           return `
             <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
-              <div class="strategy-card-header">
-                <strong>${item.strategy_name}</strong>
-                <div class="strategy-card-actions">
-                  ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
-                  ${canDemote ? `<button type="button" class="secondary" data-demote-strategy="${item.strategy_name}">Demote</button>` : ""}
-                  ${strategyEntry.enabled !== false
-                    ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>`
-                    : `<button type="button" class="secondary" data-enable-strategy="${item.strategy_name}">Enable</button>`}
-                  <span class="${enabledClass}">${enabledLabel}</span>
+              <div class="strategy-hero">
+                <div class="strategy-hero-main">
+                  <div class="strategy-rank">Rank #${index + 1}</div>
+                  <div class="strategy-name-row">
+                    <strong>${item.strategy_name}</strong>
+                    <span class="${enabledClass}">${enabledLabel}</span>
+                    ${strategyEntry.enabled === false ? `<span class="chip">disabled=${disabledReason}</span>` : ""}
+                    ${strategyEntry.effective === false && strategyEntry.active ? `<span class="chip">limited by scheduler</span>` : ""}
+                  </div>
+                  <div class="strategy-summary-line">${summaryLine}</div>
+                  <div class="strategy-card-actions">
+                    ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
+                    ${canDemote ? `<button type="button" class="secondary" data-demote-strategy="${item.strategy_name}">Demote</button>` : ""}
+                    ${strategyEntry.enabled !== false
+                      ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>`
+                      : `<button type="button" class="secondary" data-enable-strategy="${item.strategy_name}">Enable</button>`}
+                  </div>
+                </div>
+                <div class="strategy-kpi-grid">
+                  <div class="strategy-kpi"><strong>Gross PnL</strong><span class="${pnlClass}">${pnl}</span></div>
+                  <div class="strategy-kpi"><strong>Win Rate</strong><span>${winRate}</span></div>
+                  <div class="strategy-kpi"><strong>Filled Orders</strong><span>${item.filled_order_count}</span></div>
+                  <div class="strategy-kpi"><strong>Net Qty</strong><span>${item.net_position_qty}</span></div>
                 </div>
               </div>
-              <div class="strategy-card-grid">
-                <div class="strategy-metric"><strong>Signal</strong>${latestSignal}</div>
-                <div class="strategy-metric"><strong>Risk</strong>${latestRisk}</div>
-                <div class="strategy-metric"><strong>Order</strong>${latestOrder}</div>
-                <div class="strategy-metric"><strong>Fill</strong>${latestFill}</div>
+              <div class="strategy-secondary-grid">
                 <div class="strategy-metric"><strong>Disabled Reason</strong>${disabledReason}</div>
-                <div class="strategy-metric"><strong>Filled Orders</strong>${item.filled_order_count}</div>
+                <div class="strategy-metric"><strong>Latest Risk</strong>${latestRisk}</div>
                 <div class="strategy-metric"><strong>Filled Qty</strong>${item.filled_qty_total}</div>
-                <div class="strategy-metric"><strong>Net Qty</strong>${item.net_position_qty}</div>
-                <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${pnl}</span></div>
                 <div class="strategy-metric"><strong>Wins</strong>${item.winning_trade_count}</div>
                 <div class="strategy-metric"><strong>Losses</strong>${item.losing_trade_count}</div>
                 <div class="strategy-metric"><strong>Latest Activity</strong>${latestActivityAt}</div>
@@ -1473,26 +2494,39 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           : '<div class="strategy-metric"><strong>Recent Closed Trades</strong>none</div>';
         board.innerHTML = `
           <div class="strategy-card selected">
-            <div class="strategy-card-header">
-              <strong>${selected.strategy_name}</strong>
-              <span class="${activityState.className}">${activityState.label}</span>
+            <div class="strategy-hero">
+              <div class="strategy-hero-main">
+                <div class="strategy-rank">Focused Strategy View</div>
+                <div class="strategy-name-row">
+                  <strong>${selected.strategy_name}</strong>
+                  <span class="${activityState.className}">${activityState.label}</span>
+                </div>
+                <div class="strategy-summary-line">
+                  signal=${selected.latest_signal?.signal_type || "none"} |
+                  risk=${selected.latest_risk?.decision || "none"} |
+                  order=${selected.latest_order?.status || "none"} |
+                  fill=${selected.latest_fill?.side || "none"}
+                </div>
+              </div>
+              <div class="strategy-kpi-grid">
+                <div class="strategy-kpi"><strong>Gross PnL</strong><span class="${pnlClass}">${Number(selected.gross_realized_pnl || 0).toFixed(6)}</span></div>
+                <div class="strategy-kpi"><strong>Win Rate</strong><span>${winRate}</span></div>
+                <div class="strategy-kpi"><strong>Closed Trades</strong><span>${closedTradeCount}</span></div>
+                <div class="strategy-kpi"><strong>Last Closed Result</strong><span class="${lastClosedStatusClass}">${lastClosedStatus}</span></div>
+              </div>
             </div>
-            <div class="strategy-card-grid">
+            <div class="strategy-secondary-grid">
               <div class="strategy-metric"><strong>Latest Signal</strong>${selected.latest_signal?.signal_type || "none"}</div>
               <div class="strategy-metric"><strong>Latest Risk</strong>${selected.latest_risk?.decision || "none"}</div>
               <div class="strategy-metric"><strong>Latest Order</strong>${selected.latest_order?.status || "none"}</div>
               <div class="strategy-metric"><strong>Latest Fill</strong>${selected.latest_fill?.side || "none"}</div>
               <div class="strategy-metric"><strong>Realized Trades</strong>${selected.realized_trade_count}</div>
-              <div class="strategy-metric"><strong>Closed Trades</strong>${closedTradeCount}</div>
-              <div class="strategy-metric"><strong>Win Rate</strong>${winRate}</div>
-              <div class="strategy-metric"><strong>Last Closed Result</strong><span class="${lastClosedStatusClass}">${lastClosedStatus}</span></div>
-              <div class="strategy-metric"><strong>Gross PnL</strong><span class="${pnlClass}">${Number(selected.gross_realized_pnl || 0).toFixed(6)}</span></div>
               <div class="strategy-metric"><strong>Latest Activity</strong>${selected.latest_activity_at || "none"}</div>
               <div class="strategy-metric"><strong>Latest Fill At</strong>${selected.latest_fill_at || "none"}</div>
               <div class="strategy-metric"><strong>Latest Closed Symbol</strong>${latestClosedTrade?.symbol || "none"}</div>
               <div class="strategy-metric"><strong>Latest Closed PnL</strong>${latestClosedTrade ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6) : "n/a"}</div>
-              ${recentClosedTradesHtml}
             </div>
+            <div class="mini-trade-grid">${recentClosedTradesHtml}</div>
           </div>
         `;
       }
@@ -1511,11 +2545,18 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               ? "bad"
               : "warn";
           return `
-            <div class="trade-row">
-              <div><strong>Strategy</strong>${item.strategy_name}<br>${item.symbol}</div>
-              <div><strong>Qty / Status</strong>${item.qty}<br><span class="${pnlClass}">${item.status}</span></div>
-              <div><strong>Entry / Exit</strong>${Number(item.entry_price).toFixed(4)}<br>${Number(item.exit_price).toFixed(4)}</div>
-              <div><strong>Realized PnL</strong><span class="${pnlClass}">${Number(item.realized_pnl).toFixed(6)}</span><br>${item.closed_at}</div>
+            <div class="ops-card">
+              <div class="ops-card-header">
+                <div class="ops-card-title">${item.strategy_name} · ${item.symbol}</div>
+                <div class="chip"><span class="${pnlClass}">${item.status}</span></div>
+              </div>
+              <div class="ops-card-grid">
+                <div><strong>Qty</strong>${item.qty}</div>
+                <div><strong>Realized PnL</strong><span class="${pnlClass}">${Number(item.realized_pnl).toFixed(6)}</span></div>
+                <div><strong>Entry</strong>${Number(item.entry_price).toFixed(4)}</div>
+                <div><strong>Exit</strong>${Number(item.exit_price).toFixed(4)}</div>
+              </div>
+              <div class="ops-card-note">${item.closed_at}</div>
             </div>
           `;
         }).join("");
@@ -1592,10 +2633,23 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             backendLabel ? `backend=${backendLabel}` : "",
           ].filter(Boolean);
           return `
-            <div class="trade-row">
-              <div><strong>Action</strong>${action}${index === 0 ? ' <span class="ok">LATEST</span>' : ""}<br>${event.created_at}</div>
-              <div><strong>Status</strong><span class="${statusClassName}">${event.status}</span><br>${event.source}</div>
-              <div><strong>Message</strong>${event.message}<br>${detailBits.join(" | ") || "no extra detail"}<br><button type="button" class="secondary" data-copy-scheduler-action="${action}" data-copy-scheduler-preset="${preset}">Copy Action</button> ${replayButton}</div>
+            <div class="ops-card">
+              <div class="ops-card-header">
+                <div class="ops-card-title">Action: ${action}${index === 0 ? ' <span class="ok">LATEST</span>' : ""}</div>
+                <div class="chip"><span class="${statusClassName}">${String(event.status || "unknown").toUpperCase()}</span></div>
+              </div>
+              <div class="ops-card-meta">
+                <span class="chip">${event.created_at}</span>
+                <span class="chip">${event.source}</span>
+                ${preset ? `<span class="chip">preset=${preset}</span>` : ""}
+              </div>
+              <div class="ops-card-grid">
+                <div><strong>Message</strong>${event.message}</div>
+                <div><strong>Details</strong>${detailBits.join(" | ") || "no extra detail"}</div>
+              </div>
+              <div class="ops-card-note">
+                <button type="button" class="secondary" data-copy-scheduler-action="${action}" data-copy-scheduler-preset="${preset}">Copy Action</button> ${replayButton}
+              </div>
             </div>
           `;
         }).join("");
@@ -1834,16 +2888,34 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const errorText = job.error_message ? `<br><strong>Error</strong> ${job.error_message}` : "";
           const jobStatusClass = statusClass(job.status === "failed" ? "error" : job.status === "queued" ? "degraded" : "ok");
           return `
-            <div class="strategy-card">
-              <div class="chip"><strong>${job.job_type}</strong>: <span class="${jobStatusClass}">${String(job.status).toUpperCase()}</span></div>
-              <div><strong>Job</strong> #${job.id} | attempts=${job.attempt_count} | created=${job.created_at}</div>
-              <div><strong>Execution Backend</strong> ${job.payload?.execution_backend || "unknown"}</div>
-              <div><strong>Payload</strong> ${payloadText}${errorText}</div>
+            <div class="ops-card">
+              <div class="ops-card-header">
+                <div class="ops-card-title">Job #${job.id} · ${job.job_type}</div>
+                <div class="chip"><span class="${jobStatusClass}">${String(job.status).toUpperCase()}</span></div>
+              </div>
+              <div class="ops-card-meta">
+                <span class="chip">attempts=${job.attempt_count}</span>
+                <span class="chip">created=${job.created_at}</span>
+                <span class="chip">backend=${job.payload?.execution_backend || "unknown"}</span>
+              </div>
+              <div class="ops-card-note"><strong>Payload</strong> ${payloadText}${errorText}</div>
             </div>
           `;
         }).join("") + `
-          <div class="strategy-card">
-            <strong>Queue Debug</strong><br>${summaryBits.join(" | ")}<br>${typeBits.join(" | ")}<br>${latestFailedBit}<br>${latestRetryBit}<br>${incompleteBatchBit}<br>${completedBatchBit}<br>${batchBits}
+          <div class="ops-card">
+            <div class="ops-card-header">
+              <div class="ops-card-title">Queue Debug</div>
+              <div class="chip">summary</div>
+            </div>
+            <div class="ops-card-grid">
+              <div><strong>Health</strong>${summaryBits.join(" | ")}</div>
+              <div><strong>By Type</strong>${typeBits.join(" | ")}</div>
+              <div><strong>Latest Failed</strong>${latestFailedBit}</div>
+              <div><strong>Latest Retry</strong>${latestRetryBit}</div>
+              <div><strong>Incomplete Batch</strong>${incompleteBatchBit}</div>
+              <div><strong>Completed Batch</strong>${completedBatchBit}</div>
+            </div>
+            <div class="ops-card-note">${batchBits}</div>
           </div>
         `;
       }
@@ -1881,7 +2953,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
+        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, soakSummary, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
@@ -1893,6 +2965,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           api("/alerts/status"),
           api("/validation/soak"),
           api("/validation/soak/history?limit=10"),
+          api("/validation/soak/history/summary"),
           api("/strategies"),
           api("/scheduler/strategy"),
           api("/scheduler/symbols"),
@@ -1956,7 +3029,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         updateHeadline(health);
         updateAlerts(alertStatus, auditEvents);
         updatePipelineSummary(auditEvents);
-        updateSoakValidation(soakReport, soakHistory);
+        updateSoakValidation(soakReport, soakHistory, soakSummary);
+        updateQueueMetrics(queueSummary);
         updateRiskConfig(riskConfig);
         updatePortfolio(portfolio);
         updateStrategySummary(strategySummary);
@@ -2345,6 +3419,185 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       scheduleAutoRefresh();
       refreshAll().catch((error) => {
         el("health-json").textContent = `Failed to load data: ${error.message}`;
+      });
+
+      // ---- Tab switching ----
+      document.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tabId = btn.dataset.tab;
+          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+          document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+          btn.classList.add("active");
+          document.getElementById("tab-" + tabId).classList.add("active");
+        });
+      });
+
+      // ---- ML / AI helpers ----
+      function mlTrainSymbol() { return el("ml-train-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function mlTrainTimeframe() { return el("ml-train-timeframe-input")?.value.trim() || "1m"; }
+      function mlRegistrySymbol() { return el("ml-registry-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function mlRegistryTimeframe() { return el("ml-registry-timeframe-input")?.value.trim() || "1m"; }
+      function mlInferSymbol() { return el("ml-infer-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function mlInferTimeframe() { return el("ml-infer-timeframe-input")?.value.trim() || "1m"; }
+      function mlRlSymbol() { return el("ml-rl-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function mlRlTimeframe() { return el("ml-rl-timeframe-input")?.value.trim() || "1m"; }
+
+      function showMlJson(preId, msgId, data, msgText) {
+        const pre = el(preId);
+        const msg = el(msgId);
+        if (pre) { pre.textContent = JSON.stringify(data, null, 2); pre.style.display = "block"; }
+        if (msg) { msg.textContent = msgText; msg.className = "message ok"; }
+      }
+
+      function showMlError(msgId, err) {
+        const msg = el(msgId);
+        if (msg) { msg.textContent = String(err); msg.className = "message bad"; }
+      }
+
+      document.addEventListener("click", async (event) => {
+        const action = event.target.dataset?.action;
+        if (!action?.startsWith("ml-")) return;
+
+        if (action === "ml-train") {
+          try {
+            const epochs = parseInt(el("ml-train-epochs-input")?.value || "50");
+            const r = await api(`/training/jobs`, { method: "POST", body: JSON.stringify({ symbol: mlTrainSymbol(), timeframe: mlTrainTimeframe(), n_epochs: epochs }) });
+            showMlJson("ml-train-json", "ml-train-message", r, `Training job ${r.id} — status: ${r.status}`);
+          } catch (e) { showMlError("ml-train-message", e); }
+        }
+
+        if (action === "ml-train-list") {
+          try {
+            const r = await api(`/training/jobs`);
+            showMlJson("ml-train-json", "ml-train-message", r, `${r.total} training jobs found.`);
+          } catch (e) { showMlError("ml-train-message", e); }
+        }
+
+        if (action === "ml-champion") {
+          try {
+            const r = await api(`/registry/champion/${mlRegistrySymbol()}?timeframe=${mlRegistryTimeframe()}`);
+            showMlJson("ml-registry-json", "ml-registry-message", r, r.champion ? `Champion: ${r.champion.version}` : "No champion.");
+          } catch (e) { showMlError("ml-registry-message", e); }
+        }
+
+        if (action === "ml-registry-list") {
+          try {
+            const r = await api(`/registry/models?symbol=${mlRegistrySymbol()}`);
+            showMlJson("ml-registry-json", "ml-registry-message", r, `${r.total} models found.`);
+          } catch (e) { showMlError("ml-registry-message", e); }
+        }
+
+        if (action === "ml-promote") {
+          const modelId = el("ml-registry-model-id-input")?.value;
+          if (!modelId) { showMlError("ml-registry-message", "Enter a Model ID first."); return; }
+          try {
+            const r = await api(`/registry/models/${modelId}/promote`, { method: "POST" });
+            showMlJson("ml-registry-json", "ml-registry-message", r, `Model ${modelId} promoted to champion.`);
+          } catch (e) { showMlError("ml-registry-message", e); }
+        }
+
+        if (action === "ml-archive") {
+          const modelId = el("ml-registry-model-id-input")?.value;
+          if (!modelId) { showMlError("ml-registry-message", "Enter a Model ID first."); return; }
+          try {
+            const r = await api(`/registry/models/${modelId}/archive`, { method: "POST" });
+            showMlJson("ml-registry-json", "ml-registry-message", r, `Model ${modelId} archived.`);
+          } catch (e) { showMlError("ml-registry-message", e); }
+        }
+
+        if (action === "ml-infer-status") {
+          try {
+            const r = await api(`/inference/status/${mlInferSymbol()}?timeframe=${mlInferTimeframe()}`);
+            showMlJson("ml-infer-json", "ml-infer-message", r, r.ready ? "Inference ready." : "Not ready — no champion or no features.");
+          } catch (e) { showMlError("ml-infer-message", e); }
+        }
+
+        if (action === "ml-infer-predict") {
+          try {
+            const r = await api(`/inference/predict/${mlInferSymbol()}?timeframe=${mlInferTimeframe()}`);
+            showMlJson("ml-infer-json", "ml-infer-message", r, `Signal: ${r.signal}, probability: ${r.probability}`);
+          } catch (e) { showMlError("ml-infer-message", e); }
+        }
+
+        if (action === "ml-rl-train") {
+          try {
+            const episodes = parseInt(el("ml-rl-episodes-input")?.value || "100");
+            const autoPromote = el("ml-rl-auto-promote")?.checked || false;
+            const r = await api(`/training/rl-jobs`, { method: "POST", body: JSON.stringify({ symbol: mlRlSymbol(), timeframe: mlRlTimeframe(), n_episodes: episodes, auto_promote: autoPromote }) });
+            showMlJson("ml-rl-json", "ml-rl-message", r, `RL job done — verdict: ${r.metrics?.verdict ?? r.status}, registry: ${r.registry_status ?? "n/a"}`);
+          } catch (e) { showMlError("ml-rl-message", e); }
+        }
+      });
+
+      // ---- Market Data actions ----
+      document.addEventListener("click", async (event) => {
+        const action = event.target.dataset?.action;
+        if (!action?.startsWith("market-")) return;
+
+        if (action === "market-status-refresh") {
+          try {
+            const rows = await api("/candles/status");
+            const board = el("market-status-board");
+            if (!board) return;
+            if (!rows || rows.length === 0) {
+              board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
+              return;
+            }
+            board.innerHTML = rows.map((r) => {
+              const staleMin = Math.round(r.stale_seconds / 60);
+              const staleLabel = staleMin < 5 ? `<span style="color:var(--ok)">${staleMin}m ago</span>`
+                : staleMin < 30 ? `<span style="color:var(--warn)">${staleMin}m ago</span>`
+                : `<span style="color:var(--bad)">${staleMin}m ago</span>`;
+              const gapLabel = r.has_gaps
+                ? `<span style="color:var(--warn)">⚠ ~${r.gap_count_estimate} gaps</span>`
+                : `<span style="color:var(--ok)">✓ no gaps</span>`;
+              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);">
+                <div><strong>${r.symbol}</strong> <span style="color:var(--muted);font-size:12px">${r.timeframe}</span></div>
+                <div style="font-size:13px;display:flex;gap:16px;align-items:center">
+                  <span style="color:var(--muted)">${r.count} candles</span>
+                  ${staleLabel}
+                  ${gapLabel}
+                </div>
+              </div>`;
+            }).join("");
+          } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+        }
+
+        if (action === "market-fetch") {
+          const raw = el("market-fetch-symbols-input")?.value.trim();
+          const symbols = raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+          try {
+            const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(symbols) });
+            const pre = el("market-fetch-json");
+            const msg = el("market-fetch-message");
+            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
+            if (msg) { msg.textContent = `Fetched ${r.saved_klines ?? 0} new candles.`; msg.className = "message ok"; }
+          } catch (e) { const msg = el("market-fetch-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+        }
+
+        if (action === "market-fs-materialize") {
+          const sym = el("market-fs-symbol-input")?.value.trim() || "BTCUSDT";
+          const tf = el("market-fs-timeframe-input")?.value.trim() || "1m";
+          try {
+            const r = await api("/features/materialize", { method: "POST", body: JSON.stringify({ symbol: sym, timeframe: tf, days: 30 }) });
+            const pre = el("market-fs-json");
+            const msg = el("market-fs-message");
+            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
+            if (msg) { msg.textContent = `Materialized ${r.upserted ?? r.count ?? ""} feature vectors.`; msg.className = "message ok"; }
+          } catch (e) { const msg = el("market-fs-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+        }
+
+        if (action === "market-fs-latest") {
+          const sym = el("market-fs-symbol-input")?.value.trim() || "BTCUSDT";
+          const tf = el("market-fs-timeframe-input")?.value.trim() || "1m";
+          try {
+            const r = await api(`/features/${sym}/latest?timeframe=${tf}`);
+            const pre = el("market-fs-json");
+            const msg = el("market-fs-message");
+            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
+            if (msg) { msg.textContent = "Latest feature vector loaded."; msg.className = "message ok"; }
+          } catch (e) { const msg = el("market-fs-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+        }
       });
     </script>
   </body>

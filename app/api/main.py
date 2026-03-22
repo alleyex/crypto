@@ -46,6 +46,7 @@ from app.core.settings import ORDER_STALENESS_SECONDS
 from app.core.settings import QUEUE_BATCH_STALENESS_SECONDS
 from app.core.settings import RISK_REJECTION_STREAK_THRESHOLD
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.data.candles_service import get_candles_status
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
@@ -57,6 +58,7 @@ from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
 from app.execution.adapter import get_execution_adapter
 from app.pipeline.execution_job import reconcile_orphan_orders
+from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
@@ -125,6 +127,47 @@ from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_history import build_soak_history_summary
 from app.validation.soak_report import build_soak_validation_report
+from app.features.compute import compute_features_for_candles, FEATURE_SET_VERSION
+from app.features.store import (
+    delete_features,
+    get_features as get_feature_vectors,
+    get_latest_feature_vector,
+    materialize_features,
+)
+from app.training.dataset import (
+    FEATURE_NAMES,
+    build_dataset,
+    dataset_summary,
+    train_test_split as training_split,
+)
+from app.training.trainer import (
+    evaluate as evaluate_model,
+    model_to_dict,
+    predict,
+    train as train_model,
+)
+from app.training.job_service import (
+    create_job as create_training_job,
+    get_job as get_training_job,
+    list_jobs as list_training_jobs,
+    update_job as update_training_job,
+)
+from app.registry.registry_service import (
+    archive_model,
+    get_champion,
+    get_model as get_registry_model,
+    list_models as list_registry_models,
+    list_versions as list_registry_versions,
+    promote_model,
+    register_model,
+    update_notes as update_registry_notes,
+)
+from app.inference.service import (
+    get_inference_status,
+    predict_batch as inference_predict_batch,
+    predict_latest as inference_predict_latest,
+)
+from app.rl.experiment import run_rl_experiment
 
 
 @asynccontextmanager
@@ -785,6 +828,32 @@ def candles(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
     try:
         return get_candles(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+@app.get("/candles/status")
+def candles_status() -> list[dict]:
+    """Return per-(symbol, timeframe) candle statistics: count, latest, staleness, gap estimate."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_candles_status(connection)
+    finally:
+        connection.close()
+
+
+@app.post("/market-data/fetch")
+def market_data_fetch(symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Trigger an independent market data fetch without running the full pipeline.
+
+    Optionally pass a list of symbols; defaults to active symbols from scheduler.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        result = run_market_data_job(connection, symbol_names=symbols)
+        return {"status": "ok", **result}
     finally:
         connection.close()
 
@@ -1955,5 +2024,816 @@ def apply_best_sweep_params(
             },
         )
         return result
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Feature Store endpoints
+# ---------------------------------------------------------------------------
+
+class MaterializeFeaturesRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    days: Optional[int] = None  # if set, only use candles from the last N days
+
+
+@app.post("/features/materialize")
+def materialize_features_endpoint(body: MaterializeFeaturesRequest) -> Dict[str, Any]:
+    """Compute and persist v1 feature vectors from stored candles.
+
+    Loads candles for symbol/timeframe (optionally filtered to the last ``days``
+    days), computes the full feature set, and upserts every row into the
+    ``feature_vectors`` table.  Safe to call repeatedly — idempotent.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        start_iso = _backtest_start_iso(body.days) if body.days else None
+        candles = load_candles_from_db(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            start=start_iso,
+        )
+        if not candles:
+            return {
+                "status": "ok",
+                "symbol": body.symbol,
+                "timeframe": body.timeframe,
+                "candle_count": 0,
+                "vectors_upserted": 0,
+                "feature_set": FEATURE_SET_VERSION,
+            }
+        count = materialize_features(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            candles=candles,
+        )
+        return {
+            "status": "ok",
+            "symbol": body.symbol,
+            "timeframe": body.timeframe,
+            "candle_count": len(candles),
+            "vectors_upserted": count,
+            "feature_set": FEATURE_SET_VERSION,
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/features/compute")
+def compute_features_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    days: Optional[int] = Query(default=None, ge=1),
+    limit: int = Query(default=100, ge=1, le=5000),
+) -> Dict[str, Any]:
+    """Compute features on-the-fly from stored candles without persisting.
+
+    Returns the last ``limit`` feature vectors (newest last).
+    Use ``days`` to restrict the candle window.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        start_iso = _backtest_start_iso(days) if days else None
+        candles = load_candles_from_db(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start_iso,
+        )
+        if not candles:
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "candle_count": 0,
+                "feature_set": FEATURE_SET_VERSION,
+                "vectors": [],
+            }
+        vectors = compute_features_for_candles(candles)
+        trimmed = vectors[-limit:]
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "candle_count": len(candles),
+            "feature_set": FEATURE_SET_VERSION,
+            "vectors": trimmed,
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/features/{symbol}/latest")
+def get_latest_stored_feature(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+) -> Dict[str, Any]:
+    """Return the most recent persisted feature vector for a symbol/timeframe.
+
+    Returns 404 if no features have been materialized yet.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        fv = get_latest_feature_vector(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+        )
+        if fv is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No stored features for symbol={symbol!r} timeframe={timeframe!r}.",
+            )
+        return fv
+    finally:
+        connection.close()
+
+
+@app.get("/features/{symbol}")
+def get_stored_features(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+    start_time: Optional[int] = Query(default=None, description="epoch-ms lower bound"),
+    end_time: Optional[int] = Query(default=None, description="epoch-ms upper bound"),
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    ascending: bool = True,
+) -> Dict[str, Any]:
+    """Return paginated persisted feature vectors for a symbol/timeframe."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_feature_vectors(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            offset=offset,
+            ascending=ascending,
+        )
+    finally:
+        connection.close()
+
+
+@app.delete("/features/{symbol}")
+def delete_stored_features(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+) -> Dict[str, Any]:
+    """Delete all stored feature vectors for a symbol/timeframe/feature_set."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        deleted = delete_features(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+        )
+        return {
+            "status": "ok",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "feature_set": feature_set,
+            "deleted": deleted,
+        }
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Training pipeline endpoints
+# ---------------------------------------------------------------------------
+
+class TrainingJobRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    feature_set: str = FEATURE_SET_VERSION
+    test_ratio: float = Field(default=0.2, ge=0.05, le=0.5)
+    n_epochs: int = Field(default=100, ge=1, le=2000)
+    learning_rate: float = Field(default=0.01, gt=0.0)
+    batch_size: int = Field(default=32, ge=1)
+    l2_lambda: float = Field(default=1e-4, ge=0.0)
+    seed: int = Field(default=42)
+
+
+@app.post("/training/jobs")
+def run_training_job(body: TrainingJobRequest) -> Dict[str, Any]:
+    """Train a logistic regression model on stored feature vectors.
+
+    Loads all materialised feature vectors for symbol/timeframe/feature_set,
+    builds a supervised dataset, splits it chronologically, trains, evaluates,
+    and persists the result as a training_jobs row.
+
+    Returns the complete training job record.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+
+        hyperparams: Dict[str, Any] = {
+            "test_ratio": body.test_ratio,
+            "n_epochs": body.n_epochs,
+            "learning_rate": body.learning_rate,
+            "batch_size": body.batch_size,
+            "l2_lambda": body.l2_lambda,
+            "seed": body.seed,
+        }
+        job_id = create_training_job(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            feature_set=body.feature_set,
+            params=hyperparams,
+        )
+
+        # Mark running
+        from datetime import datetime, timezone as _tz
+        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        update_training_job(connection, job_id, status="running", started_at=started_at)
+
+        try:
+            # Load feature vectors
+            fv_result = get_feature_vectors(
+                connection,
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                feature_set=body.feature_set,
+                limit=100_000,
+            )
+            vectors = fv_result.get("vectors", [])
+            if len(vectors) < 10:
+                raise ValueError(
+                    f"Insufficient feature vectors ({len(vectors)}) for training. "
+                    "Run POST /features/materialize first."
+                )
+
+            # Build dataset
+            X_all, y_all, times_all = build_dataset(vectors)
+            if len(X_all) < 10:
+                raise ValueError(
+                    f"Dataset has only {len(X_all)} labelled rows after building. "
+                    "Need at least 10."
+                )
+
+            X_train, y_train, _, X_test, y_test, _ = training_split(
+                X_all, y_all, times_all, test_ratio=body.test_ratio
+            )
+
+            dataset_stats: Dict[str, Any] = {
+                "n_total": len(X_all),
+                "n_train": len(X_train),
+                "n_test": len(X_test),
+                "feature_names": FEATURE_NAMES,
+                "train_balance": dataset_summary(y_train),
+                "test_balance": dataset_summary(y_test),
+            }
+
+            # Train
+            train_result = train_model(
+                X_train, y_train,
+                n_features=len(FEATURE_NAMES),
+                learning_rate=body.learning_rate,
+                n_epochs=body.n_epochs,
+                batch_size=body.batch_size,
+                l2_lambda=body.l2_lambda,
+                seed=body.seed,
+            )
+
+            # Evaluate
+            train_preds = predict(train_result["weights"], train_result["bias"], X_train)
+            test_preds = predict(train_result["weights"], train_result["bias"], X_test)
+
+            metrics: Dict[str, Any] = {
+                "train": evaluate_model(y_train, train_preds),
+                "test": evaluate_model(y_test, test_preds),
+                "final_train_loss": train_result["final_train_loss"],
+            }
+
+            model_dict = model_to_dict(
+                train_result,
+                feature_names=FEATURE_NAMES,
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                feature_set=body.feature_set,
+            )
+
+            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            update_training_job(
+                connection,
+                job_id,
+                status="done",
+                dataset=dataset_stats,
+                metrics=metrics,
+                model=model_dict,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+
+        except Exception as exc:
+            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            update_training_job(
+                connection,
+                job_id,
+                status="failed",
+                error=str(exc),
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+
+        job = get_training_job(connection, job_id)
+        return job or {}
+    finally:
+        connection.close()
+
+
+@app.get("/training/jobs")
+def list_training_jobs_endpoint(
+    symbol: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    """Return paginated training jobs, newest first."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return list_training_jobs(connection, symbol=symbol, status=status, limit=limit, offset=offset)
+    finally:
+        connection.close()
+
+
+@app.get("/training/jobs/{job_id}")
+def get_training_job_endpoint(job_id: int) -> Dict[str, Any]:
+    """Return a single training job by id."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        job = get_training_job(connection, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Training job {job_id} not found.")
+        return job
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Model Registry endpoints
+# ---------------------------------------------------------------------------
+
+class RegisterModelRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    feature_set: str = FEATURE_SET_VERSION
+    training_job_id: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class UpdateModelNotesRequest(BaseModel):
+    notes: str
+
+
+@app.post("/registry/models")
+def register_model_endpoint(body: RegisterModelRequest) -> Dict[str, Any]:
+    """Register a model version from a completed training job.
+
+    Copies the model weights and metrics from the training job into the
+    registry as a new ``candidate``.  The ``training_job_id`` must point to
+    a job with ``status = 'done'``.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        if body.training_job_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="training_job_id is required.",
+            )
+        job = get_training_job(connection, body.training_job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Training job {body.training_job_id} not found.",
+            )
+        if job["status"] != "done":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Training job {body.training_job_id} has status={job['status']!r}. "
+                    "Only 'done' jobs can be registered."
+                ),
+            )
+        model_dict = job.get("model")
+        if not model_dict:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Training job {body.training_job_id} has no model artifact.",
+            )
+        model_id = register_model(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            feature_set=body.feature_set,
+            model=model_dict,
+            training_job_id=body.training_job_id,
+            metrics=job.get("metrics"),
+            notes=body.notes,
+        )
+        return get_registry_model(connection, model_id) or {}
+    finally:
+        connection.close()
+
+
+@app.get("/registry/models")
+def list_registry_models_endpoint(
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    feature_set: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    """Return paginated model registry entries, newest first."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return list_registry_models(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+    finally:
+        connection.close()
+
+
+@app.get("/registry/models/{model_id}")
+def get_registry_model_endpoint(model_id: int) -> Dict[str, Any]:
+    """Return a single model registry entry by id."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        model = get_registry_model(connection, model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found.")
+        return model
+    finally:
+        connection.close()
+
+
+@app.get("/registry/versions/{symbol}")
+def list_registry_versions_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+) -> List[Dict[str, Any]]:
+    """Return all versions for a symbol/timeframe/feature_set, newest first."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return list_registry_versions(connection, symbol=symbol, timeframe=timeframe, feature_set=feature_set)
+    finally:
+        connection.close()
+
+
+@app.post("/registry/models/{model_id}/promote")
+def promote_model_endpoint(model_id: int) -> Dict[str, Any]:
+    """Promote a model to champion.
+
+    Archives the current champion for the same (symbol, timeframe, feature_set).
+    Can be used for rollback by promoting any previous candidate or archived model.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        model = get_registry_model(connection, model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found.")
+        result = promote_model(connection, model_id)
+        return result or {}
+    finally:
+        connection.close()
+
+
+@app.post("/registry/models/{model_id}/archive")
+def archive_model_endpoint(model_id: int) -> Dict[str, Any]:
+    """Archive a model, removing it from serving."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        model = get_registry_model(connection, model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found.")
+        result = archive_model(connection, model_id)
+        return result or {}
+    finally:
+        connection.close()
+
+
+@app.patch("/registry/models/{model_id}")
+def update_registry_model_notes(
+    model_id: int,
+    body: UpdateModelNotesRequest,
+) -> Dict[str, Any]:
+    """Update the notes field on a registry entry."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        model = get_registry_model(connection, model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found.")
+        result = update_registry_notes(connection, model_id, body.notes)
+        return result or {}
+    finally:
+        connection.close()
+
+
+@app.get("/registry/champion/{symbol}")
+def get_champion_model_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+) -> Dict[str, Any]:
+    """Return the current champion model for a symbol/timeframe/feature_set.
+
+    Returns 404 if no champion has been promoted yet.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        model = get_champion(connection, symbol=symbol, timeframe=timeframe, feature_set=feature_set)
+        if model is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No champion model for symbol={symbol!r} timeframe={timeframe!r}.",
+            )
+        return model
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Inference service endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/inference/status/{symbol}")
+def inference_status_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+) -> Dict[str, Any]:
+    """Check whether inference is ready for a symbol.
+
+    Returns ``ready=true`` when a champion model has been promoted AND at
+    least one feature vector has been materialised for the symbol.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_inference_status(connection, symbol=symbol, timeframe=timeframe, feature_set=feature_set)
+    finally:
+        connection.close()
+
+
+@app.get("/inference/predict/{symbol}")
+def inference_predict_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+    threshold: float = Query(default=0.5, ge=0.0, le=1.0),
+) -> Dict[str, Any]:
+    """Return a directional prediction for the latest candle.
+
+    Uses the champion model from the registry and the most recently
+    materialised feature vector.  Returns 404 when no champion model or
+    no feature vectors are available.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        result = inference_predict_latest(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+            threshold=threshold,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Cannot produce a prediction for symbol={symbol!r}: "
+                    "no champion model or no materialised feature vectors. "
+                    "Run POST /registry/models/{id}/promote and "
+                    "POST /features/materialize first."
+                ),
+            )
+        return result.to_dict()
+    finally:
+        connection.close()
+
+
+@app.get("/inference/batch/{symbol}")
+def inference_batch_endpoint(
+    symbol: str,
+    timeframe: str = "1m",
+    feature_set: str = FEATURE_SET_VERSION,
+    threshold: float = Query(default=0.5, ge=0.0, le=1.0),
+    start_time: Optional[int] = Query(default=None, description="epoch-ms lower bound"),
+    end_time: Optional[int] = Query(default=None, description="epoch-ms upper bound"),
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    """Return batch predictions over stored feature vectors.
+
+    Requires a champion model and materialised feature vectors.
+    Supports the same pagination and time-range filters as
+    GET /features/{symbol}.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return inference_predict_batch(
+            connection,
+            symbol=symbol,
+            timeframe=timeframe,
+            feature_set=feature_set,
+            threshold=threshold,
+            limit=limit,
+            offset=offset,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# RL experiment endpoint
+# ---------------------------------------------------------------------------
+
+class RLJobRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    feature_set: str = FEATURE_SET_VERSION
+    n_episodes: int = Field(default=200, ge=1, le=5000)
+    learning_rate: float = Field(default=1e-3, gt=0.0)
+    gamma: float = Field(default=1.0, ge=0.0, le=1.0)
+    test_ratio: float = Field(default=0.2, ge=0.05, le=0.5)
+    seed: int = Field(default=42)
+    use_champion: bool = True  # compare against registry champion if available
+    auto_promote: bool = False  # immediately promote RL agent to champion in registry
+
+
+@app.post("/training/rl-jobs")
+def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
+    """Train a REINFORCE agent and benchmark it against buy-and-hold
+    (and optionally the supervised champion model).
+
+    Requires materialised feature vectors (POST /features/materialize first).
+    Persists results as a training_jobs row with job_type='rl'.
+    Returns the complete job record including comparison verdict.
+    """
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+
+        hyperparams: Dict[str, Any] = {
+            "job_type": "rl",
+            "n_episodes": body.n_episodes,
+            "learning_rate": body.learning_rate,
+            "gamma": body.gamma,
+            "test_ratio": body.test_ratio,
+            "seed": body.seed,
+            "use_champion": body.use_champion,
+        }
+        job_id = create_training_job(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            feature_set=body.feature_set,
+            params=hyperparams,
+        )
+
+        from datetime import datetime, timezone as _tz
+        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        update_training_job(connection, job_id, status="running", started_at=started_at)
+
+        try:
+            fv_result = get_feature_vectors(
+                connection,
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                feature_set=body.feature_set,
+                limit=100_000,
+            )
+            vectors = fv_result.get("vectors", [])
+            if len(vectors) < 10:
+                raise ValueError(
+                    f"Insufficient feature vectors ({len(vectors)}). "
+                    "Run POST /features/materialize first."
+                )
+
+            # Optionally load champion weights for comparison
+            sup_weights: Optional[List] = None
+            sup_bias: Optional[float] = None
+            if body.use_champion:
+                champion = get_champion(
+                    connection,
+                    symbol=body.symbol,
+                    timeframe=body.timeframe,
+                    feature_set=body.feature_set,
+                )
+                if champion and champion.get("model"):
+                    sup_weights = champion["model"].get("weights")
+                    sup_bias = champion["model"].get("bias")
+
+            result = run_rl_experiment(
+                vectors=vectors,
+                n_episodes=body.n_episodes,
+                learning_rate=body.learning_rate,
+                gamma=body.gamma,
+                test_ratio=body.test_ratio,
+                seed=body.seed,
+                supervised_weights=sup_weights,
+                supervised_bias=sup_bias,
+            )
+
+            dataset_stats = result["dataset"]
+            metrics: Dict[str, Any] = {
+                "test_rl": result["test_rl"],
+                "test_bnh": result["test_bnh"],
+                "test_supervised": result["test_supervised"],
+                "verdict": result["verdict"],
+                "final_train_loss": result["train"]["final_loss"],
+            }
+            model_dict: Dict[str, Any] = {
+                **result["agent"],
+                "symbol": body.symbol,
+                "timeframe": body.timeframe,
+                "feature_set": body.feature_set,
+                "n_episodes": body.n_episodes,
+                "train_loss_history": result["train"]["loss_history"],
+            }
+
+            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            update_training_job(
+                connection,
+                job_id,
+                status="done",
+                dataset=dataset_stats,
+                metrics=metrics,
+                model=model_dict,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+
+            # Auto-register RL agent in model registry
+            registry_model_id = register_model(
+                connection,
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                feature_set=body.feature_set,
+                model=model_dict,
+                training_job_id=job_id,
+                metrics=metrics,
+                notes=f"REINFORCE agent, verdict={result['verdict']}, episodes={body.n_episodes}",
+            )
+            registry_status = "candidate"
+            if body.auto_promote:
+                promote_model(connection, registry_model_id)
+                registry_status = "champion"
+
+        except Exception as exc:
+            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            update_training_job(
+                connection,
+                job_id,
+                status="failed",
+                error=str(exc),
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            registry_model_id = None
+            registry_status = None
+
+        job = get_training_job(connection, job_id) or {}
+        job["registry_model_id"] = registry_model_id
+        job["registry_status"] = registry_status
+        return job
     finally:
         connection.close()

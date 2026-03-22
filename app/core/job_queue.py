@@ -14,6 +14,7 @@ from app.execution.adapter import get_execution_adapter_name
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.risk_job import run_risk_job
+from app.pipeline.runtime_summary import record_pipeline_runtime
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
 
@@ -522,6 +523,18 @@ def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None)
     jobs: list[dict[str, Any]] = [dict(current_result["job"])]
     steps: list[dict[str, Any]] = list((current_result.get("result") or {}).get("steps") or [])
     execution_backend_status = current_result.get("execution_backend_status")
+    initial_job_record = get_job(connection, int(current_result["job"]["id"])) if current_result.get("job") else None
+    initial_job_payload = dict((initial_job_record or {}).get("payload") or (current_result.get("job") or {}).get("payload") or {})
+    pipeline_context: dict[str, Any] = {
+        "strategy_name": str(
+            initial_job_payload.get("strategy_name")
+            or ((initial_job_payload.get("strategy_names") or [DEFAULT_STRATEGY_NAME])[0])
+        ),
+        "strategy_names": list(dict.fromkeys(initial_job_payload.get("strategy_names") or [])),
+        "requested_symbol_names": list(dict.fromkeys(initial_job_payload.get("symbol_names") or [])),
+    }
+    if not pipeline_context["strategy_names"] and pipeline_context["strategy_name"]:
+        pipeline_context["strategy_names"] = [pipeline_context["strategy_name"]]
 
     while current_result.get("remaining_job_types"):
         next_result = run_next_pipeline_batch(connection) if requested_batch_id is None else run_next_pipeline_batch(connection, batch_id=requested_batch_id)
@@ -529,6 +542,16 @@ def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None)
             next_result["batch_id"] = batch_id
             next_result["completed_jobs"] = jobs
             next_result["steps"] = steps
+            record_pipeline_runtime(
+                {
+                    **pipeline_context,
+                    "steps": steps,
+                    "execution_backend_status": execution_backend_status,
+                },
+                status="failed",
+                message=f"Pipeline batch failed during {str(next_result.get('job', {}).get('job_type') or 'unknown')} job.",
+                source="pipeline",
+            )
             return next_result
         if next_result.get("batch_id") != batch_id:
             raise RuntimeError(
@@ -539,7 +562,7 @@ def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None)
         execution_backend_status = next_result.get("execution_backend_status", execution_backend_status)
         current_result = next_result
 
-    return {
+    result = {
         "status": "completed",
         "batch_id": batch_id,
         "jobs": jobs,
@@ -552,6 +575,16 @@ def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None)
         "execution_backend_status": execution_backend_status,
         "remaining_job_types": [],
     }
+    record_pipeline_runtime(
+        {
+            **pipeline_context,
+            **dict(result["result"]),
+        },
+        status="completed",
+        message="Pipeline run completed.",
+        source="pipeline",
+    )
+    return result
 
 
 def enqueue_and_run_pipeline_batch(
@@ -569,6 +602,11 @@ def enqueue_and_run_pipeline_batch(
         symbol_names=symbol_names,
         payload=payload,
     )
+    pipeline_context: dict[str, Any] = {
+        "strategy_name": strategy_name or (strategy_names[0] if strategy_names else DEFAULT_STRATEGY_NAME),
+        "strategy_names": list(dict.fromkeys(strategy_names or ([strategy_name] if strategy_name else []))),
+        "requested_symbol_names": list(dict.fromkeys(symbol_names or [])),
+    }
     executed_jobs: list[dict[str, Any]] = []
     steps: list[dict[str, Any]] = []
     execution_backend_status = None
@@ -582,11 +620,21 @@ def enqueue_and_run_pipeline_batch(
             job_result["jobs"] = executed_jobs
             job_result["steps"] = steps
             job_result["enqueued_jobs"] = jobs
+            record_pipeline_runtime(
+                {
+                    **pipeline_context,
+                    "steps": steps,
+                    "execution_backend_status": execution_backend_status,
+                },
+                status="failed",
+                message=f"Pipeline batch failed during {item['job_type']} job.",
+                source="pipeline",
+            )
             return job_result
         executed_jobs.append(dict(job_result["job"]))
         steps.extend(list((job_result.get("result") or {}).get("steps") or []))
         execution_backend_status = job_result.get("execution_backend_status", execution_backend_status)
-    return {
+    result = {
         "status": "completed",
         "batch_id": jobs[0]["batch_id"] if jobs else None,
         "jobs": executed_jobs,
@@ -600,6 +648,16 @@ def enqueue_and_run_pipeline_batch(
         "remaining_job_types": [],
         "enqueued_jobs": jobs,
     }
+    record_pipeline_runtime(
+        {
+            **pipeline_context,
+            **dict(result["result"]),
+        },
+        status="completed",
+        message="Pipeline run completed.",
+        source="pipeline",
+    )
+    return result
 
 
 def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) -> dict[str, Any]:

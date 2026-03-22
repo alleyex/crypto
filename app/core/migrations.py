@@ -394,6 +394,83 @@ def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN equity_curve_json TEXT;")
 
 
+def _create_feature_vectors_table(connection: DBConnection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feature_vectors (
+            id            INTEGER PRIMARY KEY,
+            symbol        TEXT    NOT NULL,
+            timeframe     TEXT    NOT NULL,
+            open_time     INTEGER NOT NULL,
+            feature_set   TEXT    NOT NULL DEFAULT 'v1',
+            features_json TEXT    NOT NULL,
+            created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (symbol, timeframe, open_time, feature_set)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feature_vectors_symbol_tf"
+        " ON feature_vectors (symbol, timeframe, feature_set, open_time);"
+    )
+
+
+def _create_training_jobs_table(connection: DBConnection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS training_jobs (
+            id           INTEGER PRIMARY KEY,
+            symbol       TEXT    NOT NULL,
+            timeframe    TEXT    NOT NULL,
+            feature_set  TEXT    NOT NULL DEFAULT 'v1',
+            status       TEXT    NOT NULL DEFAULT 'pending',
+            params_json  TEXT,
+            dataset_json TEXT,
+            metrics_json TEXT,
+            model_json   TEXT,
+            error        TEXT,
+            started_at   TEXT,
+            finished_at  TEXT,
+            created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_training_jobs_symbol"
+        " ON training_jobs (symbol, status, created_at);"
+    )
+
+
+def _add_training_jobs_job_type(connection: DBConnection) -> None:
+    if table_exists(connection, "training_jobs") and "job_type" not in get_table_columns(connection, "training_jobs"):
+        connection.execute("ALTER TABLE training_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'supervised';")
+
+
+def _create_model_registry_table(connection: DBConnection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_registry (
+            id              INTEGER PRIMARY KEY,
+            symbol          TEXT    NOT NULL,
+            timeframe       TEXT    NOT NULL,
+            feature_set     TEXT    NOT NULL DEFAULT 'v1',
+            training_job_id INTEGER,
+            version         TEXT    NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'candidate',
+            model_json      TEXT    NOT NULL,
+            metrics_json    TEXT,
+            notes           TEXT,
+            promoted_at     TEXT,
+            created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_model_registry_symbol"
+        " ON model_registry (symbol, timeframe, feature_set, status, created_at);"
+    )
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -420,6 +497,10 @@ MIGRATIONS: list[Migration] = [
     ("023_add_backtest_runs_promoted_at", _add_backtest_runs_promoted_at),
     ("024_add_backtest_runs_wf_columns", _add_backtest_runs_wf_columns),
     ("025_add_backtest_runs_equity_curve", _add_backtest_runs_equity_curve),
+    ("026_create_feature_vectors_table", _create_feature_vectors_table),
+    ("027_create_training_jobs_table", _create_training_jobs_table),
+    ("028_create_model_registry_table", _create_model_registry_table),
+    ("029_add_training_jobs_job_type", _add_training_jobs_job_type),
 ]
 
 

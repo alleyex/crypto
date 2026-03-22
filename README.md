@@ -262,12 +262,12 @@ Docker Compose runtime validation status:
 
 - verified on macOS Apple Silicon with Docker Desktop
 - `api` and `scheduler` containers both start successfully
-- split worker services now also exist behind the `split-workers` Compose profile: `data-worker`, `strategy-worker`, and `execution-worker`
-- split worker services can now run at different intervals via `CRYPTO_DATA_INTERVAL`, `CRYPTO_STRATEGY_INTERVAL`, and `CRYPTO_EXECUTION_INTERVAL`
+- split worker services now also exist behind the `split-workers` Compose profile: `data-worker`, `strategy-worker`, `risk-worker`, and `execution-worker`
+- split worker services can now run at different intervals via `CRYPTO_DATA_INTERVAL`, `CRYPTO_STRATEGY_INTERVAL`, `CRYPTO_RISK_INTERVAL`, and `CRYPTO_EXECUTION_INTERVAL`
 - pipeline and strategy workers can now select a registered strategy via `CRYPTO_STRATEGY_NAME` (currently `ma_cross` or `momentum_3bar`)
 - split worker scheduler modes can also run in queue-dispatch or queue-drain mode via `python scripts/run_scheduler.py --queue-dispatch|--queue-drain`
-- admin now exposes queue controls for enqueueing strategy jobs and draining strategy/execution jobs
-- admin queue controls also support retrying the latest failed strategy or execution job
+- admin now exposes queue controls for enqueueing strategy jobs and draining strategy/risk/execution jobs
+- admin queue controls also support retrying the latest failed strategy, risk, or execution job
 - admin queue summary now exposes per-job-type counts, failure/attempt metrics, retry counts, failure streaks, per-job-type latest failed/retried markers, recent terminal status trends/trend strings, overall latest failed/retried job details, and filterable recent jobs
 - health/admin now also expose `broker_protection`, which can degrade on execution-backend capability mismatches, stale non-terminal orders, and repeated risk rejections
 - broker protection now emits `reason_code`, `severity`, and `recommended_action` so alerts and admin can distinguish backend, stale-order, and reject-streak cases
@@ -434,7 +434,7 @@ Control endpoints:
 - `POST /queue/jobs/{job_id}/retry`
 - `POST /execution/backend`
 - `GET /scheduler/logs?lines=20`
-- `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|execution-only`
+- `GET /scheduler/logs?lines=20&mode=all|pipeline|market-data-only|strategy-only|risk-only|execution-only`
 - `GET /kill-switch/status`
 - `POST /kill-switch/enable`
 - `POST /kill-switch/disable`
@@ -505,7 +505,7 @@ curl -s -X POST http://127.0.0.1:8000/alerts/test \
   -d '{"message":"Crypto alert test"}'
 ```
 
-Queued pipeline batches now carry a shared `batch_id`, `/queue/summary` / admin queue debug show recent batch status snapshots plus the latest incomplete/completed batch, `POST /queue/jobs/run-next-pipeline` still drains the next queued step from the oldest pending batch, and `POST /pipeline/run` now supports `orchestration=queue_batch|queue_dispatch|queue_drain`, with `queue_batch` acting as the default queue-native main path.
+Queued pipeline batches now carry a shared `batch_id` and execute in dependency order `market_data -> strategy -> risk -> execution`. `/queue/summary` / admin queue debug show recent batch status snapshots plus the latest incomplete/completed batch, `POST /queue/jobs/run-next-pipeline` still drains the next queued step from the oldest pending batch, and `POST /pipeline/run` now supports `orchestration=queue_batch|queue_dispatch|queue_drain`, with `queue_batch` acting as the default queue-native main path.
 
 `GET /health` returns:
 
@@ -580,6 +580,7 @@ Logs:
 - Split worker logs:
   - `logs/data-worker.log`
   - `logs/strategy-worker.log`
+  - `logs/risk-worker.log`
   - `logs/execution-worker.log`
 
 ## Current Limitations
@@ -590,7 +591,7 @@ Logs:
 - Multi-strategy runtime currently validated for `ma_cross` and `momentum_3bar`
 - Paper trading only
 - Execution backend runtime control now supports `paper`, `noop`, `simulated_live`, and `binance`; `binance` can perform signed Spot account connectivity checks and live order routing when testnet credentials are configured
-- A persistent `job_queue` abstraction now exists, and split worker scheduler modes can now dispatch to or drain from it, but the full runtime is not yet queue-native end to end
+- A persistent `job_queue` abstraction now exists, and split worker scheduler modes can now dispatch to or drain from it through the full `market_data -> strategy -> risk -> execution` path
 
 ## Next Recommended Work
 

@@ -170,30 +170,30 @@
   交付物：tracking system。
   備註：全六組完成（migrations 021-025）；涵蓋 experiment_name 分組、tags/notes、compare、leaderboard、champion promote/get、WF fold grouping + 聚合統計、equity curve 持久化與查詢。409 tests 通過。（2026-03-21）
 
-- [ ] 建立訓練流程
-  目標：讓訓練可重現。
-  交付物：training jobs。
-  備註：不要進入 live path。
-
-- [ ] 建立 feature store
+- [x] 建立 feature store
   目標：保持 train/live 特徵一致。
   交付物：feature layer。
-  備註：避免 training-serving skew。
+  備註：`app/features/compute.py`（v1 特徵集：MA/RSI/MACD/BBands/returns/volatility）、`app/features/store.py`（upsert + 分頁查詢）、migration 026、5 個 API endpoints、55 tests 通過。（2026-03-21）
 
-- [ ] 建立 model registry
+- [x] 建立訓練流程
+  目標：讓訓練可重現。
+  交付物：training jobs。
+  備註：`app/training/dataset.py`（build\_dataset + chronological split）、`app/training/trainer.py`（pure-Python logistic regression，無外部 ML 套件）、`app/training/job_service.py`（training\_jobs 表 + CRUD）、migration 027、`POST /training/jobs`、45 tests 通過。（2026-03-21）
+
+- [x] 建立 model registry
   目標：控管模型版本。
   交付物：registry。
-  備註：必須支援 rollback。
+  備註：`app/registry/registry_service.py`（candidate/champion/archived 狀態機、promote/archive/rollback）、migration 028、7 個 API endpoints（含 /registry/champion/{symbol}）、38 tests 通過。（2026-03-21）
 
-- [ ] 建立 inference service
+- [x] 建立 inference service
   目標：線上提供已核准模型推論。
   交付物：inference service。
-  備註：只做推論，不做訓練。
+  備註：`app/inference/service.py`（predict\_latest/predict\_batch/get\_inference\_status，champion-only serving）、3 個 API endpoints、34 tests 通過。（2026-03-21）
 
-- [ ] 進行 RL 實驗
+- [x] 進行 RL 實驗
   目標：驗證 RL 是否值得投入。
   交付物：RL strategy report。
-  備註：最後再做。
+  備註：`app/rl/environment.py`（TradingEnv）、`app/rl/agent.py`（REINFORCE policy gradient，pure Python）、`app/rl/experiment.py`（run\_rl\_experiment，含 RL vs BuyAndHold vs Supervised 三基準比較 + verdict）、migration 029、`POST /training/rl-jobs`、37 tests 通過。（2026-03-21）
 
 ## Stage 4 實驗追蹤細項
 
@@ -293,6 +293,43 @@
 - [x] 補 broker / order-level alerting 與保護機制
   目標：讓 operational alerts 從 queue / worker 層延伸到下單與 broker 層。
   備註：已完成 `unfilled_order_count`、`latest_fill` 進入 `_pipeline_check`，`_broker_protection_check` 加入 unfilled order degraded 條件，alert message 含 unfilled_orders/latest_fill_price。（2026-03-20）
+
+## Stage 5 自動重訓管線（Auto-Retrain Pipeline）
+
+> 目標：將 ML 鏈從「手動實驗」升級為「持續學習」，讓模型隨新資料自動更新。
+
+- [ ] **Step 1：Retrain Config（觸發條件設定）**
+  目標：定義何時觸發重訓、用什麼指標決定是否 promote。
+  交付物：`retrain_configs` 表（migration 030）、`GET/POST /retrain/config/{symbol}` API。
+  欄位：`min_new_candles`（預設 100）、`promote_metric`（accuracy/f1/sharpe）、`min_improve_pct`（預設 1%）。
+
+- [ ] **Step 2：Retrain Job 核心邏輯**
+  目標：實作完整自動重訓流程。
+  交付物：`app/pipeline/retrain_job.py`。
+  流程：`materialize_features → build_dataset + train → evaluate vs champion → register_model → promote if better`。
+  備註：新模型未達門檻時仍存入 registry as candidate（保留記錄）。
+
+- [ ] **Step 3：整合 Job Queue**
+  目標：讓 retrain 可排入 job queue，支援 retry / fail / audit。
+  交付物：`job_type='retrain'` 加入 job queue、`run_retrain_job()` 可由 worker 執行。
+
+- [ ] **Step 4：觸發端點**
+  目標：提供 API 讓 scheduler 或手動呼叫觸發重訓。
+  交付物：`POST /retrain/trigger`（檢查新 candle 數量，達閾值則 enqueue）、`GET /retrain/status/{symbol}`（回傳上次訓練時間、距觸發還差幾根）。
+
+- [ ] **Step 5：Scheduler 整合**
+  目標：讓重訓自動發生，不需人工介入。
+  交付物：兩種模式均支援：
+  - 資料驅動：market_data job 完成後串接 retrain job（`depends_on_job_id`）。
+  - 時間驅動：scheduler 定期呼叫 `POST /retrain/trigger`。
+
+- [ ] **Step 6：告警整合**
+  目標：promote / 失敗時即時通知。
+  交付物：promote 成功發 Telegram alert（`model_promoted`）；訓練失敗沿用現有 alert 機制；無改善僅寫 audit log。
+
+- [ ] **Step 7：測試**
+  目標：確保重訓流程正確、regression 無誤。
+  交付物：`tests/test_retrain.py`，涵蓋：完整流程、新模型較差時不 promote、trigger skipped/enqueued 邏輯、scheduler 整合。
 
 ## 里程碑
 

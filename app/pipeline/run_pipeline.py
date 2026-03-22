@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional
 
-from app.audit.service import log_event
 from app.core.db import DB_FILE, get_connection
 from app.core.db import get_database_label
 from app.core.job_queue import run_job
@@ -8,62 +7,10 @@ from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
-from app.system.heartbeat import record_heartbeat
 from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
-
-
-def _build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
-    symbol_names: list[str] = []
-    strategy_names: list[str] = []
-    generated_signal_count = 0
-    approved_risk_count = 0
-    rejected_risk_count = 0
-    filled_execution_count = 0
-
-    for step_result in result.get("steps", []):
-        symbol_name = step_result.get("symbol")
-        if symbol_name is not None and symbol_name not in symbol_names:
-            symbol_names.append(symbol_name)
-
-        strategy_name = step_result.get("strategy_name")
-        if strategy_name is not None and strategy_name not in strategy_names:
-            strategy_names.append(strategy_name)
-
-        if step_result.get("step") == "save_klines":
-            for symbol_result in step_result.get("symbol_results", []):
-                result_symbol = symbol_result.get("symbol")
-                if result_symbol is not None and result_symbol not in symbol_names:
-                    symbol_names.append(result_symbol)
-
-        if step_result.get("step") == "generate_signal" and "signal_type" in step_result:
-            generated_signal_count += 1
-        elif step_result.get("step") == "evaluate_risk":
-            if step_result.get("decision") == "APPROVED":
-                approved_risk_count += 1
-            elif step_result.get("decision") == "REJECTED":
-                rejected_risk_count += 1
-        elif step_result.get("step") == "paper_execute" and step_result.get("status") == "FILLED":
-            filled_execution_count += 1
-
-    if not strategy_names and result.get("strategy_name") is not None:
-        strategy_names = [str(result["strategy_name"])]
-
-    payload: Dict[str, Any] = {
-        "step_count": len(result.get("steps", [])),
-        "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
-        "strategy_names": strategy_names,
-        "symbol_names": symbol_names,
-        "execution_backend": get_execution_adapter_name(),
-        "execution_backend_status": get_execution_backend_status(),
-        "generated_signal_count": generated_signal_count,
-        "approved_risk_count": approved_risk_count,
-        "rejected_risk_count": rejected_risk_count,
-        "filled_execution_count": filled_execution_count,
-    }
-    if "database" in result:
-        payload["database"] = result["database"]
-    return payload
+from app.pipeline.runtime_summary import build_pipeline_payload
+from app.pipeline.runtime_summary import record_pipeline_runtime
 
 
 def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
@@ -77,46 +24,8 @@ def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
     return "[" + " ".join(scope_parts) + "] "
 
 
-def _safe_record_heartbeat(
-    component: str,
-    status: str,
-    message: str,
-    payload: Optional[Dict[str, Any]] = None,
-) -> None:
-    try:
-        record_heartbeat(component=component, status=status, message=message, payload=payload)
-    except Exception:
-        pass
-
-
-def _safe_log_event(
-    event_type: str,
-    status: str,
-    source: str,
-    message: str,
-    payload: Optional[Dict[str, Any]] = None,
-) -> None:
-    try:
-        log_event(event_type=event_type, status=status, source=source, message=message, payload=payload)
-    except Exception:
-        pass
-
-
 def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[str, Any]:
-    _safe_record_heartbeat(
-        component="pipeline",
-        status=status,
-        message=message,
-        payload=_build_pipeline_payload(result),
-    )
-    _safe_log_event(
-        event_type="pipeline_run",
-        status=status,
-        source="pipeline",
-        message=message,
-        payload={**result, "summary": _build_pipeline_payload(result)},
-    )
-    return result
+    return record_pipeline_runtime(result, status=status, message=message, source="pipeline")
 
 
 def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) -> Dict[str, Any]:
@@ -168,26 +77,11 @@ def run_pipeline_collect(
     result: Dict[str, Any] = {"database": database_label, "strategy_name": strategy_name, "steps": []}
     if symbol_names is not None:
         result["requested_symbol_names"] = list(dict.fromkeys(symbol_names))
-    _safe_record_heartbeat(
-        component="pipeline",
+    record_pipeline_runtime(
+        {"database": database_label, "strategy_name": strategy_name, "steps": []},
         status="started",
         message="Pipeline run started.",
-        payload=_build_pipeline_payload(
-            {"database": database_label, "strategy_name": strategy_name, "steps": []}
-        ),
-    )
-    _safe_log_event(
-        event_type="pipeline_run",
-        status="started",
         source="pipeline",
-        message="Pipeline run started.",
-        payload={
-            "database": database_label,
-            "strategy_name": strategy_name,
-            "summary": _build_pipeline_payload(
-                {"database": database_label, "strategy_name": strategy_name, "steps": []}
-            ),
-        },
     )
 
     if kill_switch_enabled():

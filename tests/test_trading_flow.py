@@ -3394,6 +3394,12 @@ def test_admin_page_is_served() -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Admin Console" in response.text
+    assert "What This System Does" in response.text
+    assert "Capability Overview" in response.text
+    assert "Market Data" in response.text
+    assert "Strategy" in response.text
+    assert "Risk" in response.text
+    assert "Execution" in response.text
     assert "/pipeline/run" in response.text
     assert "/strategies" in response.text
     assert "/strategies/summary" in response.text
@@ -5089,6 +5095,16 @@ def test_run_pipeline_batch_drains_full_batch(monkeypatch) -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
+        monkeypatch.setattr(
+            "app.pipeline.runtime_summary.record_heartbeat",
+            lambda component, status, message, payload=None: upsert_heartbeat(
+                connection,
+                component,
+                status,
+                message,
+                payload,
+            ),
+        )
         jobs = enqueue_pipeline_jobs(
             connection,
             strategy_names=["ma_cross"],
@@ -5145,6 +5161,16 @@ def test_run_pipeline_batch_drains_full_batch(monkeypatch) -> None:
             "paper_execute",
         ]
         assert result["remaining_job_types"] == []
+        heartbeats = get_heartbeats(connection)
+        pipeline_heartbeat = next(item for item in heartbeats if item["component"] == "pipeline")
+        assert pipeline_heartbeat["status"] == "completed"
+        assert pipeline_heartbeat["message"] == "Pipeline run completed."
+        payload = json.loads(pipeline_heartbeat["payload_json"]) if pipeline_heartbeat["payload_json"] else {}
+        assert payload["strategy_names"] == ["ma_cross"]
+        assert payload["symbol_names"] == ["BTCUSDT"]
+        assert payload["generated_signal_count"] == 1
+        assert payload["approved_risk_count"] == 1
+        assert payload["filled_execution_count"] == 1
     finally:
         connection.close()
 
@@ -8799,3 +8825,147 @@ def test_audit_log_param_sync(monkeypatch) -> None:
     payload = _json.loads(rows[0][4])
     assert payload["params_applied"]["order_qty"] == 0.003
     conn.really_close()
+
+
+# ---------------------------------------------------------------------------
+# Market Data Layer — get_candles_status + POST /market-data/fetch
+# ---------------------------------------------------------------------------
+
+def test_get_candles_status_empty() -> None:
+    from app.data.candles_service import get_candles_status
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        result = get_candles_status(connection)
+        assert result == []
+    finally:
+        connection.close()
+
+
+def test_get_candles_status_single_symbol() -> None:
+    from app.data.candles_service import get_candles_status
+    connection = make_connection()
+    try:
+        seed_candles(connection, [100.0, 101.0, 102.0, 103.0, 104.0])
+        result = get_candles_status(connection)
+        assert len(result) == 1
+        row = result[0]
+        assert row["symbol"] == "BTCUSDT"
+        assert row["timeframe"] == "1m"
+        assert row["count"] == 5
+        assert isinstance(row["stale_seconds"], int)
+        assert isinstance(row["has_gaps"], bool)
+        assert isinstance(row["gap_count_estimate"], int)
+    finally:
+        connection.close()
+
+
+def test_get_candles_status_no_gaps_when_consecutive() -> None:
+    from app.data.candles_service import get_candles_status
+    connection = make_connection()
+    try:
+        # Consecutive 1m candles — no gaps expected
+        seed_candles(connection, [100.0] * 10)
+        result = get_candles_status(connection)
+        assert result[0]["has_gaps"] is False
+        assert result[0]["gap_count_estimate"] == 0
+    finally:
+        connection.close()
+
+
+def test_get_candles_status_detects_gaps() -> None:
+    from app.data.candles_service import get_candles_status
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        # Insert candles with a 5-minute gap (skip 4 minutes)
+        klines = [
+            make_kline(60_000, 100.0),
+            make_kline(120_000, 101.0),
+            make_kline(420_000, 102.0),  # jump: skipped 3 minutes
+        ]
+        save_klines(connection, klines)
+        result = get_candles_status(connection)
+        assert result[0]["has_gaps"] is True
+        assert result[0]["gap_count_estimate"] >= 1
+    finally:
+        connection.close()
+
+
+def _make_market_api_conn():
+    import sqlite3 as _sqlite3
+    from app.core.migrations import run_migrations as _rm
+
+    class _Conn:
+        def __init__(self, c):
+            self._c = c
+        def execute(self, s, p=()):
+            return self._c.execute(s, p)
+        def executemany(self, s, p):
+            return self._c.executemany(s, p)
+        def commit(self):
+            self._c.commit()
+        def rollback(self):
+            self._c.rollback()
+        def close(self):
+            pass
+        def really_close(self):
+            self._c.close()
+
+    conn = _sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = _sqlite3.Row
+    _rm(conn)
+    return _Conn(conn)
+
+
+def test_candles_status_endpoint(monkeypatch) -> None:
+    pconn = _make_market_api_conn()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    client = TestClient(app)
+    resp = client.get("/candles/status")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+    pconn.really_close()
+
+
+def test_candles_status_endpoint_returns_stats_after_seed(monkeypatch) -> None:
+    pconn = _make_market_api_conn()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    ensure_candles_table(pconn._c)
+    klines = [make_kline((i + 1) * 60_000, 100.0 + i) for i in range(5)]
+    save_klines(pconn._c, klines)
+    client = TestClient(app)
+    resp = client.get("/candles/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["symbol"] == "BTCUSDT"
+    assert data[0]["count"] == 5
+    assert data[0]["has_gaps"] is False
+    pconn.really_close()
+
+
+def test_market_data_fetch_endpoint(monkeypatch) -> None:
+    pconn = _make_market_api_conn()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setenv("CRYPTO_USE_FAKE_KLINES", "1")
+    client = TestClient(app)
+    resp = client.post("/market-data/fetch", json=["BTCUSDT"])
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["saved_klines"] >= 0
+    assert "symbol_results" in data
+    pconn.really_close()
+
+
+def test_market_data_fetch_endpoint_no_symbols_uses_active(monkeypatch) -> None:
+    pconn = _make_market_api_conn()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.pipeline.market_data_job.fetch_klines", lambda symbol: [make_kline(60_000, 100.0)])
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
+    client = TestClient(app)
+    resp = client.post("/market-data/fetch")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    pconn.really_close()
