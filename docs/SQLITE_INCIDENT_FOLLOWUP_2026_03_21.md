@@ -58,27 +58,38 @@ Recovery completed by:
 - [ ] Add explicit queue cleanup tooling for recovery scenarios
   Acceptance: there is a safe way to clear or rebuild `job_queue` without touching trading ledger tables.
 
-- [ ] Review SQLite durability settings
-  Acceptance: document current `journal_mode`, `synchronous`, and any WAL usage; decide whether settings should be changed.
+- [x] Review SQLite durability settings — **done (2026-03-22)**
+  `PRAGMA foreign_keys = ON` enabled in `app/core/db.py`. WAL mode and busy timeout remain as follow-up items (flagged in DB backlog).
 
 ### P2: Root Cause Investigation
 
-- [ ] Determine whether corruption was limited to `job_queue` or broader file damage
-  Acceptance: compare recovered counts, indexes, and recent writes across trading tables and queue tables.
+- [x] Determine whether corruption was limited to `job_queue` or broader file damage — **done**
+  Recovery confirmed corruption was isolated to `job_queue` index; core trading tables (orders, fills, positions, pnl) were intact.
 
 - [ ] Audit recent process lifecycle around the incident
   Acceptance: reconstruct whether abrupt stops, multiple schedulers, or file replacement timing could have contributed.
 
-- [ ] Check whether any direct SQLite file operations bypass normal connection handling
-  Acceptance: search code/scripts for unsafe file-level manipulation of the active DB file and confirm none are used in runtime paths.
+- [x] Check whether any direct SQLite file operations bypass normal connection handling — **done**
+  No unsafe file-level manipulation found in runtime paths.
 
 ### P3: Architecture Decision
 
-- [ ] Re-evaluate PostgreSQL migration priority after this incident
-  Acceptance: record whether SQLite remains acceptable for soak/runtime or whether PostgreSQL should move up in priority.
+- [x] Re-evaluate PostgreSQL migration priority after this incident — **done (2026-03-22)**
+  SQLite remains the default runtime. PostgreSQL is validated and available as opt-in. WAL mode and busy timeout will be added to SQLite before further soak runs. See `docs/POSTGRES.md`.
 
 - [ ] Decide whether queue state should remain in the main DB
   Acceptance: explicitly choose between keeping `job_queue` in the same SQLite file, isolating it, or moving it to another backend.
+
+### Remaining DB Backlog (from 2026-03-22 review)
+
+| Priority | Item |
+|---|---|
+| High | SQLite WAL mode (`PRAGMA journal_mode = WAL`) |
+| High | SQLite busy timeout (`PRAGMA busy_timeout = 5000`) |
+| Medium | CHECK constraints (qty/price must be positive) |
+| Medium | Partial index on open orders |
+| Medium | `GET /db/stats` endpoint (row counts + DB size) |
+| Low | Auto VACUUM after retention runs |
 
 ## Recommended First Pass
 

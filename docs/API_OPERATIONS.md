@@ -237,7 +237,59 @@ Suggested acceptance criteria for Stage 1 soak validation:
 6. Confirm `orders`, `fills`, `positions`, and `pnl` remain logically consistent.
 7. Confirm Telegram alert delivery does not show sustained failures in `alert_delivery` audit events.
 
-## 9. Reconcile Orders and Portfolio State
+## 9. Market Data
+
+Check candle freshness and gap status per symbol:
+
+```bash
+curl -s http://127.0.0.1:8000/candles/status | python -m json.tool
+```
+
+Fields per `(symbol, timeframe)`:
+
+- `count` — total candles stored
+- `earliest` / `latest` — UTC ISO timestamps
+- `stale_seconds` — seconds since the most recent candle
+- `has_gaps` / `gap_count_estimate` — gap detection
+
+Fetch new candles without running the full pipeline:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/market-data/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["BTCUSDT","SOLUSDT"],"limit":100}' \
+  | python -m json.tool
+```
+
+Fetch with historical start date (paginates Binance if > 1000 candles):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/market-data/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["BTCUSDT"],"start_date":"2026-03-01"}' \
+  | python -m json.tool
+```
+
+Read recent candles (optional symbol filter):
+
+```bash
+curl -s "http://127.0.0.1:8000/candles?symbol=BTCUSDT&limit=10" | python -m json.tool
+```
+
+## 10. Data Retention
+
+Purge old audit events and completed job queue rows:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/maintenance/retention \
+  -H "Content-Type: application/json" \
+  -d '{"audit_days":90,"job_queue_days":30}' \
+  | python -m json.tool
+```
+
+Returns `deleted_audit_events` and `deleted_job_queue_rows` counts.
+
+## 12. Reconcile Orders and Portfolio State
 
 Use this when `broker_protection.recommended_action=inspect_and_reconcile_orders` or after manual order cleanup.
 
@@ -261,7 +313,7 @@ What it does:
 - returns latest orders for quick inspection
 - writes an `execution_control` audit event
 
-## 10. Switch Execution Backend
+## 13. Switch Execution Backend
 
 Check current backend:
 
@@ -315,7 +367,7 @@ Behavior:
 - returns `status=error` when credentials are missing or the remote request fails
 - `scripts/check_binance_order.py` uses Binance `POST /api/v3/order/test`, so it validates signing and order parameters without creating a real testnet order
 
-## 11. Broker Protection Workflow
+## 14. Broker Protection Workflow
 
 Suggested response flow when `/health` reports `checks.broker_protection.status=degraded`:
 
