@@ -72,10 +72,16 @@ def maybe_send_broker_alert(report: dict[str, Any]) -> dict[str, Any]:
         message += f", latest_fill_price={latest_fill['price']}"
     if broker_check.get("approved_risk_count") is not None:
         message += f", approved_risk_count={broker_check['approved_risk_count']}"
-    if broker_check.get("rejected_risk_streak") is not None:
+    if broker_check.get("anomalous_rejected_risk_streak") is not None:
+        message += f", anomalous_rejected_risk_streak={broker_check['anomalous_rejected_risk_streak']}"
+    elif broker_check.get("rejected_risk_streak") is not None:
         message += f", rejected_risk_streak={broker_check['rejected_risk_streak']}"
+    if broker_check.get("expected_rejected_risk_streak") is not None:
+        message += f", expected_rejected_risk_streak={broker_check['expected_rejected_risk_streak']}"
     if broker_check.get("latest_rejection_reason"):
         message += f", latest_rejection_reason={broker_check['latest_rejection_reason']}"
+    if broker_check.get("expected_latest_rejection_reason"):
+        message += f", expected_latest_rejection_reason={broker_check['expected_latest_rejection_reason']}"
 
     send_result = send_telegram_message(message)
     if send_result.get("sent"):

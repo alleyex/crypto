@@ -133,6 +133,24 @@ def render_admin_page() -> str:
       .ok { color: var(--ok); }
       .warn { color: var(--warn); }
       .bad { color: var(--bad); }
+      .detail-pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 1px 8px;
+        margin-left: 2px;
+        font-size: 11px;
+        border: 1px solid var(--line);
+      }
+      .detail-pill-expected {
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.02);
+        opacity: 0.82;
+      }
+      .detail-pill-anomalous {
+        color: var(--warn);
+        background: rgba(255, 184, 77, 0.08);
+        border-color: rgba(255, 184, 77, 0.28);
+      }
 
       .side-stat {
         padding: 14px 16px;
@@ -164,9 +182,20 @@ def render_admin_page() -> str:
 
       .controls {
         display: grid;
-        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.2fr) minmax(280px, 0.75fr);
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto;
         gap: 20px;
         margin-bottom: 20px;
+      }
+
+      .controls .scheduler-card {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+      }
+
+      .controls .kill-switch-card {
+        grid-column: 1;
+        grid-row: 2;
       }
 
       .hero-stat-grid {
@@ -433,6 +462,419 @@ def render_admin_page() -> str:
         flex-wrap: wrap;
       }
 
+      .checkbox-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .checkbox-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        background: var(--surface);
+        transition: border-color 0.15s, background 0.15s;
+        user-select: none;
+      }
+
+      .checkbox-item:hover {
+        border-color: var(--accent);
+      }
+
+      .checkbox-item input[type=checkbox] {
+        accent-color: var(--accent);
+        width: 14px;
+        height: 14px;
+        cursor: pointer;
+        margin: 0;
+      }
+
+      .result-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 8px;
+      }
+
+      .result-tab {
+        padding: 4px 12px;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .result-tab:hover {
+        color: var(--fg);
+        border-color: var(--accent);
+      }
+
+      .result-tab.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+
+      /* ---- Fetch Panel ---- */
+      .fetch-panel-desc {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .fetch-field {
+        margin-bottom: 12px;
+      }
+
+      .fetch-field-label {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .fetch-field-hint {
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+        color: var(--muted);
+        opacity: 0.7;
+      }
+
+      .toggle-pill-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .toggle-pill {
+        padding: 6px 14px;
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        user-select: none;
+      }
+
+      .toggle-pill:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .toggle-pill.selected {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .ctrl-section {
+        margin-bottom: 18px;
+      }
+
+      .ctrl-divider {
+        border: none;
+        border-top: 1px solid var(--line);
+        margin: 18px 0;
+      }
+
+      .limit-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .limit-input {
+        width: 90px;
+        padding: 6px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--fg);
+        font-size: 14px;
+      }
+
+      .limit-presets {
+        display: flex;
+        gap: 6px;
+      }
+
+      .limit-preset-btn {
+        padding: 5px 10px;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .limit-preset-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .fetch-actions {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .fetch-btn-primary {
+        padding: 8px 20px;
+        border-radius: 8px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+      }
+
+      .fetch-btn-primary:hover { opacity: 0.85; }
+
+      .fetch-btn-secondary {
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--fg);
+        font-size: 14px;
+        cursor: pointer;
+        transition: border-color 0.15s;
+      }
+
+      .fetch-btn-secondary:hover { border-color: var(--accent); }
+
+      .fetch-result-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        margin-top: 8px;
+      }
+
+      .fetch-result-summary {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--good);
+      }
+
+      .fetch-result-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 4px;
+        background: var(--surface);
+        font-size: 13px;
+      }
+
+      .fetch-result-row .symbol-name {
+        font-weight: 600;
+      }
+
+      .fetch-result-count {
+        font-weight: 600;
+      }
+
+      .fetch-result-count.new { color: var(--good); }
+      .fetch-result-count.none { color: var(--muted); }
+
+      /* ---- Candles Table ---- */
+      .candles-table-wrap {
+        margin-bottom: 24px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+
+      .candles-table-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: rgba(119, 208, 255, 0.05);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .candles-symbol-badge {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.04em;
+      }
+
+      .candles-header-meta {
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .candles-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-family: "SFMono-Regular", "Menlo", monospace;
+      }
+
+      .candles-table th {
+        text-align: right;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        padding: 8px 12px;
+        background: rgba(0,0,0,0.2);
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+
+      .candles-table th:first-child { text-align: left; }
+
+      .candles-table td {
+        text-align: right;
+        padding: 6px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+        color: var(--fg);
+        white-space: nowrap;
+      }
+
+      .candles-table td:first-child { text-align: left; color: var(--muted); font-size: 11px; }
+
+      .candles-table tbody tr:last-child td { border-bottom: none; }
+
+      .candles-table tbody tr:hover { background: rgba(119, 208, 255, 0.04); }
+
+      .candles-table tbody tr.bull-row { background: rgba(74, 222, 128, 0.03); }
+      .candles-table tbody tr.bear-row { background: rgba(248, 113, 113, 0.03); }
+
+      .candles-table td.cell-bull { color: #4ade80; font-weight: 600; }
+      .candles-table td.cell-bear { color: #f87171; font-weight: 600; }
+
+      .candles-dir { font-size: 10px; margin-left: 3px; opacity: 0.8; }
+
+      /* ---- JSON Syntax Highlighting ---- */
+      .json-key  { color: #7dd3fc; }
+      .json-str  { color: #86efac; }
+      .json-num  { color: #fb923c; }
+      .json-bool { color: #c084fc; }
+      .json-null { color: #64748b; }
+
+      /* ---- Pipeline Result ---- */
+      .pipeline-result-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        margin-bottom: 14px;
+      }
+
+      .pipeline-kv-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 7px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+      }
+
+      .pipeline-kv-row:last-child { border-bottom: none; }
+
+      .pipeline-kv-label { color: var(--muted); }
+
+      .pipeline-kv-value {
+        color: var(--fg);
+        font-weight: 500;
+        text-align: right;
+        word-break: break-all;
+        max-width: 60%;
+      }
+
+      /* ---- Data Status Board ---- */
+      .status-symbol-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: var(--panel-2);
+        margin-bottom: 6px;
+      }
+
+      .status-symbol-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        box-shadow: 0 0 6px currentColor;
+      }
+
+      .status-symbol-name {
+        font-weight: 600;
+        font-size: 14px;
+        margin-right: 6px;
+      }
+
+      .status-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 4px;
+        background: var(--line);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      .status-symbol-stats {
+        display: flex;
+        gap: 28px;
+        align-items: center;
+      }
+
+      .status-stat {
+        text-align: right;
+      }
+
+      .status-stat-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+
+      .status-stat-value {
+        font-size: 13px;
+        font-weight: 600;
+      }
+
       select {
         border: 1px solid var(--line);
         border-radius: 12px;
@@ -491,7 +933,6 @@ def render_admin_page() -> str:
 
       .message {
         margin-top: 12px;
-        min-height: 120px;
         max-height: 220px;
         overflow: auto;
         padding: 14px 16px;
@@ -511,11 +952,11 @@ def render_admin_page() -> str:
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 20px;
+        align-items: start;
       }
 
       .data-card {
-        padding: 22px;
-        min-height: 240px;
+        padding: 18px 22px;
       }
 
       .worker-grid {
@@ -978,12 +1419,13 @@ def render_admin_page() -> str:
       <div class="topbar-inner">
         <span class="topbar-title">Crypto Admin</span>
         <nav class="topbar-nav">
-          <button class="tab-btn active" data-tab="overview">總覽</button>
-          <button class="tab-btn" data-tab="controls">控制</button>
-          <button class="tab-btn" data-tab="market">市場資料</button>
-          <button class="tab-btn" data-tab="monitor">監控</button>
+          <button class="tab-btn active" data-tab="overview">Overview</button>
+          <button class="tab-btn" data-tab="controls">Controls</button>
+          <button class="tab-btn" data-tab="market">Market Data</button>
+          <button class="tab-btn" data-tab="features">Features</button>
+          <button class="tab-btn" data-tab="monitor">Monitor</button>
           <button class="tab-btn" data-tab="ml">ML / AI</button>
-          <button class="tab-btn" data-tab="diagnostics">診斷</button>
+          <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
         </nav>
       </div>
     </header>
@@ -1184,106 +1626,134 @@ def render_admin_page() -> str:
           <p>Operational controls stay near the top, while low-level diagnostics move further down the page.</p>
         </div>
       <section class="controls">
+
+        <!-- Pipeline -->
         <div class="panel control-card">
           <h2>Pipeline</h2>
           <p>Run one full trading cycle and inspect the returned execution summary.</p>
-          <div class="inline-controls">
-            <label for="pipeline-strategy-select">Strategy</label>
-            <select id="pipeline-strategy-select">
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Strategy</div>
+            <select id="pipeline-strategy-select" style="margin-top:6px">
 __STRATEGY_OPTIONS__
             </select>
           </div>
-          <div class="inline-controls">
-            <label for="pipeline-symbol-select">Symbols</label>
-            <select id="pipeline-symbol-select" multiple size="3"></select>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use all active symbols</span></div>
+            <div id="pipeline-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
-          <div class="inline-controls">
-            <label for="pipeline-orchestration-select">Orchestration</label>
-            <select id="pipeline-orchestration-select">
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Orchestration</div>
+            <select id="pipeline-orchestration-select" style="margin-top:6px">
 __PIPELINE_ORCHESTRATION_OPTIONS__
             </select>
           </div>
-          <div class="button-row">
-            <button data-action="pipeline">Run Pipeline</button>
-            <button class="secondary" data-refresh="all">Refresh Data</button>
+          <div class="fetch-actions" style="margin-top:4px">
+            <button class="fetch-btn-primary" data-action="pipeline">Run Pipeline</button>
+            <button class="fetch-btn-secondary" data-refresh="all">Refresh Data</button>
           </div>
-          <div class="auto-refresh">
+          <div class="auto-refresh" style="margin-top:12px">
             <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
             <span id="auto-refresh-status">Auto refresh every 10 seconds.</span>
           </div>
-          <div class="message" id="pipeline-message"></div>
+          <div class="message" id="pipeline-message" style="display:none"></div>
+          <div id="pipeline-result" style="display:none; margin-top:14px">
+            <span id="pipeline-result-badge" class="pipeline-result-badge"></span>
+            <details style="margin-top:14px">
+              <summary style="cursor:pointer; color:var(--muted); font-size:12px; user-select:none">Raw JSON</summary>
+              <pre id="pipeline-result-json" style="font-size:11px; overflow:auto; margin-top:8px; white-space:pre-wrap; background:var(--surface); padding:10px; border-radius:6px"></pre>
+            </details>
+          </div>
         </div>
-        <div class="panel control-card">
+
+        <!-- Scheduler -->
+        <div class="panel control-card scheduler-card">
           <h2>Scheduler</h2>
           <p>Pause or resume automatic execution without touching launchd state directly.</p>
-          <div class="inline-controls">
-            <label for="scheduler-strategy-select">Active Strategy</label>
-            <select id="scheduler-strategy-select" multiple size="2">
-__STRATEGY_OPTIONS__
-            </select>
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Strategies</div>
+            <div id="scheduler-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
-          <div class="inline-controls">
-            <label for="scheduler-disabled-strategy-select">Disabled Strategy</label>
-            <select id="scheduler-disabled-strategy-select" multiple size="2">
-__STRATEGY_OPTIONS__
-            </select>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Disabled Strategies</div>
+            <div id="scheduler-disabled-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
-          <div class="inline-controls">
-            <label for="scheduler-symbol-select">Active Symbols</label>
-            <select id="scheduler-symbol-select" multiple size="3"></select>
-            <button class="secondary" data-action="scheduler-strategy-save">Apply Strategy State</button>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Symbols</div>
+            <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
-          <div class="inline-controls">
-            <label for="execution-backend-select">Execution Backend</label>
-            <select id="execution-backend-select">
-              <option value="paper">paper</option>
-              <option value="noop">noop</option>
-              <option value="simulated_live">simulated_live</option>
-              <option value="binance">binance</option>
-            </select>
-            <button class="secondary" data-action="execution-backend-save">Apply Execution Backend</button>
+          <div style="margin-bottom:18px">
+            <button class="fetch-btn-primary" data-action="scheduler-strategy-save">Apply Strategy State</button>
           </div>
-          <div class="inline-controls" id="scheduler-priority-controls">
-            <span class="chip">Priority: lower number runs first.</span>
+
+          <hr class="ctrl-divider" />
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Execution Backend</div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:6px">
+              <select id="execution-backend-select">
+                <option value="paper">paper</option>
+                <option value="noop">noop</option>
+                <option value="simulated_live">simulated_live</option>
+                <option value="binance">binance</option>
+              </select>
+              <button class="fetch-btn-secondary" data-action="execution-backend-save">Apply</button>
+            </div>
           </div>
-          <div class="inline-controls" id="scheduler-disabled-note-controls">
-            <span class="chip">Disabled note: explain why a strategy is turned off.</span>
+
+          <hr class="ctrl-divider" />
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Strategy Limit <span class="fetch-field-hint">how many enabled strategies run</span></div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px">
+              <input id="scheduler-effective-limit-input" class="limit-input" type="number" step="1" min="1" placeholder="all" style="width:72px" />
+              <button class="secondary" type="button" data-action="scheduler-preset-top1">top-1</button>
+              <button class="secondary" type="button" data-action="scheduler-preset-top2">top-2</button>
+              <button class="secondary" type="button" data-action="scheduler-preset-all">all</button>
+            </div>
           </div>
-          <div class="inline-controls">
-            <button class="secondary" type="button" data-action="scheduler-clear-notes">Clear notes</button>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Execution Priority <span class="fetch-field-hint">lower number runs first</span></div>
+            <div id="scheduler-priority-controls" style="display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:6px; align-items:center"></div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+              <button class="secondary" type="button" data-action="scheduler-priority-sequential">Sequential</button>
+              <button class="secondary" type="button" data-action="scheduler-priority-reverse">Reverse</button>
+              <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
+              <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset</button>
+            </div>
           </div>
-          <div class="inline-controls">
-            <label for="scheduler-effective-limit-input">Effective Limit</label>
-            <input id="scheduler-effective-limit-input" type="number" step="1" min="1" placeholder="all" />
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Disabled Notes <span class="fetch-field-hint">explain why a strategy is paused</span></div>
+            <div id="scheduler-disabled-note-controls" style="margin-top:6px"></div>
+            <button class="secondary" type="button" data-action="scheduler-clear-notes" style="margin-top:8px">Clear Notes</button>
           </div>
-          <div class="inline-controls">
-            <span class="chip">Presets</span>
-            <button class="secondary" type="button" data-action="scheduler-preset-top1">Apply top-1</button>
-            <button class="secondary" type="button" data-action="scheduler-preset-top2">Apply top-2</button>
-            <button class="secondary" type="button" data-action="scheduler-preset-all">All enabled</button>
-            <button class="secondary" type="button" data-action="scheduler-priority-sequential">Sequential</button>
-            <button class="secondary" type="button" data-action="scheduler-priority-reverse">Reverse</button>
-            <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
-            <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset priorities</button>
-          </div>
-          <div class="inline-note" id="scheduler-preset-detail">
+          <div class="inline-note" id="scheduler-preset-detail" style="margin-bottom:16px">
             Limit presets change how many enabled strategies run. Priority presets reorder the scheduler execution sequence.
           </div>
-          <div class="button-row">
-            <button class="secondary" data-action="scheduler-start">Start</button>
+
+          <hr class="ctrl-divider" />
+
+          <div style="display:flex; gap:8px">
+            <button class="fetch-btn-primary" data-action="scheduler-start">Start</button>
             <button class="danger" data-action="scheduler-stop">Stop</button>
           </div>
           <div class="message" id="scheduler-message"></div>
         </div>
-        <div class="panel control-card">
+
+        <!-- Kill Switch -->
+        <div class="panel control-card kill-switch-card">
           <h2>Kill Switch</h2>
           <p>Block new pipeline executions immediately while keeping observability online.</p>
+          <div style="margin-bottom:16px">
+            <span id="kill-switch-panel-badge" class="status-badge">Checking...</span>
+          </div>
           <div class="button-row">
             <button class="danger" data-action="kill-enable">Enable</button>
             <button class="secondary" data-action="kill-disable">Disable</button>
           </div>
           <div class="message" id="kill-message"></div>
         </div>
+
       </section>
       </section>
       </div>
@@ -1468,54 +1938,140 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <div class="section-header">
           <div>
             <div class="section-kicker">Data Layer</div>
-            <h2>市場資料</h2>
+            <h2>Market Data</h2>
           </div>
-          <p>管理市場資料的抓取、儲存狀態與特徵計算。</p>
+          <p>Manage candle fetching, freshness, and storage status.</p>
         </div>
       <section class="grid">
 
         <article class="panel data-card">
-          <h2>資料狀態</h2>
-          <p>每個交易對的 candle 數量、最新時間與缺口估計。</p>
+          <h2>Data Status</h2>
+          <p>Candle count, freshness, and gap estimate per symbol.</p>
           <div class="button-row">
             <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
           </div>
           <div id="market-status-board" style="margin-top:12px;">
-            <span style="color:var(--muted);font-size:13px;">Click Refresh Status to load.</span>
+            <span style="color:var(--muted);font-size:13px;">Loading...</span>
+          </div>
+        </article>
+
+        <article class="panel data-card fetch-panel">
+          <div class="fetch-panel-header">
+            <div>
+              <h2>Fetch Market Data</h2>
+              <p class="fetch-panel-desc">Trigger market data fetch independently without running the full pipeline. Binance limit: 1000 candles per request.</p>
+            </div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use active symbols</span></div>
+            <div id="market-fetch-symbol-checkboxes" class="toggle-pill-group"></div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Start Date <span class="fetch-field-hint">leave empty to fetch latest candles only</span></div>
+            <div class="limit-row">
+              <input id="market-fetch-start-date" class="limit-input" type="date" style="width:160px" />
+              <div class="limit-presets">
+                <button class="date-preset-btn" data-days="7">7d</button>
+                <button class="date-preset-btn" data-days="30">30d</button>
+                <button class="date-preset-btn" data-days="90">90d</button>
+              </div>
+            </div>
+          </div>
+          <div class="fetch-field" id="market-fetch-limit-field">
+            <div class="fetch-field-label">Limit <span class="fetch-field-hint">candles per symbol, used when no start date is set (1–1000)</span></div>
+            <div class="limit-row">
+              <input id="market-fetch-limit-input" class="limit-input" type="number" value="100" min="1" max="1000" />
+              <div class="limit-presets">
+                <button class="limit-preset-btn" data-limit="100">100</button>
+                <button class="limit-preset-btn" data-limit="500">500</button>
+                <button class="limit-preset-btn" data-limit="1000">1000</button>
+              </div>
+            </div>
+          </div>
+          <div class="fetch-actions">
+            <button class="fetch-btn-primary" data-action="market-fetch">Fetch Now</button>
+          </div>
+          <div id="market-fetch-result" style="display:none">
+            <div class="fetch-result-header">
+              <span id="market-fetch-summary" class="fetch-result-summary"></span>
+              <div class="result-tabs">
+                <button class="result-tab active" data-target="market-fetch-pretty">Pretty</button>
+                <button class="result-tab" data-target="market-fetch-raw">Raw JSON</button>
+              </div>
+            </div>
+            <div id="market-fetch-pretty"></div>
+            <pre id="market-fetch-raw" style="display:none"></pre>
+          </div>
+          <div class="message" id="market-fetch-message" style="display:none"></div>
+        </article>
+
+      </section>
+
+      <article class="panel data-card" id="market-candles-panel" style="display:none; margin-top:20px">
+        <h2 id="market-candles-title">Latest Candles</h2>
+        <p>Last 10 candles per symbol from the most recent fetch.</p>
+        <div id="market-fetch-candles" style="overflow-x:auto"></div>
+      </article>
+
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-features">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Feature Engineering</div>
+            <h2>Features</h2>
+          </div>
+          <p>Materialize stored feature vectors, inspect the latest values, and use this space as the starting point for feature iteration.</p>
+        </div>
+      <section class="grid">
+
+        <article class="panel data-card fetch-panel">
+          <div class="fetch-panel-header">
+            <div>
+              <h2>Feature Store</h2>
+              <p class="fetch-panel-desc">Compute and update feature vectors from stored candles.</p>
+            </div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Symbol</div>
+            <div id="market-fs-symbol-pills" class="toggle-pill-group"></div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Timeframe</div>
+            <input id="market-fs-timeframe-input" class="limit-input" type="text" placeholder="1m" value="1m" style="width:80px" />
+          </div>
+          <div class="fetch-actions">
+            <button class="fetch-btn-primary" data-action="market-fs-materialize">Materialize Features</button>
+            <button class="fetch-btn-secondary" data-action="market-fs-latest">Latest Feature Vector</button>
+          </div>
+          <div class="message" id="market-fs-message" style="display:none"></div>
+          <div id="market-fs-result" style="display:none">
+            <div class="fetch-result-header">
+              <span id="market-fs-summary" class="fetch-result-summary"></span>
+              <div class="result-tabs">
+                <button class="result-tab active" data-target="market-fs-pretty">Pretty</button>
+                <button class="result-tab" data-target="market-fs-raw">Raw JSON</button>
+              </div>
+            </div>
+            <div id="market-fs-pretty"></div>
+            <pre id="market-fs-raw" style="display:none"></pre>
           </div>
         </article>
 
         <article class="panel data-card">
-          <h2>抓取市場資料</h2>
-          <p>獨立觸發市場資料抓取，不需跑完整 pipeline。</p>
-          <div class="inline-controls">
-            <label for="market-fetch-symbols-input">Symbols（逗號分隔，留空使用 active symbols）</label>
-            <input id="market-fetch-symbols-input" type="text" placeholder="BTCUSDT,ETHUSDT" />
+          <h2>Feature Workflow</h2>
+          <p>Use this tab as the handoff between raw candles and model training.</p>
+          <div class="feature-points">
+            <span class="chip">1. Materialize by symbol and timeframe</span>
+            <span class="chip">2. Inspect latest vector values</span>
+            <span class="chip">3. Compare feature changes after code updates</span>
+            <span class="chip">4. Hand off stable sets to ML / AI</span>
           </div>
-          <div class="button-row">
-            <button data-action="market-fetch">Fetch Now</button>
+          <div class="inline-note" style="margin-top:16px">
+            Next useful additions here are coverage, freshness, row-count, null-rate, and feature-set version views.
           </div>
-          <div class="message" id="market-fetch-message"></div>
-          <pre id="market-fetch-json" style="margin-top:12px;display:none"></pre>
-        </article>
-
-        <article class="panel data-card">
-          <h2>Feature Store</h2>
-          <p>從已儲存的 candle 計算並更新特徵向量。</p>
-          <div class="inline-controls">
-            <label for="market-fs-symbol-input">Symbol</label>
-            <input id="market-fs-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
-          </div>
-          <div class="inline-controls">
-            <label for="market-fs-timeframe-input">Timeframe</label>
-            <input id="market-fs-timeframe-input" type="text" placeholder="1m" value="1m" />
-          </div>
-          <div class="button-row">
-            <button data-action="market-fs-materialize">Materialize Features</button>
-            <button class="secondary" data-action="market-fs-latest">Latest Feature Vector</button>
-          </div>
-          <div class="message" id="market-fs-message"></div>
-          <pre id="market-fs-json" style="margin-top:12px;display:none"></pre>
         </article>
 
       </section>
@@ -1529,7 +2085,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="section-kicker">Machine Learning</div>
             <h2>ML / AI</h2>
           </div>
-          <p>Feature store, training jobs, model registry, inference, and RL experiments.</p>
+          <p>Training jobs, model registry, inference, and RL experiments.</p>
         </div>
       <section class="grid">
 
@@ -1717,6 +2273,43 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           </details>
         </article>
         <article class="panel data-card">
+          <h2>Data Retention</h2>
+          <p>Purge old records to keep the database lean. Completed job queue rows and old audit events are safe to remove.</p>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Audit Events <span class="fetch-field-hint">delete records older than N days</span></div>
+            <div class="limit-row">
+              <input id="retention-audit-days" class="limit-input" type="number" value="90" min="1" />
+              <div class="limit-presets">
+                <button class="retention-preset-btn" data-field="retention-audit-days" data-days="30">30d</button>
+                <button class="retention-preset-btn" data-field="retention-audit-days" data-days="90">90d</button>
+                <button class="retention-preset-btn" data-field="retention-audit-days" data-days="180">180d</button>
+              </div>
+            </div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Job Queue <span class="fetch-field-hint">delete done/failed rows older than N days</span></div>
+            <div class="limit-row">
+              <input id="retention-job-days" class="limit-input" type="number" value="30" min="1" />
+              <div class="limit-presets">
+                <button class="retention-preset-btn" data-field="retention-job-days" data-days="7">7d</button>
+                <button class="retention-preset-btn" data-field="retention-job-days" data-days="30">30d</button>
+                <button class="retention-preset-btn" data-field="retention-job-days" data-days="60">60d</button>
+              </div>
+            </div>
+          </div>
+          <div class="fetch-actions">
+            <button class="fetch-btn-primary" data-action="retention-run">Run Retention</button>
+          </div>
+          <div class="message" id="retention-message" style="display:none"></div>
+          <div id="retention-result" style="display:none">
+            <div class="fetch-result-header">
+              <span id="retention-summary" class="fetch-result-summary"></span>
+            </div>
+            <div id="retention-pretty"></div>
+          </div>
+        </article>
+
+        <article class="panel data-card">
           <h2>Soak Validation</h2>
           <p>Record runtime validation snapshots and inspect the most recent soak history.</p>
           <div class="button-row" style="margin-bottom: 16px;">
@@ -1758,11 +2351,42 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         return JSON.stringify(value, null, 2);
       }
 
+      function syntaxHighlightJson(value) {
+        const raw = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+        // Escape HTML entities first
+        const escaped = raw
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        return escaped.replace(
+          /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+          (match) => {
+            let cls = "json-num";
+            if (/^"/.test(match)) {
+              cls = /:$/.test(match) ? "json-key" : "json-str";
+            } else if (/true|false/.test(match)) {
+              cls = "json-bool";
+            } else if (/null/.test(match)) {
+              cls = "json-null";
+            }
+            return `<span class="${cls}">${match}</span>`;
+          }
+        );
+      }
+
       function statusClass(status) {
         if (status === "ok") return "ok";
         if (status === "degraded") return "warn";
         if (status === "error" || status === "blocked") return "bad";
         return "";
+      }
+
+      function renderInlineDetails(parts) {
+        return parts.map((part) => {
+          if (typeof part === "string") return part;
+          const cls = part.className ? `detail-pill ${part.className}` : "detail-pill";
+          return `<span class="${cls}">${part.text}</span>`;
+        }).join(" | ");
       }
 
       function parseDashboardTimestamp(value) {
@@ -1861,6 +2485,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const killSwitch = health.checks.kill_switch;
         el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";
         el("kill-switch-status").className = `value ${statusClass(killSwitch.status)}`;
+        const killPanelBadge = el("kill-switch-panel-badge");
+        if (killPanelBadge) {
+          killPanelBadge.textContent = killSwitch.enabled ? "ACTIVE — executions blocked" : "INACTIVE — executions allowed";
+          killPanelBadge.style.background = killSwitch.enabled ? "var(--danger)" : "var(--ok)";
+          killPanelBadge.style.color = "#fff";
+        }
         const queue = health.checks.queue || { status: "degraded", counts: {} };
         const staleBatch = queue.reason === "Queue contains stale incomplete batches." ? (queue.latest_incomplete_batch || null) : null;
         el("queue-status").textContent = staleBatch ? "STALE" : String(queue.status || "unknown").toUpperCase();
@@ -1884,6 +2514,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `dry_run=${Boolean(executionBackend.dry_run)}`,
           `can_execute_orders=${Boolean(executionBackend.can_execute_orders)}`,
         ];
+        if (brokerProtection.expected_rejected_risk_streak !== undefined) {
+          executionDetail.push({ text: `expected streak=${brokerProtection.expected_rejected_risk_streak}`, className: "detail-pill-expected" });
+        }
+        if (brokerProtection.anomalous_rejected_risk_streak !== undefined) {
+          executionDetail.push({ text: `anomalous streak=${brokerProtection.anomalous_rejected_risk_streak}`, className: "detail-pill-anomalous" });
+        }
           if (brokerProtection.status === "degraded") {
           executionDetail.push(`broker_protection=${brokerProtection.reason || "degraded"}`);
           if (brokerProtection.reason_code) {
@@ -1902,7 +2538,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             executionDetail.push(`latest_order_status=${brokerProtection.latest_order.status}`);
           }
         }
-        el("execution-backend-detail").textContent = executionDetail.join(" | ");
+        el("execution-backend-detail").innerHTML = renderInlineDetails(executionDetail);
 
         el("last-refresh").textContent = new Date().toLocaleTimeString();
 
@@ -1954,6 +2590,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             if (brokerCheck.recommended_action) detailBits.push(`action=${brokerCheck.recommended_action}`);
             if (brokerCheck.approved_risk_count !== undefined) detailBits.push(`approved=${brokerCheck.approved_risk_count}`);
             if (brokerCheck.rejected_risk_streak !== undefined) detailBits.push(`reject_streak=${brokerCheck.rejected_risk_streak}`);
+            if (brokerCheck.expected_rejected_risk_streak !== undefined) detailBits.push(`<span class="detail-pill detail-pill-expected">expected streak=${brokerCheck.expected_rejected_risk_streak}</span>`);
+            if (brokerCheck.anomalous_rejected_risk_streak !== undefined) detailBits.push(`<span class="detail-pill detail-pill-anomalous">anomalous streak=${brokerCheck.anomalous_rejected_risk_streak}</span>`);
             if (brokerCheck.latest_order?.status) detailBits.push(`latest_order=${brokerCheck.latest_order.status}`);
             if (brokerCheck.latest_order?.age_seconds !== undefined) detailBits.push(`latest_order_age=${brokerCheck.latest_order.age_seconds}s`);
             if (brokerCheck.recommended_action === "switch_to_paper_backend") {
@@ -2668,14 +3306,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       function collectSchedulerStrategyPayload() {
         const selectedSchedulerStrategies = Array.from(
-          el("scheduler-strategy-select")?.selectedOptions || []
-        ).map((option) => option.value);
+          el("scheduler-strategy-pills")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.strategy);
         const selectedSchedulerSymbols = Array.from(
-          el("scheduler-symbol-select")?.selectedOptions || []
-        ).map((option) => option.value);
+          el("scheduler-symbol-pills")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.symbol);
         const selectedDisabledStrategies = Array.from(
-          el("scheduler-disabled-strategy-select")?.selectedOptions || []
-        ).map((option) => option.value);
+          el("scheduler-disabled-strategy-pills")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.strategy);
         const strategyPriorities = Object.fromEntries(
           Array.from(document.querySelectorAll("[data-strategy-priority]")).map((input, index) => [
             input.dataset.strategyPriority,
@@ -2988,40 +3626,82 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (executionBackendSelect) {
           executionBackendSelect.value = health?.checks?.execution_backend?.backend || "paper";
         }
-        const schedulerStrategySelect = el("scheduler-strategy-select");
-        if (schedulerStrategySelect && schedulerStrategy?.strategy_names) {
-          Array.from(schedulerStrategySelect.options).forEach((option) => {
-            option.selected = schedulerStrategy.strategy_names.includes(option.value);
-          });
-        }
-        const schedulerDisabledStrategySelect = el("scheduler-disabled-strategy-select");
-        if (schedulerDisabledStrategySelect && schedulerStrategy?.disabled_strategy_names) {
-          Array.from(schedulerDisabledStrategySelect.options).forEach((option) => {
-            option.selected = schedulerStrategy.disabled_strategy_names.includes(option.value);
-          });
-        }
-        const schedulerSymbolSelect = el("scheduler-symbol-select");
-        if (schedulerSymbolSelect && schedulerSymbols?.available_symbols) {
-          schedulerSymbolSelect.innerHTML = schedulerSymbols.available_symbols
-            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
+        const schedulerStrategyPills = el("scheduler-strategy-pills");
+        if (schedulerStrategyPills && schedulerStrategy?.available_strategies) {
+          const activeSet = new Set(schedulerStrategy.strategy_names || []);
+          schedulerStrategyPills.innerHTML = schedulerStrategy.available_strategies
+            .map((s) => `<button type="button" class="toggle-pill${activeSet.has(s) ? " selected" : ""}" data-strategy="${s}">${s}</button>`)
             .join("");
-          const selectedSchedulerSymbols = schedulerSymbols.symbol_names || [];
-          Array.from(schedulerSymbolSelect.options).forEach((option) => {
-            option.selected = selectedSchedulerSymbols.includes(option.value);
+          schedulerStrategyPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+          });
+        }
+        const schedulerDisabledPills = el("scheduler-disabled-strategy-pills");
+        if (schedulerDisabledPills && schedulerStrategy?.available_strategies) {
+          const disabledSet = new Set(schedulerStrategy.disabled_strategy_names || []);
+          schedulerDisabledPills.innerHTML = schedulerStrategy.available_strategies
+            .map((s) => `<button type="button" class="toggle-pill${disabledSet.has(s) ? " selected" : ""}" data-strategy="${s}">${s}</button>`)
+            .join("");
+          schedulerDisabledPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+          });
+        }
+        const schedulerSymbolPills = el("scheduler-symbol-pills");
+        if (schedulerSymbolPills && schedulerSymbols?.available_symbols) {
+          const activeSymbolSet = new Set(schedulerSymbols.symbol_names || []);
+          schedulerSymbolPills.innerHTML = schedulerSymbols.available_symbols
+            .map((s) => `<button type="button" class="toggle-pill${activeSymbolSet.has(s) ? " selected" : ""}" data-symbol="${s}">${s}</button>`)
+            .join("");
+          schedulerSymbolPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => pill.classList.toggle("selected"));
           });
         }
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
         if (schedulerEffectiveLimitInput) {
           schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
         }
-        const pipelineSymbolSelect = el("pipeline-symbol-select");
-        if (pipelineSymbolSelect && schedulerSymbols?.available_symbols) {
-          pipelineSymbolSelect.innerHTML = schedulerSymbols.available_symbols
-            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
+        const pipelineSymbolPills = el("pipeline-symbol-pills");
+        if (pipelineSymbolPills && schedulerSymbols?.available_symbols) {
+          const prevSel = new Set(
+            Array.from(pipelineSymbolPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
+          );
+          const activeSymbols = new Set(schedulerSymbols.symbol_names || []);
+          pipelineSymbolPills.innerHTML = schedulerSymbols.available_symbols
+            .map((s) => {
+              const selected = prevSel.size > 0 ? prevSel.has(s) : activeSymbols.has(s);
+              return `<button type="button" class="toggle-pill${selected ? " selected" : ""}" data-symbol="${s}">${s}</button>`;
+            })
             .join("");
-          const selectedSymbols = schedulerSymbols.symbol_names || [];
-          Array.from(pipelineSymbolSelect.options).forEach((option) => {
-            option.selected = selectedSymbols.includes(option.value);
+          pipelineSymbolPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+          });
+        }
+        const marketFetchPills = el("market-fetch-symbol-checkboxes");
+        if (marketFetchPills && schedulerSymbols?.available_symbols) {
+          const prevSelected = new Set(
+            Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
+          );
+          marketFetchPills.innerHTML = schedulerSymbols.available_symbols
+            .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
+            .join("");
+          marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+          });
+        }
+        const fsPills = el("market-fs-symbol-pills");
+        if (fsPills && schedulerSymbols?.available_symbols) {
+          const prevSel = fsPills.querySelector(".toggle-pill.selected")?.dataset.symbol;
+          fsPills.innerHTML = schedulerSymbols.available_symbols
+            .map((symbol, i) => {
+              const sel = prevSel ? symbol === prevSel : i === 0;
+              return `<button type="button" class="toggle-pill${sel ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`;
+            })
+            .join("");
+          fsPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.addEventListener("click", () => {
+              fsPills.querySelectorAll(".toggle-pill").forEach((p) => p.classList.remove("selected"));
+              pill.classList.add("selected");
+            });
           });
         }
         renderSchedulerPriorityControls(schedulerStrategy);
@@ -3045,6 +3725,30 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("logs-json").textContent = formatJson(logs);
         el("audit-json").textContent = formatJson(auditEvents);
         el("queue-json").textContent = formatJson(queueSummary);
+      }
+
+      function renderPipelineResult(result) {
+        const badge = el("pipeline-result-badge");
+        const rowsEl = el("pipeline-result-rows");
+        const jsonEl = el("pipeline-result-json");
+        const resultEl = el("pipeline-result");
+        const msgEl = el("pipeline-message");
+
+        // Normalise status — queue_batch returns job-level "completed"
+        const status = (result.status || "unknown").toLowerCase();
+        const isOk = ["ok", "queued", "partial", "completed"].includes(status);
+
+        if (badge) {
+          badge.textContent = status.toUpperCase();
+          badge.style.background = isOk ? "var(--ok)" : "var(--danger)";
+          badge.style.color = "#fff";
+        }
+
+        if (rowsEl) rowsEl.innerHTML = "";
+
+        if (jsonEl) jsonEl.innerHTML = syntaxHighlightJson(result);
+        if (resultEl) resultEl.style.display = "block";
+        if (msgEl) { msgEl.style.display = "none"; msgEl.textContent = ""; }
       }
 
       async function runAction(type) {
@@ -3086,16 +3790,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               interval_seconds: AUTO_REFRESH_INTERVAL_MS / 1000,
             };
           } else if (type === "pipeline") {
-            const selectedSymbols = Array.from(el("pipeline-symbol-select")?.selectedOptions || []).map((option) => option.value);
-            result = await api("/pipeline/run", {
-              method: "POST",
-              body: JSON.stringify({
-                strategy_name: el("pipeline-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
-                symbol_names: selectedSymbols,
-                orchestration: el("pipeline-orchestration-select")?.value || "direct",
-              }),
-            });
-            el("pipeline-json").textContent = formatJson(result);
+            const msgEl = el("pipeline-message");
+            const resultEl = el("pipeline-result");
+            if (resultEl) resultEl.style.display = "none";
+            if (msgEl) { msgEl.textContent = "Running…"; msgEl.className = "message"; msgEl.style.display = "block"; }
+            try {
+              const selectedSymbols = Array.from(el("pipeline-symbol-pills")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.symbol);
+              result = await api("/pipeline/run", {
+                method: "POST",
+                body: JSON.stringify({
+                  strategy_name: el("pipeline-strategy-select")?.value || "__DEFAULT_STRATEGY_NAME__",
+                  symbol_names: selectedSymbols,
+                  orchestration: el("pipeline-orchestration-select")?.value || "direct",
+                }),
+              });
+              el("pipeline-json").textContent = formatJson(result);
+              renderPipelineResult(result);
+            } catch (err) {
+              if (msgEl) { msgEl.textContent = `Error: ${err.message}`; msgEl.className = "message bad"; msgEl.style.display = "block"; }
+              if (resultEl) resultEl.style.display = "none";
+            }
+            await refreshAll();
+            return;
           } else if (type === "scheduler-start") {
             result = await api("/scheduler/start", { method: "POST" });
           } else if (type === "scheduler-stop") {
@@ -3261,6 +3977,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       document.querySelectorAll("[data-action]").forEach((button) => {
+        if (button.dataset.action.startsWith("market-")) return;
+        if (button.dataset.action.startsWith("retention-")) return;
         button.addEventListener("click", () => runAction(button.dataset.action));
       });
 
@@ -3271,7 +3989,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       document.querySelectorAll("[data-refresh]").forEach((button) => {
-        button.addEventListener("click", refreshAll);
+        button.addEventListener("click", async () => {
+          const orig = button.textContent;
+          button.disabled = true;
+          button.textContent = "Refreshing...";
+          try {
+            await refreshAll();
+          } finally {
+            button.disabled = false;
+            button.textContent = orig;
+          }
+        });
       });
 
       el("logs-mode-select")?.addEventListener("change", () => {
@@ -3420,6 +4148,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       refreshAll().catch((error) => {
         el("health-json").textContent = `Failed to load data: ${error.message}`;
       });
+      refreshMarketStatus();
+      (function() {
+        const d = new Date();
+        d.setDate(d.getDate() - 7);
+        const input = el("market-fetch-start-date");
+        if (input) input.value = d.toISOString().slice(0, 10);
+      })();
 
       // ---- Tab switching ----
       document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -3430,6 +4165,75 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           btn.classList.add("active");
           document.getElementById("tab-" + tabId).classList.add("active");
         });
+      });
+
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest(".result-tab");
+        if (!btn) return;
+        const targetId = btn.dataset.target;
+        const container = btn.closest("[id$='-result']");
+        if (!container) return;
+        container.querySelectorAll(".result-tab").forEach((b) => b.classList.remove("active"));
+        container.querySelectorAll("[id]").forEach((panel) => {
+          if (panel.classList.contains("result-tab") || panel.closest(".result-tabs")) return;
+          panel.style.display = panel.id === targetId ? "" : "none";
+        });
+        btn.classList.add("active");
+      });
+
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest(".limit-preset-btn");
+        if (!btn) return;
+        const input = el("market-fetch-limit-input");
+        if (input) input.value = btn.dataset.limit;
+      });
+
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest(".date-preset-btn");
+        if (!btn) return;
+        const days = parseInt(btn.dataset.days);
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        const iso = d.toISOString().slice(0, 10);
+        const input = el("market-fetch-start-date");
+        if (input) input.value = iso;
+      });
+
+      // ---- Retention handlers ----
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest(".retention-preset-btn");
+        if (!btn) return;
+        const input = el(btn.dataset.field);
+        if (input) input.value = btn.dataset.days;
+      });
+
+      document.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-action='retention-run']");
+        if (!btn) return;
+        const auditDays = parseInt(el("retention-audit-days")?.value || "90");
+        const jobDays = parseInt(el("retention-job-days")?.value || "30");
+        const msg = el("retention-message");
+        const result = el("retention-result");
+        btn.disabled = true; btn.textContent = "Running...";
+        if (msg) { msg.style.display = "none"; }
+        try {
+          const r = await api("/maintenance/retention", {
+            method: "POST",
+            body: JSON.stringify({ audit_days: auditDays, job_queue_days: jobDays })
+          });
+          const summary = el("retention-summary");
+          if (summary) summary.textContent = `Deleted ${r.audit_events_deleted} audit events, ${r.job_queue_deleted} job queue rows`;
+          el("retention-pretty").innerHTML = `
+            <div class="fetch-result-row"><span class="symbol-name">Audit Events deleted</span><span class="fetch-result-count new">${r.audit_events_deleted}</span></div>
+            <div class="fetch-result-row"><span class="symbol-name">Job Queue deleted</span><span class="fetch-result-count new">${r.job_queue_deleted}</span></div>
+            <div class="fetch-result-row"><span class="symbol-name">Audit retention</span><span class="fetch-result-count none">${r.audit_retention_days}d</span></div>
+            <div class="fetch-result-row"><span class="symbol-name">Job Queue retention</span><span class="fetch-result-count none">${r.job_queue_retention_days}d</span></div>`;
+          if (result) result.style.display = "block";
+        } catch (err) {
+          if (msg) { msg.textContent = String(err); msg.className = "message bad"; msg.style.display = "block"; }
+        } finally {
+          btn.disabled = false; btn.textContent = "Run Retention";
+        }
       });
 
       // ---- ML / AI helpers ----
@@ -3530,73 +4334,186 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       // ---- Market Data actions ----
+      async function refreshMarketStatus() {
+        try {
+          const rows = await api("/candles/status");
+          const board = el("market-status-board");
+          if (!board) return;
+          if (!rows || rows.length === 0) {
+            board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
+            return;
+          }
+          board.innerHTML = rows.map((r) => {
+            const staleMin = Math.round(r.stale_seconds / 60);
+            const isFresh = staleMin < 5;
+            const isWarn = staleMin < 30;
+            const dotColor = isFresh ? "var(--ok)" : isWarn ? "var(--warn)" : "var(--bad)";
+            const staleText = staleMin < 60 ? `${staleMin}m ago` : `${Math.round(staleMin/60)}h ago`;
+            const staleColor = isFresh ? "var(--ok)" : isWarn ? "var(--warn)" : "var(--bad)";
+            const hasGaps = r.has_gaps;
+            return `
+              <div class="status-symbol-row">
+                <div class="status-symbol-left">
+                  <span class="status-dot" style="background:${dotColor}"></span>
+                  <div>
+                    <span class="status-symbol-name">${r.symbol}</span>
+                    <span class="status-badge">${r.timeframe}</span>
+                  </div>
+                </div>
+                <div class="status-symbol-stats">
+                  <div class="status-stat">
+                    <div class="status-stat-label">Candles</div>
+                    <div class="status-stat-value">${r.count.toLocaleString()}</div>
+                  </div>
+                  <div class="status-stat">
+                    <div class="status-stat-label">Last Update</div>
+                    <div class="status-stat-value" style="color:${staleColor}">${staleText}</div>
+                  </div>
+                  <div class="status-stat">
+                    <div class="status-stat-label">Gaps</div>
+                    <div class="status-stat-value" style="color:${hasGaps ? "var(--warn)" : "var(--ok)"}">
+                      ${hasGaps ? `~${r.gap_count_estimate}` : "None"}
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          }).join("");
+        } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+      }
+
       document.addEventListener("click", async (event) => {
         const action = event.target.dataset?.action;
         if (!action?.startsWith("market-")) return;
 
         if (action === "market-status-refresh") {
-          try {
-            const rows = await api("/candles/status");
-            const board = el("market-status-board");
-            if (!board) return;
-            if (!rows || rows.length === 0) {
-              board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
-              return;
-            }
-            board.innerHTML = rows.map((r) => {
-              const staleMin = Math.round(r.stale_seconds / 60);
-              const staleLabel = staleMin < 5 ? `<span style="color:var(--ok)">${staleMin}m ago</span>`
-                : staleMin < 30 ? `<span style="color:var(--warn)">${staleMin}m ago</span>`
-                : `<span style="color:var(--bad)">${staleMin}m ago</span>`;
-              const gapLabel = r.has_gaps
-                ? `<span style="color:var(--warn)">⚠ ~${r.gap_count_estimate} gaps</span>`
-                : `<span style="color:var(--ok)">✓ no gaps</span>`;
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);">
-                <div><strong>${r.symbol}</strong> <span style="color:var(--muted);font-size:12px">${r.timeframe}</span></div>
-                <div style="font-size:13px;display:flex;gap:16px;align-items:center">
-                  <span style="color:var(--muted)">${r.count} candles</span>
-                  ${staleLabel}
-                  ${gapLabel}
-                </div>
-              </div>`;
-            }).join("");
-          } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+          await refreshMarketStatus();
         }
 
         if (action === "market-fetch") {
-          const raw = el("market-fetch-symbols-input")?.value.trim();
-          const symbols = raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+          const selected = Array.from(el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.symbol);
+          const symbols = selected.length > 0 ? selected : null;
+          const startDate = el("market-fetch-start-date")?.value || null;
+          const limit = parseInt(el("market-fetch-limit-input")?.value || "100");
+          const body = startDate ? { symbols, start_date: startDate } : { symbols, limit };
           try {
-            const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(symbols) });
-            const pre = el("market-fetch-json");
+            const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(body) });
+            const result = el("market-fetch-result");
             const msg = el("market-fetch-message");
-            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
-            if (msg) { msg.textContent = `Fetched ${r.saved_klines ?? 0} new candles.`; msg.className = "message ok"; }
-          } catch (e) { const msg = el("market-fetch-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+            if (msg) { msg.textContent = ""; }
+            if (result) {
+              const summary = el("market-fetch-summary");
+              if (summary) summary.textContent = `${r.saved_klines ?? 0} new candles saved`;
+              const rows = (r.symbol_results || []).map((s) => {
+                const isNew = s.saved_klines > 0;
+                return `<div class="fetch-result-row">
+                  <span class="symbol-name">${s.symbol}</span>
+                  <span class="fetch-result-count ${isNew ? "new" : "none"}">${isNew ? "+" + s.saved_klines + " candles" : "Up to date"}</span>
+                </div>`;
+              }).join("");
+              el("market-fetch-pretty").innerHTML = rows;
+              el("market-fetch-raw").textContent = JSON.stringify(r, null, 2);
+              result.style.display = "block";
+
+              // Fetch last 10 candles per symbol and render as full-width table
+              const fetchedSymbols = (r.symbol_results || []).map((s) => s.symbol);
+              const candlesContainer = el("market-fetch-candles");
+              const candlesPanel = el("market-candles-panel");
+              if (candlesContainer && fetchedSymbols.length) {
+                candlesContainer.innerHTML = "";
+                const cols = ["open_time", "timeframe", "open", "high", "low", "close", "volume", "quote_asset_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"];
+                const colLabels = { quote_asset_volume: "quote_vol", number_of_trades: "trades", taker_buy_base_volume: "taker_base", taker_buy_quote_volume: "taker_quote" };
+                for (const sym of fetchedSymbols) {
+                  const candles = await api(`/candles?symbol=${encodeURIComponent(sym)}&limit=10`);
+                  if (!candles || !candles.length) continue;
+                  const headers = cols.map((c) => `<th>${colLabels[c] || c}</th>`).join("");
+                  const dataRows = candles.map((row) => {
+                    const openVal = parseFloat(row["open"]);
+                    const closeVal = parseFloat(row["close"]);
+                    const isBull = closeVal > openVal;
+                    const isBear = closeVal < openVal;
+                    const rowClass = isBull ? "bull-row" : isBear ? "bear-row" : "";
+                    const cells = cols.map((c) => {
+                      let v = row[c];
+                      if (c === "open_time" || c === "close_time") {
+                        const d = new Date(typeof v === "number" ? v : parseInt(v));
+                        v = isNaN(d) ? v : d.toISOString().replace("T", " ").slice(0, 19);
+                      } else if (typeof v === "number") {
+                        v = v % 1 === 0 ? v : parseFloat(v.toFixed(6));
+                      }
+                      if (c === "close") {
+                        const cls = isBull ? "cell-bull" : isBear ? "cell-bear" : "";
+                        const arrow = isBull ? `<span class="candles-dir">▲</span>` : isBear ? `<span class="candles-dir">▼</span>` : "";
+                        return `<td class="${cls}">${v ?? "—"}${arrow}</td>`;
+                      }
+                      return `<td>${v ?? "—"}</td>`;
+                    }).join("");
+                    return `<tr class="${rowClass}">${cells}</tr>`;
+                  }).join("");
+                  candlesContainer.innerHTML += `
+                    <div class="candles-table-wrap">
+                      <div class="candles-table-header">
+                        <span class="candles-symbol-badge">${sym}</span>
+                        <span class="candles-header-meta">Last ${candles.length} candles</span>
+                      </div>
+                      <table class="candles-table">
+                        <thead><tr>${headers}</tr></thead>
+                        <tbody>${dataRows}</tbody>
+                      </table>
+                    </div>`;
+                }
+                if (candlesPanel) candlesPanel.style.display = candlesContainer.innerHTML ? "block" : "none";
+              }
+            }
+            refreshMarketStatus();
+          } catch (e) { const msg = el("market-fetch-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; } }
         }
 
         if (action === "market-fs-materialize") {
-          const sym = el("market-fs-symbol-input")?.value.trim() || "BTCUSDT";
+          const sym = el("market-fs-symbol-pills")?.querySelector(".toggle-pill.selected")?.dataset.symbol || "BTCUSDT";
           const tf = el("market-fs-timeframe-input")?.value.trim() || "1m";
+          const btn = event.target.closest("[data-action]");
+          const msg = el("market-fs-message");
+          if (btn) { btn.disabled = true; btn.textContent = "Computing..."; }
+          if (msg) { msg.style.display = "none"; msg.textContent = ""; }
           try {
             const r = await api("/features/materialize", { method: "POST", body: JSON.stringify({ symbol: sym, timeframe: tf, days: 30 }) });
-            const pre = el("market-fs-json");
-            const msg = el("market-fs-message");
-            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
-            if (msg) { msg.textContent = `Materialized ${r.upserted ?? r.count ?? ""} feature vectors.`; msg.className = "message ok"; }
-          } catch (e) { const msg = el("market-fs-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+            const count = r.vectors_upserted ?? r.upserted ?? r.count ?? 0;
+            const result = el("market-fs-result");
+            const summary = el("market-fs-summary");
+            if (summary) summary.textContent = `${count} feature vectors upserted`;
+            el("market-fs-pretty").innerHTML = `
+              <div class="fetch-result-row"><span class="symbol-name">Symbol</span><span class="fetch-result-count new">${r.symbol ?? sym}</span></div>
+              <div class="fetch-result-row"><span class="symbol-name">Timeframe</span><span class="fetch-result-count new">${r.timeframe ?? tf}</span></div>
+              <div class="fetch-result-row"><span class="symbol-name">Candles processed</span><span class="fetch-result-count new">${r.candle_count ?? "—"}</span></div>
+              <div class="fetch-result-row"><span class="symbol-name">Vectors upserted</span><span class="fetch-result-count new">${count}</span></div>
+              <div class="fetch-result-row"><span class="symbol-name">Feature set</span><span class="fetch-result-count none">${r.feature_set ?? "—"}</span></div>`;
+            el("market-fs-raw").textContent = JSON.stringify(r, null, 2);
+            if (result) result.style.display = "block";
+          } catch (e) {
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; }
+          } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "Materialize Features"; }
+          }
         }
 
         if (action === "market-fs-latest") {
-          const sym = el("market-fs-symbol-input")?.value.trim() || "BTCUSDT";
+          const sym = el("market-fs-symbol-pills")?.querySelector(".toggle-pill.selected")?.dataset.symbol || "BTCUSDT";
           const tf = el("market-fs-timeframe-input")?.value.trim() || "1m";
+          const msg = el("market-fs-message");
+          if (msg) { msg.style.display = "none"; msg.textContent = ""; }
           try {
             const r = await api(`/features/${sym}/latest?timeframe=${tf}`);
-            const pre = el("market-fs-json");
-            const msg = el("market-fs-message");
-            if (pre) { pre.textContent = JSON.stringify(r, null, 2); pre.style.display = "block"; }
-            if (msg) { msg.textContent = "Latest feature vector loaded."; msg.className = "message ok"; }
-          } catch (e) { const msg = el("market-fs-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; } }
+            const result = el("market-fs-result");
+            const summary = el("market-fs-summary");
+            if (summary) summary.textContent = `Latest feature vector — ${sym} ${tf}`;
+            const fields = Object.entries(r)
+              .filter(([k]) => !["id","created_at","feature_set","symbol","timeframe","open_time"].includes(k))
+              .map(([k, v]) => `<div class="fetch-result-row"><span class="symbol-name">${k}</span><span class="fetch-result-count none">${typeof v === "number" ? v.toFixed(6) : v}</span></div>`)
+              .join("");
+            el("market-fs-pretty").innerHTML = fields;
+            el("market-fs-raw").textContent = JSON.stringify(r, null, 2);
+            if (result) result.style.display = "block";
+          } catch (e) { if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; } }
         }
       });
     </script>

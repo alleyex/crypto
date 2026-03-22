@@ -2925,7 +2925,7 @@ def test_broker_protection_check_degrades_on_stale_non_terminal_order(monkeypatc
     assert result["reason"] == "Latest order is stale and still not terminal."
 
 
-def test_broker_protection_check_degrades_on_rejected_risk_streak(monkeypatch) -> None:
+def test_broker_protection_check_ignores_cooldown_only_rejected_risk_streak(monkeypatch) -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
@@ -2956,12 +2956,136 @@ def test_broker_protection_check_degrades_on_rejected_risk_streak(monkeypatch) -
             {"latest_risk": {"decision": "REJECTED", "reason": "Cooldown active: last fill 10 seconds ago, minimum 300."}},
         )
 
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "Cooldown active: last fill 10 seconds ago, minimum 300."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
+    finally:
+        connection.close()
+
+
+def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "BUY",
+                    "REJECTED",
+                    "Existing long position already open (pending_qty=0.0).",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "Existing long position already open (pending_qty=0.0)."}},
+        )
+
         assert result["status"] == "degraded"
         assert result["reason"] == "Recent risk evaluations are repeatedly rejected."
-        assert result["reason_code"] == "risk_reject_cooldown_streak"
+        assert result["reason_code"] == "risk_reject_streak"
         assert result["severity"] == "medium"
-        assert result["recommended_action"] == "pause_scheduler"
+        assert result["recommended_action"] == "inspect_risk_rules"
         assert result["rejected_risk_streak"] == 3
+        assert result["anomalous_rejected_risk_streak"] == 3
+    finally:
+        connection.close()
+
+
+def test_broker_protection_check_ignores_hold_only_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "HOLD",
+                    "REJECTED",
+                    "Signal is HOLD.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "Signal is HOLD."}},
+        )
+
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "Signal is HOLD."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
+    finally:
+        connection.close()
+
+
+def test_broker_protection_check_ignores_duplicate_only_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "BUY",
+                    "REJECTED",
+                    "Duplicate signal type.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "Duplicate signal type."}},
+        )
+
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "Duplicate signal type."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
     finally:
         connection.close()
 
@@ -3290,6 +3414,39 @@ def test_maybe_send_broker_alert_includes_latest_fill_price(monkeypatch, tmp_pat
     assert "latest_fill_price=48500.5" in sent_messages[0]
 
 
+def test_maybe_send_broker_alert_prefers_anomalous_streak_label(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "broker_alert_state.json"
+    sent_messages: list[str] = []
+    monkeypatch.setattr("app.alerting.broker.BROKER_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.broker.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.broker import maybe_send_broker_alert
+
+    report = {
+        "checks": {
+            "broker_protection": {
+                "status": "degraded",
+                "backend": "paper",
+                "reason": "Recent risk evaluations are repeatedly rejected.",
+                "reason_code": "risk_reject_streak",
+                "severity": "medium",
+                "recommended_action": "inspect_risk_rules",
+                "anomalous_rejected_risk_streak": 3,
+                "latest_rejection_reason": "Existing long position already open (pending_qty=0.0).",
+            }
+        }
+    }
+
+    result = maybe_send_broker_alert(report)
+
+    assert result["sent"] is True
+    assert "anomalous_rejected_risk_streak=3" in sent_messages[0]
+    assert ", rejected_risk_streak=3" not in sent_messages[0]
+
+
 def test_insert_signal_writes_audit_event_for_buy_sell() -> None:
     from app.strategy.ma_cross import insert_signal
     import app.strategy.ma_cross as ma_cross_mod
@@ -3416,7 +3573,7 @@ def test_admin_page_is_served() -> None:
     assert "Auto refresh every 10 seconds." in response.text
     assert 'id="heartbeats-json"' in response.text
     assert 'id="market-data-status"' in response.text
-    assert 'id="pipeline-symbol-select"' in response.text
+    assert 'id="pipeline-symbol-pills"' in response.text
     assert 'id="data-worker-status"' in response.text
     assert 'id="strategy-worker-status"' in response.text
     assert 'id="risk-worker-status"' in response.text
@@ -3469,9 +3626,9 @@ def test_admin_page_is_served() -> None:
     assert '<option value="execution">execution</option>' in response.text
     assert 'id="logs-mode-select"' in response.text
     assert 'id="pipeline-strategy-select"' in response.text
-    assert 'id="scheduler-strategy-select"' in response.text
-    assert 'id="scheduler-disabled-strategy-select"' in response.text
-    assert 'id="scheduler-symbol-select"' in response.text
+    assert 'id="scheduler-strategy-pills"' in response.text
+    assert 'id="scheduler-disabled-strategy-pills"' in response.text
+    assert 'id="scheduler-symbol-pills"' in response.text
     assert 'id="scheduler-priority-controls"' in response.text
     assert 'id="scheduler-disabled-note-controls"' in response.text
     assert 'id="scheduler-effective-limit-input"' in response.text
@@ -3486,9 +3643,9 @@ def test_admin_page_is_served() -> None:
     assert 'data-action="scheduler-priority-active-first"' in response.text
     assert 'Active first' in response.text
     assert 'data-action="scheduler-reset-priorities"' in response.text
-    assert 'Reset priorities' in response.text
+    assert 'Reset' in response.text
     assert 'data-action="scheduler-clear-notes"' in response.text
-    assert 'Clear notes' in response.text
+    assert 'Clear Notes' in response.text
     assert 'id="scheduler-preset-detail"' in response.text
     assert "Limit presets change how many enabled strategies run." in response.text
     assert "Priority presets reorder the scheduler execution sequence." in response.text
@@ -3543,9 +3700,9 @@ def test_admin_page_is_served() -> None:
     assert "Send Test Alert" in response.text
     assert "Soak Validation" in response.text
     assert "Record Snapshot" in response.text
-    assert "Apply top-1" in response.text
-    assert "Apply top-2" in response.text
-    assert "All enabled" in response.text
+    assert "top-1" in response.text
+    assert "top-2" in response.text
+    assert "all" in response.text
     assert "Latest Closed Symbol" in response.text
     assert "Latest Closed Status" in response.text
     assert "Latest Closed At" in response.text
@@ -8950,7 +9107,7 @@ def test_market_data_fetch_endpoint(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
     monkeypatch.setenv("CRYPTO_USE_FAKE_KLINES", "1")
     client = TestClient(app)
-    resp = client.post("/market-data/fetch", json=["BTCUSDT"])
+    resp = client.post("/market-data/fetch", json={"symbols": ["BTCUSDT"], "limit": 10})
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
@@ -8962,10 +9119,28 @@ def test_market_data_fetch_endpoint(monkeypatch) -> None:
 def test_market_data_fetch_endpoint_no_symbols_uses_active(monkeypatch) -> None:
     pconn = _make_market_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
-    monkeypatch.setattr("app.pipeline.market_data_job.fetch_klines", lambda symbol: [make_kline(60_000, 100.0)])
+    monkeypatch.setattr(
+        "app.pipeline.market_data_job.fetch_klines",
+        lambda symbol, limit=100, interval="1m": [make_kline(60_000, 100.0)],
+    )
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
     client = TestClient(app)
     resp = client.post("/market-data/fetch")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    pconn.really_close()
+
+
+def test_market_data_fetch_endpoint_respects_limit(monkeypatch) -> None:
+    pconn = _make_market_api_conn()
+    monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    captured: dict = {}
+    def _fake_fetch(symbol, limit=100, interval="1m"):
+        captured["limit"] = limit
+        return [make_kline(60_000, 100.0)]
+    monkeypatch.setattr("app.pipeline.market_data_job.fetch_klines", _fake_fetch)
+    monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
+    client = TestClient(app)
+    client.post("/market-data/fetch", json={"limit": 500})
+    assert captured["limit"] == 500
     pconn.really_close()

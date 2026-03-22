@@ -105,6 +105,7 @@ from app.system.kill_switch import disable_kill_switch
 from app.system.heartbeat import get_heartbeats
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import get_kill_switch_status
+from app.system.retention import run_retention
 from app.metrics.metrics_service import build_metrics
 from app.backtest.history_service import compare_runs as compare_backtest_runs
 from app.backtest.history_service import get_best_sweep_run
@@ -278,6 +279,13 @@ def _broker_protection_check(
     execution_backend_check: dict[str, Any],
     pipeline_check: dict[str, Any],
 ) -> dict[str, Any]:
+    def _is_expected_rejection_reason(reason: str) -> bool:
+        return (
+            "Cooldown active" in reason
+            or reason == "Signal is HOLD."
+            or reason == "Duplicate signal type."
+        )
+
     latest_run = pipeline_check.get("latest_run", {}) if isinstance(pipeline_check, dict) else {}
     latest_order = pipeline_check.get("latest_order") if isinstance(pipeline_check, dict) else None
     approved_risk_count = int(latest_run.get("approved_risk_count") or 0) if isinstance(latest_run, dict) else 0
@@ -351,8 +359,14 @@ def _broker_protection_check(
     ).fetchall()
     if len(rejection_rows) >= RISK_REJECTION_STREAK_THRESHOLD and all(str(row[0]).upper() == "REJECTED" for row in rejection_rows):
         latest_rejection_reason = str(rejection_rows[0][1] or "")
+        rejection_reasons = [str(row[1] or "") for row in rejection_rows]
+        if all(_is_expected_rejection_reason(reason) for reason in rejection_reasons):
+            result["expected_rejected_risk_streak"] = len(rejection_rows)
+            result["expected_latest_rejection_reason"] = latest_rejection_reason
+            return result
         result["status"] = "degraded"
         result["rejected_risk_streak"] = len(rejection_rows)
+        result["anomalous_rejected_risk_streak"] = len(rejection_rows)
         result["latest_rejection_reason"] = latest_rejection_reason
         if "Daily loss limit breached" in latest_rejection_reason:
             result["severity"] = "critical"
@@ -824,10 +838,13 @@ def alerts_test(payload: AlertTestRequest) -> dict[str, Any]:
 
 
 @app.get("/candles")
-def candles(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
+def candles(
+    limit: int = Query(default=5, ge=1, le=100),
+    symbol: Optional[str] = Query(default=None),
+) -> list[dict]:
     connection = get_connection()
     try:
-        return get_candles(connection, limit=limit)
+        return get_candles(connection, limit=limit, symbol=symbol)
     finally:
         connection.close()
 
@@ -843,17 +860,40 @@ def candles_status() -> list[dict]:
         connection.close()
 
 
+class MarketDataFetchRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    start_date: Optional[str] = None  # ISO date string e.g. "2024-01-01"
+
+
 @app.post("/market-data/fetch")
-def market_data_fetch(symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+def market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
     """Trigger an independent market data fetch without running the full pipeline.
 
-    Optionally pass a list of symbols; defaults to active symbols from scheduler.
+    Pass start_date (e.g. "2024-01-01") to paginate through all candles since that date.
+    Otherwise fetches the latest `limit` candles (max 1000) per symbol.
     """
+    from datetime import datetime, timezone
+
+    start_ms: Optional[int] = None
+    if body.start_date:
+        try:
+            dt = datetime.strptime(body.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD.")
+
     connection = get_connection()
     try:
         run_migrations(connection)
-        result = run_market_data_job(connection, symbol_names=symbols)
-        return {"status": "ok", **result}
+        result = run_market_data_job(
+            connection,
+            symbol_names=body.symbols,
+            limit=body.limit,
+            start_ms=start_ms,
+        )
+        return {"status": "ok", "start_date": body.start_date, **result}
     finally:
         connection.close()
 
@@ -863,6 +903,27 @@ def audit_events(limit: int = Query(default=20, ge=1, le=200)) -> list[dict]:
     connection = get_connection()
     try:
         return get_audit_events(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+class RetentionRequest(BaseModel):
+    audit_days: int = Field(default=90, ge=1, description="Delete audit_events older than N days")
+    job_queue_days: int = Field(default=30, ge=1, description="Delete done/failed job_queue rows older than N days")
+
+
+@app.post("/maintenance/retention")
+def maintenance_retention(body: RetentionRequest = RetentionRequest()) -> Dict[str, Any]:
+    """Purge old audit_events and completed job_queue rows to keep the database lean."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        result = run_retention(
+            connection,
+            audit_days=body.audit_days,
+            job_queue_days=body.job_queue_days,
+        )
+        return {"status": "ok", **result}
     finally:
         connection.close()
 
