@@ -28,8 +28,7 @@ def _decode_json_field(value: Any) -> Any:
         return None
 
 
-SELECT_CANDLES_SQL = """
-SELECT
+_CANDLES_COLUMNS = """
     id,
     symbol,
     timeframe,
@@ -44,8 +43,19 @@ SELECT
     number_of_trades,
     taker_buy_base_volume,
     taker_buy_quote_volume,
-    created_at
+    created_at"""
+
+SELECT_CANDLES_SQL = f"""
+SELECT{_CANDLES_COLUMNS}
 FROM candles
+ORDER BY open_time DESC
+LIMIT ?;
+"""
+
+SELECT_CANDLES_BY_SYMBOL_SQL = f"""
+SELECT{_CANDLES_COLUMNS}
+FROM candles
+WHERE symbol = ?
 ORDER BY open_time DESC
 LIMIT ?;
 """
@@ -183,10 +193,7 @@ LIMIT ?;
 
 def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None) -> list[dict[str, Any]]:
     if symbol:
-        query = SELECT_CANDLES_SQL.replace(
-            "FROM candles", "FROM candles WHERE symbol = ?"
-        )
-        return fetch_all_as_dicts(connection, query, (symbol, limit))
+        return fetch_all_as_dicts(connection, SELECT_CANDLES_BY_SYMBOL_SQL, (symbol, limit))
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
 
