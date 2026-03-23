@@ -8,6 +8,10 @@ import requests
 BASE_URL = "https://api.binance.com/api/v3/klines"
 DEFAULT_FAKE_CLOSES = (10.0, 11.0, 12.0, 13.0, 14.0)
 
+_DEFAULT_TIMEOUT = 10
+_DEFAULT_RETRIES = 3
+_DEFAULT_BACKOFF = 1.0
+
 
 def _build_fake_klines(
     symbol: str = "BTCUSDT",
@@ -51,6 +55,17 @@ def _build_fake_klines(
     return klines
 
 
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return True
+    if isinstance(exc, requests.exceptions.Timeout):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else 0
+        return status == 429 or status >= 500
+    return False
+
+
 def fetch_klines(
     symbol: str = "BTCUSDT",
     interval: str = "1m",
@@ -64,6 +79,22 @@ def fetch_klines(
     if start_ms is not None:
         params["startTime"] = start_ms
 
-    response = requests.get(BASE_URL, params=params, timeout=10)
-    response.raise_for_status()
-    return response.json()
+    timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
+    max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
+    backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
+
+    last_exc: Exception = RuntimeError("fetch_klines: no attempts made")
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(BASE_URL, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries and _is_retryable(exc):
+                wait = backoff * (2 ** attempt)
+                time.sleep(wait)
+                continue
+            raise
+
+    raise last_exc

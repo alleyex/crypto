@@ -1,4 +1,5 @@
 import json
+import pytest
 import sqlite3
 import urllib.error
 from io import StringIO
@@ -970,6 +971,92 @@ def test_fetch_klines_returns_fake_data_when_enabled(monkeypatch) -> None:
     assert len(klines) == 3
     assert [kline[4] for kline in klines] == ["23.0", "24.0", "25.0"]
     assert klines[0][0] < klines[-1][0]
+
+
+# ---- fetch_klines retry / backoff ----
+
+def test_fetch_klines_retries_on_connection_error(monkeypatch) -> None:
+    import requests as req
+    calls = {"n": 0}
+
+    def fake_get(*_a, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise req.exceptions.ConnectionError("network down")
+        resp = req.Response()
+        resp.status_code = 200
+        resp._content = b"[]"
+        return resp
+
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_COUNT", "3")
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setattr("app.data.binance_client.requests.get", fake_get)
+
+    result = fetch_klines(symbol="BTCUSDT", interval="1m", limit=1)
+
+    assert result == []
+    assert calls["n"] == 3
+
+
+def test_fetch_klines_retries_on_429(monkeypatch) -> None:
+    import requests as req
+    calls = {"n": 0}
+
+    def fake_get(*_a, **_kw):
+        calls["n"] += 1
+        resp = req.Response()
+        if calls["n"] < 2:
+            resp.status_code = 429
+            resp._content = b'{"msg":"rate limit"}'
+            resp.raise_for_status()
+        resp.status_code = 200
+        resp._content = b"[]"
+        return resp
+
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_COUNT", "3")
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setattr("app.data.binance_client.requests.get", fake_get)
+
+    result = fetch_klines(symbol="BTCUSDT", interval="1m", limit=1)
+
+    assert result == []
+    assert calls["n"] == 2
+
+
+def test_fetch_klines_raises_after_max_retries(monkeypatch) -> None:
+    import requests as req
+
+    def fake_get(*_a, **_kw):
+        raise req.exceptions.ConnectionError("always down")
+
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_COUNT", "2")
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setattr("app.data.binance_client.requests.get", fake_get)
+
+    with pytest.raises(req.exceptions.ConnectionError):
+        fetch_klines(symbol="BTCUSDT", interval="1m", limit=1)
+
+
+def test_fetch_klines_does_not_retry_on_400(monkeypatch) -> None:
+    import requests as req
+    calls = {"n": 0}
+
+    def fake_get(*_a, **_kw):
+        calls["n"] += 1
+        resp = req.Response()
+        resp.status_code = 400
+        resp._content = b'{"msg":"bad symbol"}'
+        resp.raise_for_status()
+        return resp
+
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_COUNT", "3")
+    monkeypatch.setenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setattr("app.data.binance_client.requests.get", fake_get)
+
+    with pytest.raises(req.exceptions.HTTPError):
+        fetch_klines(symbol="INVALID", interval="1m", limit=1)
+
+    assert calls["n"] == 1  # no retry on 4xx
 
 
 def test_build_summary_markdown_renders_key_runtime_fields() -> None:
