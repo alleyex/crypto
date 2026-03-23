@@ -1645,6 +1645,26 @@ def test_get_connection_retries_postgres_until_ready(monkeypatch) -> None:
     assert sleep_calls == [0.25, 0.25]
 
 
+def test_get_connection_sqlite_enables_wal_and_busy_timeout(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPTO_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("CRYPTO_SQLITE_BUSY_TIMEOUT_MS", "3000")
+    monkeypatch.setattr("app.core.db.DB_BACKEND", "sqlite")
+    monkeypatch.setattr("app.core.db.DB_FILE", tmp_path / "test.db")
+    monkeypatch.setattr("app.core.db.DB_DIR", tmp_path)
+
+    conn = get_connection()
+    try:
+        journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+        busy_timeout = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
+        foreign_keys = conn.execute("PRAGMA foreign_keys;").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert journal_mode == "wal"
+    assert busy_timeout == 3000
+    assert foreign_keys == 1
+
+
 def test_insert_and_get_rowid_uses_returning_for_postgres() -> None:
     executed: list[tuple[str, object]] = []
 

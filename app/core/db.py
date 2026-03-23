@@ -1,4 +1,5 @@
 import importlib
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -168,8 +169,11 @@ def get_connection() -> DBConnection:
         raise RuntimeError(f"Unsupported database backend: {DB_BACKEND}")
 
     ensure_storage_dir()
-    conn = sqlite3.connect(DB_FILE)
+    busy_timeout = int(os.getenv("CRYPTO_SQLITE_BUSY_TIMEOUT_MS", "5000"))
+    conn = sqlite3.connect(DB_FILE, timeout=busy_timeout / 1000)
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute(f"PRAGMA busy_timeout = {busy_timeout};")
     return conn
 
 
