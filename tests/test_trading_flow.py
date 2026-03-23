@@ -9253,8 +9253,23 @@ def test_get_candles_status_single_symbol() -> None:
         assert isinstance(row["stale_seconds"], int)
         assert isinstance(row["has_gaps"], bool)
         assert isinstance(row["gap_count_estimate"], int)
+        assert isinstance(row["staleness_threshold_seconds"], int)
+        assert isinstance(row["is_stale"], bool)
+        # 1m × 3 = 180s threshold
+        assert row["staleness_threshold_seconds"] == 180
     finally:
         connection.close()
+
+
+def test_candle_staleness_threshold_seconds_is_timeframe_aware() -> None:
+    from app.data.candles_service import candle_staleness_threshold_seconds
+    assert candle_staleness_threshold_seconds("1m", multiplier=3) == 180
+    assert candle_staleness_threshold_seconds("5m", multiplier=3) == 900
+    assert candle_staleness_threshold_seconds("1h", multiplier=3) == 10_800
+    assert candle_staleness_threshold_seconds("4h", multiplier=3) == 43_200
+    assert candle_staleness_threshold_seconds("1d", multiplier=3) == 259_200
+    # unknown timeframe falls back to 1m
+    assert candle_staleness_threshold_seconds("99x", multiplier=3) == 180
 
 
 def test_get_candles_status_no_gaps_when_consecutive() -> None:

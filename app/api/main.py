@@ -46,6 +46,7 @@ from app.core.settings import ORDER_STALENESS_SECONDS
 from app.core.settings import QUEUE_BATCH_STALENESS_SECONDS
 from app.core.settings import RISK_REJECTION_STREAK_THRESHOLD
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -217,7 +218,8 @@ def _candle_check(connection: DBConnection) -> dict[str, Any]:
     symbol, timeframe, open_time, close_time = latest_candle
     latest_close_at = datetime.fromtimestamp(int(close_time) / 1000, tz=timezone.utc)
     age_seconds = int((_utc_now() - latest_close_at).total_seconds())
-    status = "ok" if age_seconds <= CANDLE_STALENESS_SECONDS else "degraded"
+    staleness_threshold = candle_staleness_threshold_seconds(timeframe)
+    status = "ok" if age_seconds <= staleness_threshold else "degraded"
     return {
         "status": status,
         "symbol": symbol,
@@ -226,7 +228,7 @@ def _candle_check(connection: DBConnection) -> dict[str, Any]:
         "latest_close_time": int(close_time),
         "latest_close_at": latest_close_at.isoformat(),
         "age_seconds": age_seconds,
-        "staleness_threshold_seconds": CANDLE_STALENESS_SECONDS,
+        "staleness_threshold_seconds": staleness_threshold,
     }
 
 

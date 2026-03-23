@@ -3,9 +3,10 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import DBConnection
 from app.core.migrations import run_migrations
+from app.core.settings import CANDLE_STALENESS_MULTIPLIER
 from app.system.heartbeat import upsert_heartbeat
 
-_TIMEFRAME_INTERVAL_MS: Dict[str, int] = {
+TIMEFRAME_INTERVAL_MS: Dict[str, int] = {
     "1m": 60_000,
     "3m": 180_000,
     "5m": 300_000,
@@ -15,6 +16,17 @@ _TIMEFRAME_INTERVAL_MS: Dict[str, int] = {
     "4h": 14_400_000,
     "1d": 86_400_000,
 }
+
+
+def candle_staleness_threshold_seconds(timeframe: str, multiplier: int = CANDLE_STALENESS_MULTIPLIER) -> int:
+    """Return the staleness threshold in seconds for a given timeframe.
+
+    threshold = interval_seconds × multiplier
+    e.g. 1m with multiplier=3 → 180s, 1h → 10800s.
+    Falls back to 1m interval for unknown timeframes.
+    """
+    interval_ms = TIMEFRAME_INTERVAL_MS.get(timeframe, 60_000)
+    return round(interval_ms / 1000 * multiplier)
 
 
 CREATE_CANDLES_TABLE_SQL = """
@@ -133,11 +145,12 @@ def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
         symbol, timeframe, count, earliest_ms, latest_ms = (
             row[0], row[1], int(row[2]), int(row[3]), int(row[4])
         )
-        interval_ms = _TIMEFRAME_INTERVAL_MS.get(timeframe, 60_000)
+        interval_ms = TIMEFRAME_INTERVAL_MS.get(timeframe, 60_000)
         expected_span_ms = (count - 1) * interval_ms
         actual_span_ms = latest_ms - earliest_ms
         gap_count = max(0, round((actual_span_ms - expected_span_ms) / interval_ms))
         stale_seconds = round((now_ms - latest_ms) / 1000)
+        threshold_seconds = candle_staleness_threshold_seconds(timeframe)
 
         latest_iso = datetime.fromtimestamp(latest_ms / 1000, tz=timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -152,6 +165,8 @@ def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
             "earliest": earliest_iso,
             "latest": latest_iso,
             "stale_seconds": stale_seconds,
+            "staleness_threshold_seconds": threshold_seconds,
+            "is_stale": stale_seconds > threshold_seconds,
             "has_gaps": gap_count > 0,
             "gap_count_estimate": gap_count,
         })
