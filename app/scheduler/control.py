@@ -19,6 +19,9 @@ PRIORITY_FILE = RUNTIME_DIR / "scheduler.strategy.priority.json"
 DISABLED_REASON_FILE = RUNTIME_DIR / "scheduler.strategy.disabled.reason.json"
 EFFECTIVE_LIMIT_FILE = RUNTIME_DIR / "scheduler.strategy.limit"
 SYMBOL_FILE = RUNTIME_DIR / "scheduler.symbols"
+TIMEFRAME_FILE = RUNTIME_DIR / "scheduler.timeframes"
+
+DEFAULT_TIMEFRAME = "1m"
 StrategyPriorityPreset = Literal["sequential", "reverse", "active_first", "reset"]
 
 
@@ -270,6 +273,43 @@ def set_active_symbols(
         "symbol_names": unique_names,
         "symbol_file": str(SYMBOL_FILE),
     }
+
+
+def read_active_timeframes() -> list[str]:
+    from app.data.candles_service import TIMEFRAME_INTERVAL_MS
+    if not TIMEFRAME_FILE.exists():
+        return [DEFAULT_TIMEFRAME]
+    configured = [
+        item.strip()
+        for item in TIMEFRAME_FILE.read_text(encoding="utf-8").splitlines()
+        if item.strip()
+    ]
+    valid = [tf for tf in dict.fromkeys(configured) if tf in TIMEFRAME_INTERVAL_MS]
+    return valid if valid else [DEFAULT_TIMEFRAME]
+
+
+def set_active_timeframes(
+    timeframe_names: list[str],
+    *,
+    audit_action: str = "set_active_timeframes",
+    audit_message: str = "Scheduler active timeframes updated.",
+) -> Dict[str, Union[str, list[str]]]:
+    from app.data.candles_service import TIMEFRAME_INTERVAL_MS
+    if not timeframe_names:
+        raise ValueError("At least one timeframe must be provided.")
+    unique = list(dict.fromkeys(timeframe_names))
+    invalid = [tf for tf in unique if tf not in TIMEFRAME_INTERVAL_MS]
+    if invalid:
+        raise ValueError(f"Unknown timeframes: {', '.join(invalid)}. Supported: {sorted(TIMEFRAME_INTERVAL_MS)}")
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    TIMEFRAME_FILE.write_text("\n".join(unique) + "\n", encoding="utf-8")
+    _log_scheduler_control_event(
+        status="updated",
+        action=audit_action,
+        message=audit_message,
+        payload={"timeframe_names": unique, "timeframe_file": str(TIMEFRAME_FILE)},
+    )
+    return {"timeframe_names": unique, "timeframe_file": str(TIMEFRAME_FILE)}
 
 
 def set_active_strategies(

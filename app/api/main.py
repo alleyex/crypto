@@ -90,6 +90,8 @@ from app.scheduler.control import get_strategy_status
 from app.scheduler.control import get_stop_status
 from app.scheduler.control import read_scheduler_log
 from app.scheduler.control import set_active_symbols
+from app.scheduler.control import read_active_timeframes
+from app.scheduler.control import set_active_timeframes
 from app.scheduler.control import set_active_strategy
 from app.scheduler.control import set_active_strategies
 from app.scheduler.control import set_disabled_strategies
@@ -937,6 +939,7 @@ def candles_status() -> list[dict]:
 
 class MarketDataFetchRequest(BaseModel):
     symbols: Optional[List[str]] = None
+    timeframes: Optional[List[str]] = None  # e.g. ["1m", "5m", "1h"]
     limit: int = Field(default=100, ge=1, le=1000)
     start_date: Optional[str] = None  # ISO date string e.g. "2024-01-01"
 
@@ -965,6 +968,7 @@ def market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -
         result = run_market_data_job(
             connection,
             symbol_names=body.symbols,
+            timeframes=body.timeframes,
             limit=body.limit,
             start_ms=start_ms,
         )
@@ -1591,6 +1595,33 @@ def scheduler_symbols_update(payload: SchedulerSymbolsRequest) -> dict[str, Any]
         )
         return get_symbol_status()
     return set_active_symbols([payload.symbol])
+
+
+class SchedulerTimeframesRequest(BaseModel):
+    timeframe_names: List[str]
+
+
+@app.get("/scheduler/timeframes")
+def scheduler_timeframes_get() -> dict[str, Any]:
+    from app.data.candles_service import TIMEFRAME_INTERVAL_MS
+    active = read_active_timeframes()
+    return {
+        "timeframe_names": active,
+        "supported_timeframes": sorted(TIMEFRAME_INTERVAL_MS.keys()),
+    }
+
+
+@app.post("/scheduler/timeframes")
+def scheduler_timeframes_update(payload: SchedulerTimeframesRequest) -> dict[str, Any]:
+    from fastapi import HTTPException
+    try:
+        return set_active_timeframes(
+            payload.timeframe_names,
+            audit_action="set_active_timeframes",
+            audit_message="Scheduler active timeframes updated.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/scheduler/strategy/preset")

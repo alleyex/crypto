@@ -2446,8 +2446,8 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
     result = run_pipeline_collect()
 
     assert result["steps"][0]["symbol_results"] == [
-        {"symbol": "BTCUSDT", "saved_klines": 5},
-        {"symbol": "ETHUSDT", "saved_klines": 5},
+        {"symbol": "BTCUSDT", "timeframe": "1m", "saved_klines": 5},
+        {"symbol": "ETHUSDT", "timeframe": "1m", "saved_klines": 5},
     ]
 
     connection = sqlite3.connect(db_path)
@@ -5755,14 +5755,16 @@ def test_run_market_data_job_supports_multiple_symbols(monkeypatch) -> None:
 
     monkeypatch.setattr("app.pipeline.market_data_job.save_klines", fake_save_klines)
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
+    monkeypatch.setattr("app.scheduler.control.read_active_timeframes", lambda: ["1m"])
 
     result = run_market_data_job(connection=None)  # type: ignore[arg-type]
 
     assert result["saved_klines"] == 2
     assert result["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
+    assert result["timeframes"] == ["1m"]
     assert result["symbol_results"] == [
-        {"symbol": "BTCUSDT", "saved_klines": 1},
-        {"symbol": "ETHUSDT", "saved_klines": 1},
+        {"symbol": "BTCUSDT", "timeframe": "1m", "saved_klines": 1},
+        {"symbol": "ETHUSDT", "timeframe": "1m", "saved_klines": 1},
     ]
     assert [symbol for symbol, _ in saved_calls] == ["BTCUSDT", "ETHUSDT"]
 
@@ -6263,7 +6265,8 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
             "step": "save_klines",
             "saved_klines": 5,
             "symbol_names": ["BTCUSDT"],
-            "symbol_results": [{"symbol": "BTCUSDT", "saved_klines": 5}],
+            "timeframes": ["1m"],
+            "symbol_results": [{"symbol": "BTCUSDT", "timeframe": "1m", "saved_klines": 5}],
         }
         assert [step["step"] for step in strategy_result["steps"]] == ["generate_signal"]
         assert [step["step"] for step in risk_result["steps"]] == ["evaluate_risk"]
