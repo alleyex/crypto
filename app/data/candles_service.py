@@ -80,6 +80,12 @@ ORDER BY open_time DESC
 LIMIT 1;
 """
 
+SELECT_LATEST_OPEN_TIME_SQL = """
+SELECT MAX(open_time)
+FROM candles
+WHERE symbol = ? AND timeframe = ?;
+"""
+
 
 def ensure_table(connection: DBConnection) -> None:
     run_migrations(connection)
@@ -158,6 +164,9 @@ def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
         earliest_iso = datetime.fromtimestamp(earliest_ms / 1000, tz=timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
+        expected_count = round(actual_span_ms / interval_ms) + 1 if actual_span_ms > 0 else count
+        coverage_pct = round(count / expected_count * 100, 1) if expected_count > 0 else 100.0
+
         result.append({
             "symbol": symbol,
             "timeframe": timeframe,
@@ -169,8 +178,21 @@ def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
             "is_stale": stale_seconds > threshold_seconds,
             "has_gaps": gap_count > 0,
             "gap_count_estimate": gap_count,
+            "coverage_pct": coverage_pct,
         })
     return result
+
+
+def get_latest_open_time(
+    connection: DBConnection,
+    symbol: str,
+    timeframe: str,
+) -> Optional[int]:
+    """Return the most recent open_time (ms) stored for symbol+timeframe, or None."""
+    row = connection.execute(SELECT_LATEST_OPEN_TIME_SQL, (symbol, timeframe)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return int(row[0])
 
 
 def get_latest_close(

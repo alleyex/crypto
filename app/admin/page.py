@@ -208,10 +208,6 @@ def render_admin_page() -> str:
         grid-row: 1 / span 2;
       }
 
-      .controls .kill-switch-card {
-        grid-column: 1;
-        grid-row: 2;
-      }
 
       .hero-stat-grid {
         display: grid;
@@ -1451,8 +1447,7 @@ def render_admin_page() -> str:
           <div class="eyebrow">Crypto Trading MVP</div>
           <h1>Admin Console</h1>
           <p class="subtitle">
-            Monitor runtime state, inspect paper-trading records, and control the scheduler and kill
-            switch without dropping into curl commands.
+            Monitor runtime state, inspect paper-trading records, and control the scheduler without dropping into curl commands.
           </p>
           <div class="status-strip" id="status-strip">
             <div class="chip">Loading health...</div>
@@ -1501,11 +1496,6 @@ def render_admin_page() -> str:
           <label>Queue</label>
           <div class="value" id="queue-status">Loading</div>
           <div class="inline-note" id="queue-detail">Checking queued worker jobs...</div>
-        </div>
-        <div class="status-card">
-          <label>Kill Switch</label>
-          <div class="value" id="kill-switch-status">Loading</div>
-          <div class="inline-note">Emergency block on new execution cycles.</div>
         </div>
         <div class="status-card">
           <label>Alerts</label>
@@ -1598,7 +1588,6 @@ def render_admin_page() -> str:
               <p>Operate the scheduler without shell commands and keep emergency controls close to the live state.</p>
               <div class="feature-points">
                 <span class="chip">Start / stop scheduler</span>
-                <span class="chip">Kill switch</span>
                 <span class="chip">Execution backend switching</span>
                 <span class="chip">Strategy and symbol selection</span>
               </div>
@@ -1762,19 +1751,6 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <div class="message" id="scheduler-message"></div>
         </div>
 
-        <!-- Kill Switch -->
-        <div class="panel control-card kill-switch-card">
-          <h2>Kill Switch</h2>
-          <p>Block new pipeline executions immediately while keeping observability online.</p>
-          <div style="margin-bottom:16px">
-            <span id="kill-switch-panel-badge" class="status-badge">Checking...</span>
-          </div>
-          <div class="button-row">
-            <button class="danger" data-action="kill-enable">Enable</button>
-            <button class="secondary" data-action="kill-disable">Disable</button>
-          </div>
-          <div class="message" id="kill-message"></div>
-        </div>
 
       </section>
       </section>
@@ -1969,12 +1945,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card">
           <h2>Data Status</h2>
           <p>Candle count, freshness, and gap estimate per symbol.</p>
-          <div class="button-row">
+          <div class="button-row" style="gap:8px">
             <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
+            <button class="secondary" id="market-status-view-toggle" data-view="cards">Coverage Matrix</button>
           </div>
           <div id="market-status-board" style="margin-top:12px;">
             <span style="color:var(--muted);font-size:13px;">Loading...</span>
           </div>
+          <div id="market-coverage-matrix" style="display:none;margin-top:12px;overflow-x:auto"></div>
         </article>
 
         <article class="panel data-card fetch-panel">
@@ -1989,6 +1967,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div id="market-fetch-symbol-checkboxes" class="toggle-pill-group"></div>
           </div>
           <div class="fetch-field">
+            <div class="fetch-field-label">Timeframes <span class="fetch-field-hint">leave empty to use active timeframes</span></div>
+            <div id="market-fetch-timeframe-pills" class="toggle-pill-group"></div>
+          </div>
+          <div class="fetch-field">
             <div class="fetch-field-label">Start Date <span class="fetch-field-hint">leave empty to fetch latest candles only</span></div>
             <div class="limit-row">
               <input id="market-fetch-start-date" class="limit-input" type="date" style="width:160px" />
@@ -1999,17 +1981,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               </div>
             </div>
           </div>
-          <div class="fetch-field" id="market-fetch-limit-field">
-            <div class="fetch-field-label">Limit <span class="fetch-field-hint">candles per symbol, used when no start date is set (1–1000)</span></div>
-            <div class="limit-row">
-              <input id="market-fetch-limit-input" class="limit-input" type="number" value="100" min="1" max="1000" />
-              <div class="limit-presets">
-                <button class="limit-preset-btn" data-limit="100">100</button>
-                <button class="limit-preset-btn" data-limit="500">500</button>
-                <button class="limit-preset-btn" data-limit="1000">1000</button>
-              </div>
-            </div>
-          </div>
+
           <div class="fetch-actions">
             <button class="fetch-btn-primary" data-action="market-fetch">Fetch Now</button>
           </div>
@@ -2033,6 +2005,38 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <h2 id="market-candles-title">Latest Candles</h2>
         <p>Last 10 candles per symbol from the most recent fetch.</p>
         <div id="market-fetch-candles" style="overflow-x:auto"></div>
+      </article>
+
+      <article class="panel data-card fetch-panel" id="candles-quality-panel" style="margin-top:20px">
+        <div class="fetch-panel-header">
+          <div>
+            <h2>Data Quality</h2>
+            <p class="fetch-panel-desc">Validate candle data integrity: duplicates, OHLCV violations, gaps, and price spikes.</p>
+          </div>
+          <button class="fetch-btn-primary" data-action="candles-quality">Run Check</button>
+        </div>
+        <div id="candles-quality-result" style="display:none; margin-top:16px">
+          <div id="candles-quality-status-row" style="display:flex; align-items:center; gap:12px; margin-bottom:16px">
+            <span id="candles-quality-badge" class="status-badge"></span>
+            <span id="candles-quality-duration" style="font-size:12px; color:var(--muted)"></span>
+          </div>
+          <div id="candles-quality-messages" style="margin-bottom:16px"></div>
+          <div id="candles-quality-sections"></div>
+        </div>
+        <div class="message" id="candles-quality-message" style="display:none"></div>
+      </article>
+
+      <article class="panel data-card" id="fetch-history-panel" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <h2>Fetch History</h2>
+            <p>Recent market data fetch operations.</p>
+          </div>
+          <button class="secondary" data-action="market-fetch-history-refresh">Refresh</button>
+        </div>
+        <div id="fetch-history-board" style="margin-top:12px">
+          <span style="color:var(--muted);font-size:13px">Loading...</span>
+        </div>
       </article>
 
       </section>
@@ -2272,7 +2276,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </article>
         <article class="panel data-card">
           <h2>Audit Events</h2>
-          <p>Recent structured events for pipeline, risk, scheduler, and kill switch actions.</p>
+          <p>Recent structured events for pipeline, risk, and scheduler actions.</p>
           <details class="collapsible">
             <summary>View raw audit event payload</summary>
             <div class="collapsible-body">
@@ -2504,15 +2508,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           el("scheduler-detail").textContent = "Scheduler strategy not loaded yet.";
         }
 
-        const killSwitch = health.checks.kill_switch;
-        el("kill-switch-status").textContent = killSwitch.enabled ? "ENABLED" : "DISABLED";
-        el("kill-switch-status").className = `value ${statusClass(killSwitch.status)}`;
-        const killPanelBadge = el("kill-switch-panel-badge");
-        if (killPanelBadge) {
-          killPanelBadge.textContent = killSwitch.enabled ? "ACTIVE — executions blocked" : "INACTIVE — executions allowed";
-          killPanelBadge.style.background = killSwitch.enabled ? "var(--danger)" : "var(--ok)";
-          killPanelBadge.style.color = "#fff";
-        }
         const queue = health.checks.queue || { status: "degraded", counts: {} };
         const staleBatch = queue.reason === "Queue contains stale incomplete batches." ? (queue.latest_incomplete_batch || null) : null;
         el("queue-status").textContent = staleBatch ? "STALE" : String(queue.status || "unknown").toUpperCase();
@@ -2606,7 +2601,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const chips = [
           ["health", health.status],
           ["scheduler", scheduler.stopped ? "stopped" : scheduler.status],
-          ["kill switch", killSwitch.enabled ? "enabled" : "disabled"],
           ["db", health.checks.database.status],
           ["candles", health.checks.candles.status],
           ["execution", health.checks.execution_backend?.backend || "unknown"],
@@ -2657,8 +2651,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               issueActionButton = ' <button type="button" class="secondary" data-action="broker-switch-paper">Switch to paper</button>';
             } else if (brokerCheck.recommended_action === "pause_scheduler") {
               issueActionButton = ' <button type="button" class="secondary" data-action="broker-pause-scheduler">Pause scheduler</button>';
-            } else if (brokerCheck.recommended_action === "enable_kill_switch") {
-              issueActionButton = ' <button type="button" class="danger" data-action="broker-enable-kill">Enable kill switch</button>';
             } else if (brokerCheck.recommended_action === "inspect_and_reconcile_orders") {
               issueActionButton = ' <button type="button" class="secondary" data-action="broker-reconcile-orders">Reconcile orders</button>';
             }
@@ -3279,12 +3271,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : '<span class="chip">No recent preset actions.</span>';
         }
         const schedulerEvents = (Array.isArray(auditEvents) ? auditEvents : [])
-          .filter((event) => event.event_type === "scheduler_control" || event.event_type === "execution_control" || event.event_type === "kill_switch")
+          .filter((event) => event.event_type === "scheduler_control" || event.event_type === "execution_control")
           .filter((event) => {
             if (event.event_type === "execution_control") {
-              return schedulerControlFilterMode === "all";
-            }
-            if (event.event_type === "kill_switch") {
               return schedulerControlFilterMode === "all";
             }
             if (schedulerControlFilterMode === "all") return true;
@@ -3747,6 +3736,25 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             pill.addEventListener("click", () => pill.classList.toggle("selected"));
           });
         }
+        const marketFetchTimeframePills = el("market-fetch-timeframe-pills");
+        if (marketFetchTimeframePills) {
+          try {
+            const tfData = await api("/scheduler/timeframes");
+            const tfOrder = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
+            const supportedTf = (tfData?.supported_timeframes || ["1m","3m","5m","15m","30m","1h","4h","1d"]).slice().sort((a,b) => (tfOrder[a]||0)-(tfOrder[b]||0));
+            const activeTf = new Set(tfData?.timeframe_names || ["1m"]);
+            const prevTf = new Set(
+              Array.from(marketFetchTimeframePills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.tf)
+            );
+            const selectedTf = prevTf.size > 0 ? prevTf : activeTf;
+            marketFetchTimeframePills.innerHTML = supportedTf
+              .map((tf) => `<button type="button" class="toggle-pill${selectedTf.has(tf) ? " selected" : ""}" data-tf="${tf}">${tf}</button>`)
+              .join("");
+            marketFetchTimeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
+              pill.addEventListener("click", () => pill.classList.toggle("selected"));
+            });
+          } catch (_) {}
+        }
         const fsPills = el("market-fs-symbol-pills");
         if (fsPills && schedulerSymbols?.available_symbols) {
           const prevSel = fsPills.querySelector(".toggle-pill.selected")?.dataset.symbol;
@@ -3830,9 +3838,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-retry-strategy": "queue-message",
           "queue-retry-risk": "queue-message",
           "queue-retry-execution": "queue-message",
-          "broker-enable-kill": "kill-message",
-          "kill-enable": "kill-message",
-          "kill-disable": "kill-message",
           "alert-test": "alerts-message",
           "soak-record": "soak-message",
         };
@@ -4007,19 +4012,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             result = await api(`/queue/jobs/${latestFailedJob.id}/retry`, {
               method: "POST",
             });
-          } else if (type === "kill-enable") {
-            result = await api("/kill-switch/enable", { method: "POST" });
-          } else if (type === "broker-enable-kill") {
-            result = await api("/kill-switch/enable", {
-              method: "POST",
-              body: JSON.stringify({
-                reason: "Kill switch enabled from broker protection recommendation.",
-                source: "broker_protection",
-                notify_message: "Crypto alert: kill switch enabled from broker protection recommendation.",
-              }),
-            });
-          } else if (type === "kill-disable") {
-            result = await api("/kill-switch/disable", { method: "POST" });
           } else if (type === "alert-test") {
             result = await api("/alerts/test", {
               method: "POST",
@@ -4038,7 +4030,46 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       document.querySelectorAll("[data-action]").forEach((button) => {
         if (button.dataset.action.startsWith("market-")) return;
         if (button.dataset.action.startsWith("retention-")) return;
+        if (button.dataset.action.startsWith("candles-")) return;
+        if (button.dataset.action === "market-fetch-history-refresh") return;
         button.addEventListener("click", () => runAction(button.dataset.action));
+      });
+
+      async function refreshFetchHistory() {
+        const board = el("fetch-history-board");
+        if (!board) return;
+        try {
+          const entries = await api("/market-data/fetch/history?limit=20");
+          if (!entries || !entries.length) {
+            board.innerHTML = '<span style="color:var(--muted);font-size:13px">No fetch history yet.</span>';
+            return;
+          }
+          const modeColor = { incremental: "var(--ok)", seed: "var(--accent)", backfill: "var(--warn)" };
+          board.innerHTML = entries.map((e) => {
+            const dt = new Date(e.fetched_at);
+            const timeStr = dt.toISOString().replace("T", " ").slice(0, 19);
+            const symbols = (e.symbol_names || []).join(", ");
+            const tfs = (e.timeframes || []).join(", ");
+            const modes = [...new Set((e.symbol_results || []).map((s) => s.mode).filter(Boolean))];
+            const modeChips = modes.map((m) => `<span class="chip" style="font-size:11px;background:${modeColor[m] || "var(--muted)"}20;color:${modeColor[m] || "var(--muted)"}">${m}</span>`).join(" ");
+            const isNew = e.saved_klines > 0;
+            return `<div class="fetch-result-row" style="align-items:flex-start;gap:8px">
+              <div style="flex:1;min-width:0">
+                <span style="font-size:12px;color:var(--muted)">${timeStr}</span>
+                <span style="margin-left:8px;font-size:12px">${symbols}</span>
+                <span style="margin-left:6px;font-size:11px;color:var(--muted)">${tfs}</span>
+                <span style="margin-left:6px">${modeChips}</span>
+              </div>
+              <span class="fetch-result-count ${isNew ? "new" : "none"}" style="white-space:nowrap">${isNew ? "+" + e.saved_klines : "Up to date"}</span>
+            </div>`;
+          }).join("");
+        } catch (e) {
+          if (board) board.innerHTML = `<span style="color:var(--bad)">${e}</span>`;
+        }
+      }
+
+      document.addEventListener("click", (e) => {
+        if (e.target.dataset?.action === "market-fetch-history-refresh") refreshFetchHistory();
       });
 
       el("issue-strip")?.addEventListener("click", (event) => {
@@ -4208,6 +4239,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         el("health-json").textContent = `Failed to load data: ${error.message}`;
       });
       refreshMarketStatus();
+      refreshFetchHistory();
       (function() {
         const d = new Date();
         d.setDate(d.getDate() - 7);
@@ -4240,12 +4272,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         btn.classList.add("active");
       });
 
-      document.addEventListener("click", (e) => {
-        const btn = e.target.closest(".limit-preset-btn");
-        if (!btn) return;
-        const input = el("market-fetch-limit-input");
-        if (input) input.value = btn.dataset.limit;
-      });
 
       document.addEventListener("click", (e) => {
         const btn = e.target.closest(".date-preset-btn");
@@ -4402,6 +4428,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
             return;
           }
+
+          // Card view
           board.innerHTML = rows.map((r) => {
             const staleMin = Math.round(r.stale_seconds / 60);
             const isFresh = staleMin < 5;
@@ -4410,6 +4438,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const staleText = staleMin < 60 ? `${staleMin}m ago` : `${Math.round(staleMin/60)}h ago`;
             const staleColor = isFresh ? "var(--ok)" : isWarn ? "var(--warn)" : "var(--bad)";
             const hasGaps = r.has_gaps;
+            const cov = r.coverage_pct ?? 100;
+            const covColor = cov >= 99 ? "var(--ok)" : cov >= 90 ? "var(--warn)" : "var(--bad)";
             return `
               <div class="status-symbol-row">
                 <div class="status-symbol-left">
@@ -4425,6 +4455,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                     <div class="status-stat-value">${r.count.toLocaleString()}</div>
                   </div>
                   <div class="status-stat">
+                    <div class="status-stat-label">Coverage</div>
+                    <div class="status-stat-value" style="color:${covColor}">${cov}%</div>
+                  </div>
+                  <div class="status-stat">
                     <div class="status-stat-label">Last Update</div>
                     <div class="status-stat-value" style="color:${staleColor}">${staleText}</div>
                   </div>
@@ -4437,6 +4471,45 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 </div>
               </div>`;
           }).join("");
+
+          // Coverage matrix
+          const matrix = el("market-coverage-matrix");
+          if (matrix) {
+            const symbols = [...new Set(rows.map((r) => r.symbol))];
+            const tfOrder = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
+            const timeframes = [...new Set(rows.map((r) => r.timeframe))].sort((a,b) => (tfOrder[a]||0)-(tfOrder[b]||0));
+            const lookup = {};
+            rows.forEach((r) => { lookup[`${r.symbol}|${r.timeframe}`] = r; });
+            const covColor = (pct) => pct == null ? "#333" : pct >= 99 ? "var(--ok)" : pct >= 90 ? "var(--warn)" : "var(--bad)";
+            const header = `<tr><th style="padding:6px 10px;text-align:left;font-size:12px;color:var(--muted)">Symbol</th>${timeframes.map((tf) => `<th style="padding:6px 10px;font-size:12px;color:var(--muted);text-align:center">${tf}</th>`).join("")}</tr>`;
+            const bodyRows = symbols.map((sym) => {
+              const cells = timeframes.map((tf) => {
+                const d = lookup[`${sym}|${tf}`];
+                if (!d) return `<td style="padding:6px 10px;text-align:center;color:#444;font-size:12px">—</td>`;
+                const pct = d.coverage_pct ?? 100;
+                const staleMin = Math.round(d.stale_seconds / 60);
+                const dotColor = staleMin < 5 ? "var(--ok)" : staleMin < 30 ? "var(--warn)" : "var(--bad)";
+                return `<td style="padding:6px 10px;text-align:center;font-size:12px">
+                  <span style="color:${covColor(pct)};font-weight:600">${pct}%</span>
+                  <span style="display:block;font-size:10px;color:${dotColor}">${staleMin < 60 ? staleMin + "m" : Math.round(staleMin/60) + "h"} ago</span>
+                </td>`;
+              }).join("");
+              return `<tr><td style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${sym}</td>${cells}</tr>`;
+            }).join("");
+            matrix.innerHTML = `<table style="border-collapse:collapse;width:100%"><thead>${header}</thead><tbody>${bodyRows}</tbody></table>`;
+          }
+
+          // Toggle button
+          const toggleBtn = el("market-status-view-toggle");
+          if (toggleBtn) {
+            toggleBtn.onclick = () => {
+              const isCards = toggleBtn.dataset.view === "cards";
+              toggleBtn.dataset.view = isCards ? "matrix" : "cards";
+              toggleBtn.textContent = isCards ? "Card View" : "Coverage Matrix";
+              if (board) board.style.display = isCards ? "none" : "";
+              if (matrix) matrix.style.display = isCards ? "" : "none";
+            };
+          }
         } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
       }
 
@@ -4451,9 +4524,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (action === "market-fetch") {
           const selected = Array.from(el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.symbol);
           const symbols = selected.length > 0 ? selected : null;
+          const selectedTf = Array.from(el("market-fetch-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.tf);
+          const timeframes = selectedTf.length > 0 ? selectedTf : null;
           const startDate = el("market-fetch-start-date")?.value || null;
-          const limit = parseInt(el("market-fetch-limit-input")?.value || "100");
-          const body = startDate ? { symbols, start_date: startDate } : { symbols, limit };
+          const body = startDate ? { symbols, timeframes, start_date: startDate } : { symbols, timeframes, limit: 100 };
           try {
             const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(body) });
             const result = el("market-fetch-result");
@@ -4462,11 +4536,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             if (result) {
               const summary = el("market-fetch-summary");
               if (summary) summary.textContent = `${r.saved_klines ?? 0} new candles saved`;
+              const modeLabel = { incremental: "incremental", seed: "seed", backfill: "backfill" };
               const rows = (r.symbol_results || []).map((s) => {
                 const isNew = s.saved_klines > 0;
+                const mode = s.mode ? `<span class="chip" style="margin-left:6px;font-size:11px">${modeLabel[s.mode] || s.mode}</span>` : "";
+                const tf = s.timeframe ? `<span style="color:var(--muted);font-size:12px;margin-left:4px">${s.timeframe}</span>` : "";
                 return `<div class="fetch-result-row">
-                  <span class="symbol-name">${s.symbol}</span>
-                  <span class="fetch-result-count ${isNew ? "new" : "none"}">${isNew ? "+" + s.saved_klines + " candles" : "Up to date"}</span>
+                  <span class="symbol-name">${s.symbol}${tf}${mode}</span>
+                  <span class="fetch-result-count ${isNew ? "new" : "none"}">${isNew ? "+" + s.saved_klines : "Up to date"}</span>
                 </div>`;
               }).join("");
               el("market-fetch-pretty").innerHTML = rows;
@@ -4474,7 +4551,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               result.style.display = "block";
 
               // Fetch last 10 candles per symbol and render as full-width table
-              const fetchedSymbols = (r.symbol_results || []).map((s) => s.symbol);
+              const fetchedSymbols = [...new Set((r.symbol_results || []).map((s) => s.symbol))];
+              const activeTimeframeFilter = new Set(timeframes || []);
               const candlesContainer = el("market-fetch-candles");
               const candlesPanel = el("market-candles-panel");
               if (candlesContainer && fetchedSymbols.length) {
@@ -4482,7 +4560,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 const cols = ["open_time", "timeframe", "open", "high", "low", "close", "volume", "quote_asset_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"];
                 const colLabels = { quote_asset_volume: "quote_vol", number_of_trades: "trades", taker_buy_base_volume: "taker_base", taker_buy_quote_volume: "taker_quote" };
                 for (const sym of fetchedSymbols) {
-                  const candles = await api(`/candles?symbol=${encodeURIComponent(sym)}&limit=10`);
+                  const tfQueryStr = [...activeTimeframeFilter].map((tf) => `timeframe=${encodeURIComponent(tf)}`).join("&");
+                  const tfSuffix = tfQueryStr ? `&${tfQueryStr}` : "";
+                  const candles = await api(`/candles?symbol=${encodeURIComponent(sym)}&limit=10${tfSuffix}`);
                   if (!candles || !candles.length) continue;
                   const headers = cols.map((c) => `<th>${colLabels[c] || c}</th>`).join("");
                   const dataRows = candles.map((row) => {
@@ -4573,6 +4653,88 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             el("market-fs-raw").textContent = JSON.stringify(r, null, 2);
             if (result) result.style.display = "block";
           } catch (e) { if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; } }
+        }
+      });
+
+      document.addEventListener("click", async (event) => {
+        const action = event.target.dataset?.action;
+        if (action !== "candles-quality") return;
+        const btn = event.target;
+        const result = el("candles-quality-result");
+        const msg = el("candles-quality-message");
+        btn.disabled = true;
+        btn.textContent = "Running…";
+        if (msg) { msg.style.display = "none"; }
+        try {
+          const r = await api("/validation/candles/quality");
+          const statusColors = { ok: "var(--ok)", warning: "var(--warn)", error: "var(--bad)" };
+          const badge = el("candles-quality-badge");
+          if (badge) {
+            badge.textContent = r.status.toUpperCase();
+            badge.style.background = statusColors[r.status] || "var(--muted)";
+            badge.style.color = "#000";
+            badge.style.padding = "2px 10px";
+            badge.style.borderRadius = "4px";
+            badge.style.fontWeight = "bold";
+            badge.style.fontSize = "12px";
+          }
+          const dur = el("candles-quality-duration");
+          if (dur) dur.textContent = `checked in ${r.duration_seconds}s`;
+
+          const msgs = el("candles-quality-messages");
+          if (msgs) {
+            const items = [
+              ...(r.errors || []).map((e) => `<div style="color:var(--bad)">✗ ${e}</div>`),
+              ...(r.warnings || []).map((w) => `<div style="color:var(--warn)">⚠ ${w}</div>`),
+            ];
+            msgs.innerHTML = items.length ? items.join("") : `<div style="color:var(--ok)">✓ All checks passed</div>`;
+          }
+
+          const sections = el("candles-quality-sections");
+          if (sections) {
+            const renderSection = (title, items, renderRow) => {
+              if (!items || !items.length) return "";
+              return `<div style="margin-bottom:16px">
+                <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:8px">${title}</div>
+                <table style="width:100%;border-collapse:collapse;font-size:13px">
+                  ${items.map(renderRow).join("")}
+                </table>
+              </div>`;
+            };
+            const td = (v, style="") => `<td style="padding:4px 8px;border-bottom:1px solid var(--border);${style}">${v ?? "—"}</td>`;
+            const tr = (cells) => `<tr>${cells}</tr>`;
+
+            const dupSection = r.duplicates?.count > 0
+              ? renderSection("Duplicates", r.duplicates.examples, (d) =>
+                  tr(td(d.symbol) + td(d.timeframe) + td(d.open_time) + td(`×${d.count}`, "color:var(--bad)")))
+              : "";
+
+            const intSection = r.integrity?.count > 0
+              ? renderSection("OHLCV Violations", r.integrity.examples, (d) =>
+                  tr(td(d.symbol) + td(d.timeframe) + td(d.open_time) + td(`O:${d.open} H:${d.high} L:${d.low} C:${d.close}`)))
+              : "";
+
+            const gapSection = r.gaps?.details?.length > 0
+              ? renderSection("Gaps", r.gaps.details, (g) =>
+                  tr(td(g.symbol) + td(g.timeframe) + td(`${g.gap_count} gap(s)`, "color:var(--warn)") + td(`${g.missing_candles} missing`) + td(`${g.total_candles} total`)))
+              : "";
+
+            const spikeSection = r.price_spikes?.details?.length > 0
+              ? renderSection("Price Spikes (>" + r.price_spikes.threshold_pct + "%)", r.price_spikes.details, (s) =>
+                  tr(td(s.symbol) + td(s.timeframe) + td(`${s.spike_count} spike(s)`, "color:var(--warn)") +
+                     td(s.examples.map((x) => `${x.change_pct}%`).join(", "))))
+              : "";
+
+            sections.innerHTML = dupSection + intSection + gapSection + spikeSection
+              || `<div style="color:var(--muted);font-size:13px">No issues found.</div>`;
+          }
+
+          if (result) result.style.display = "block";
+        } catch (e) {
+          if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Run Check";
         }
       });
     </script>

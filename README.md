@@ -229,6 +229,7 @@ Alerts are deduplicated — each unique state triggers one alert. Recovery clear
 ```bash
 python scripts/read_soak_validation.py           # print current status
 python scripts/read_soak_validation.py --record  # record and append a snapshot
+python scripts/run_periodic_check.py             # soak + broker protection + scheduler tail
 ```
 
 Acceptance criteria for a clean soak run:

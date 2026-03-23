@@ -24,6 +24,11 @@ _ensure_project_venv_python()
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.core.env import load_dotenv_file
+
+
+load_dotenv_file(PROJECT_ROOT)
+
 import uvicorn
 
 

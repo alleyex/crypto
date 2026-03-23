@@ -61,6 +61,7 @@ LIMIT ?;
 """
 
 
+
 SELECT_SIGNALS_SQL = """
 SELECT
     id,
@@ -191,7 +192,11 @@ LIMIT ?;
 """
 
 
-def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None) -> list[dict[str, Any]]:
+def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None, timeframes: Optional[list] = None) -> list[dict[str, Any]]:
+    if symbol and timeframes:
+        placeholders = ",".join("?" * len(timeframes))
+        sql = f"SELECT{_CANDLES_COLUMNS}\nFROM candles\nWHERE symbol = ? AND timeframe IN ({placeholders})\nORDER BY open_time DESC\nLIMIT ?;"
+        return fetch_all_as_dicts(connection, sql, (symbol, *timeframes, limit))
     if symbol:
         return fetch_all_as_dicts(connection, SELECT_CANDLES_BY_SYMBOL_SQL, (symbol, limit))
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)

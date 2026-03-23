@@ -48,6 +48,7 @@ from app.core.settings import RISK_REJECTION_STREAK_THRESHOLD
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
+from app.data.fetch_history import read_fetch_history
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
@@ -127,6 +128,7 @@ from app.backtest.loader import load_candles_from_db
 from app.backtest.runner import run_backtest
 from app.backtest.sweep import run_parameter_sweep
 from app.backtest.walk_forward import run_walk_forward
+from app.validation.candles_quality import run_candles_quality_check
 from app.validation.soak_history import read_soak_validation_history
 from app.validation.soak_history import record_soak_validation_snapshot
 from app.validation.soak_history import build_soak_history_summary
@@ -918,10 +920,11 @@ def alerts_test(payload: AlertTestRequest) -> dict[str, Any]:
 def candles(
     limit: int = Query(default=5, ge=1, le=100),
     symbol: Optional[str] = Query(default=None),
+    timeframe: Optional[List[str]] = Query(default=None),
 ) -> list[dict]:
     connection = get_connection()
     try:
-        return get_candles(connection, limit=limit, symbol=symbol)
+        return get_candles(connection, limit=limit, symbol=symbol, timeframes=timeframe or None)
     finally:
         connection.close()
 
@@ -1522,6 +1525,20 @@ def soak_validation_history(limit: int = Query(default=20, ge=1, le=200)) -> lis
 @app.get("/validation/soak/history/summary")
 def soak_validation_history_summary() -> dict[str, Any]:
     return build_soak_history_summary()
+
+
+@app.get("/market-data/fetch/history")
+def market_data_fetch_history(limit: int = Query(default=20, ge=1, le=200)) -> list:
+    return read_fetch_history(limit=limit)
+
+
+@app.get("/validation/candles/quality")
+def candles_quality() -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        return run_candles_quality_check(connection)
+    finally:
+        connection.close()
 
 
 @app.get("/scheduler/status")

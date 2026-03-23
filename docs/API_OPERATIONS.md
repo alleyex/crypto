@@ -218,6 +218,7 @@ Use this during multi-day paper-trading validation:
 
 ```bash
 python scripts/read_soak_validation.py
+python scripts/run_periodic_check.py
 ```
 
 Recommended cadence:
