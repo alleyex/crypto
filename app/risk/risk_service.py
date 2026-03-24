@@ -207,7 +207,7 @@ def _evaluate_signal_row(
             pending_qty = _get_pending_approved_buy_qty(connection, symbol, order_qty)
             effective_buy_qty = current_qty + pending_qty
 
-            if latest_fill_at is not None:
+            if latest_fill_at is not None and signal_type != "SELL":
                 cooldown_elapsed = (datetime.now(timezone.utc) - latest_fill_at).total_seconds()
                 if cooldown_elapsed < cooldown_seconds:
                     decision = "REJECTED"
@@ -286,8 +286,10 @@ def _apply_position_and_duplicate_rules(
         SELECT_PREVIOUS_SIGNAL_SQL,
         (symbol, timeframe, strategy_name, signal_id),
     ).fetchone()
+    # Skip duplicate check for BUY when flat — PPO may emit BUY repeatedly until filled
     if previous_signal and previous_signal[0] == signal_type:
-        return "REJECTED", "Duplicate signal type."
+        if not (signal_type == "BUY" and current_qty == 0):
+            return "REJECTED", "Duplicate signal type."
     if signal_type == "BUY":
         approved, portfolio_reason = check_portfolio_limits(connection, strategy_name, symbol, order_qty)
         if not approved:

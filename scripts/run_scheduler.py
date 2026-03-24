@@ -7,6 +7,27 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+_PID_FILE = PROJECT_ROOT / "runtime" / "scheduler.pid"
+
+
+def _acquire_singleton() -> None:
+    """Ensure only one scheduler instance runs. Exit immediately if another is alive."""
+    if _PID_FILE.exists():
+        try:
+            existing_pid = int(_PID_FILE.read_text().strip())
+            os.kill(existing_pid, 0)  # signal 0 = just check existence
+            print(f"[scheduler] Already running (PID {existing_pid}). Exiting.", flush=True)
+            sys.exit(0)
+        except (ProcessLookupError, PermissionError):
+            pass  # stale PID file — overwrite it
+    _PID_FILE.write_text(str(os.getpid()))
+
+
+def _release_singleton() -> None:
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _ensure_project_venv_python() -> None:
@@ -84,22 +105,26 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    args = parse_args()
-    queue_dispatch = args.queue_dispatch
-    queue_drain = args.queue_drain
-    pipeline_orchestration_override = None if args.orchestration == "default" else args.orchestration
-    if args.orchestration != "default":
-        queue_dispatch = args.orchestration == "queue_dispatch"
-        queue_drain = args.orchestration == "queue_drain"
-    run_scheduler(
-        interval_seconds=args.interval,
-        iterations=args.iterations,
-        mode=args.mode,
-        strategy_name=args.strategy,
-        queue_dispatch=queue_dispatch,
-        queue_drain=queue_drain,
-        pipeline_orchestration_override=pipeline_orchestration_override,
-    )
+    _acquire_singleton()
+    try:
+        args = parse_args()
+        queue_dispatch = args.queue_dispatch
+        queue_drain = args.queue_drain
+        pipeline_orchestration_override = None if args.orchestration == "default" else args.orchestration
+        if args.orchestration != "default":
+            queue_dispatch = args.orchestration == "queue_dispatch"
+            queue_drain = args.orchestration == "queue_drain"
+        run_scheduler(
+            interval_seconds=args.interval,
+            iterations=args.iterations,
+            mode=args.mode,
+            strategy_name=args.strategy,
+            queue_dispatch=queue_dispatch,
+            queue_drain=queue_drain,
+            pipeline_orchestration_override=pipeline_orchestration_override,
+        )
+    finally:
+        _release_singleton()
 
 
 if __name__ == "__main__":

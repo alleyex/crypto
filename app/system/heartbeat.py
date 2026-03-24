@@ -65,9 +65,18 @@ def record_heartbeat(
     message: str,
     payload: Optional[dict[str, Any]] = None,
 ) -> None:
-    connection = get_connection()
+    try:
+        connection = get_connection()
+    except Exception:
+        return
+
     try:
         upsert_heartbeat(connection, component, status, message, payload)
+    except Exception:
+        # Heartbeat writes must stay best-effort. A malformed SQLite page or
+        # transient DB issue should not bubble up and break API responses or
+        # background alert tasks.
+        return
     finally:
         connection.close()
 

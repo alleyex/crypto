@@ -428,7 +428,11 @@ def get_strategy_activity_summary(
         limit=max(len(strategy_names), per_table_limit),
         per_table_limit=per_table_limit,
     )
-    latest_closed_trades = {str(item["strategy_name"]): item for item in closed_trades}
+    latest_closed_trades: dict[str, Any] = {}
+    for item in closed_trades:
+        key = str(item["strategy_name"])
+        if key not in latest_closed_trades:
+            latest_closed_trades[key] = item
 
     summaries: list[dict[str, Any]] = []
     for strategy_name in strategy_names:
@@ -439,7 +443,7 @@ def get_strategy_activity_summary(
         order_ids = {item["id"] for item in strategy_orders}
         latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
         latest_closed_trade = latest_closed_trades.get(strategy_name)
-        latest_activity_at = next(
+        latest_activity_at = max(
             (
                 timestamp
                 for timestamp in (
@@ -450,7 +454,7 @@ def get_strategy_activity_summary(
                 )
                 if timestamp is not None
             ),
-            None,
+            default=None,
         )
         filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
@@ -493,6 +497,25 @@ def get_strategy_activity_summary(
                     breakeven_trade_count += 1
 
         net_position_qty = sum(item["qty"] for item in positions_by_symbol.values())
+        open_entry_price = None
+        for pos in positions_by_symbol.values():
+            if pos["qty"] > 0:
+                open_entry_price = pos["cost"] / pos["qty"]
+                break
+
+        # Current price from latest candle for this strategy's symbol/timeframe
+        current_price: float | None = None
+        price_symbol: str | None = None
+        sig_symbol = latest_signal["symbol"] if latest_signal else None
+        sig_timeframe = latest_signal["timeframe"] if latest_signal else None
+        if sig_symbol and sig_timeframe:
+            price_row = connection.execute(
+                "SELECT close FROM candles WHERE symbol = ? AND timeframe = ? ORDER BY open_time DESC LIMIT 1",
+                (sig_symbol, sig_timeframe),
+            ).fetchone()
+            if price_row:
+                current_price = float(price_row[0])
+                price_symbol = sig_symbol
 
         summaries.append(
             {
@@ -508,6 +531,9 @@ def get_strategy_activity_summary(
                 "filled_order_count": filled_order_count,
                 "filled_qty_total": filled_qty_total,
                 "net_position_qty": net_position_qty,
+                "open_entry_price": open_entry_price,
+                "current_price": current_price,
+                "price_symbol": price_symbol,
                 "gross_realized_pnl": gross_realized_pnl,
                 "buy_fill_count": buy_fill_count,
                 "sell_fill_count": sell_fill_count,

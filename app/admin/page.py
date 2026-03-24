@@ -983,10 +983,19 @@ def render_admin_page() -> str:
       }
 
       .strategy-card {
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.07);
         background: #0b1219;
-        border-radius: 16px;
-        padding: 16px;
+        border-radius: 18px;
+        padding: 20px;
+        position: relative;
+        overflow: hidden;
+      }
+      .strategy-card::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
       }
 
       .ops-card {
@@ -1023,6 +1032,12 @@ def render_admin_page() -> str:
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px 12px;
         font-size: 12px;
+        overflow: hidden;
+      }
+      .ops-card-grid > div {
+        min-width: 0;
+        overflow-wrap: break-word;
+        word-break: break-all;
       }
 
       .ops-card-grid strong {
@@ -1039,6 +1054,8 @@ def render_admin_page() -> str:
         color: var(--muted);
         font-size: 12px;
         line-height: 1.45;
+        overflow-wrap: break-word;
+        word-break: break-all;
       }
 
       .stats-inline {
@@ -1119,126 +1136,146 @@ def render_admin_page() -> str:
 
       .strategy-card.clickable {
         cursor: pointer;
-        transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+        transition: border-color 150ms ease, background 150ms ease;
       }
-
       .strategy-card.clickable:hover {
-        border-color: rgba(119, 208, 255, 0.5);
-        background: #0e1620;
+        border-color: rgba(119, 208, 255, 0.3);
+        background: #0d1520;
       }
-
       .strategy-card.selected {
-        border-color: rgba(119, 208, 255, 0.85);
-        box-shadow: inset 0 0 0 1px rgba(119, 208, 255, 0.25);
+        border-color: rgba(119, 208, 255, 0.65);
       }
 
-      .strategy-hero {
-        display: grid;
-        grid-template-columns: 1.2fr 0.8fr;
-        gap: 14px;
-        margin-bottom: 14px;
-      }
-
-      .strategy-hero-main {
-        display: grid;
-        gap: 10px;
-      }
-
-      .strategy-rank {
-        color: var(--accent);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-      }
-
-      .strategy-name-row {
+      /* ── Header ── */
+      .strategy-card-top {
         display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
       }
-
-      .strategy-name-row strong {
-        font-size: 20px;
-      }
-
-      .strategy-summary-line {
+      .strategy-card-identity { display: flex; flex-direction: column; gap: 4px; }
+      .strategy-rank {
+        font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.14em;
         color: var(--muted);
-        font-size: 13px;
-        line-height: 1.5;
       }
-
-      .strategy-kpi-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+      .strategy-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .strategy-name-row strong { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+      .strategy-current-price { font-size: 12px; color: var(--muted); margin-top: 2px; }
+      .strategy-current-price span { font-size: 15px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+      .strategy-card-action-group { display: flex; gap: 6px; flex-shrink: 0; }
+      .strategy-card-action-group button {
+        font-size: 11px; padding: 4px 10px; border-radius: 7px;
+        opacity: 0.55; transition: opacity 120ms;
       }
+      .strategy-card-action-group button:hover { opacity: 1; }
 
-      .strategy-kpi {
-        padding: 12px;
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.04);
+      /* ── Prob row ── */
+      .strategy-prob-row {
+        display: flex; gap: 6px; margin-top: -10px; margin-bottom: 14px;
       }
-
-      .strategy-kpi strong {
-        display: block;
-        margin-bottom: 4px;
+      .strategy-prob-item {
+        font-size: 11px; font-weight: 600;
+        padding: 3px 9px; border-radius: 20px;
+        background: rgba(255,255,255,0.05);
         color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+      }
+      .strategy-prob-item.sig-buy  { background: rgba(52,211,153,0.08); color: #34d399; }
+      .strategy-prob-item.sig-sell { background: rgba(248,113,113,0.08); color: #f87171; }
+
+      /* ── Reject reason ── */
+      .strategy-reject-reason {
+        font-size: 11px; color: var(--bad);
+        margin-top: -10px; margin-bottom: 14px;
+        padding: 6px 10px; border-radius: 7px;
+        background: rgba(248,113,113,0.07);
+        border: 1px solid rgba(248,113,113,0.15);
       }
 
-      .strategy-kpi span {
-        font-size: 18px;
-        font-weight: 700;
+      /* ── Signal row ── */
+      .strategy-signal-row {
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 16px; flex-wrap: wrap;
       }
+      .strategy-signal-label {
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.1em; color: var(--muted);
+      }
+      .strategy-signal-value {
+        font-size: 11px; font-weight: 700;
+        padding: 2px 9px; border-radius: 20px;
+        letter-spacing: 0.05em;
+      }
+      .strategy-signal-value.sig-buy { background: rgba(52,211,153,0.12); color: #34d399; }
+      .strategy-signal-value.sig-sell { background: rgba(248,113,113,0.12); color: #f87171; }
+      .strategy-signal-value.sig-hold { background: rgba(255,255,255,0.06); color: var(--muted); }
+      .strategy-signal-divider { color: rgba(255,255,255,0.15); font-size: 12px; }
 
-      .strategy-secondary-grid {
+      /* ── KPI grid ── */
+      .strategy-kpi-row {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px 12px;
-        font-size: 12px;
+        gap: 8px; margin-bottom: 12px;
       }
+      .strategy-kpi {
+        padding: 11px 13px; border-radius: 11px;
+        background: rgba(255,255,255,0.025);
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .strategy-kpi strong {
+        display: block; margin-bottom: 5px;
+        color: var(--muted); font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.08em;
+      }
+      .strategy-kpi span { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
 
-      .strategy-card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        gap: 10px;
-        margin-bottom: 10px;
+      /* ── Info rows ── */
+      .strategy-info-row {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 8px; margin-bottom: 8px;
       }
+      .strategy-info-cell {
+        padding: 9px 13px; border-radius: 10px;
+        background: rgba(255,255,255,0.02);
+        border: 1px solid rgba(255,255,255,0.04);
+        display: flex; flex-direction: column; gap: 3px;
+      }
+      .strategy-info-cell.full { grid-column: 1 / -1; }
+      .strategy-info-label {
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.08em; color: var(--muted);
+      }
+      .strategy-info-value { font-size: 13px; font-weight: 600; color: var(--text); }
+      .strategy-info-value.muted { color: var(--muted); font-weight: 400; }
+      .strategy-info-value.ok { color: var(--ok); }
+      .strategy-info-value.bad { color: var(--bad); }
 
-      .strategy-card-header strong {
-        font-size: 16px;
+      /* ── Footer ── */
+      .strategy-card-footer {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; padding-top: 12px; margin-top: 4px;
+        border-top: 1px solid rgba(255,255,255,0.05);
+        font-size: 11px; color: var(--muted); flex-wrap: wrap;
       }
+      .strategy-footer-left { display: flex; gap: 16px; align-items: center; }
+      .strategy-footer-item { display: flex; gap: 5px; align-items: center; }
+      .strategy-footer-item span:first-child {
+        font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+      }
+      .strategy-footer-item span:last-child { font-weight: 600; color: var(--text); }
 
-      .strategy-card-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .strategy-card-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px 12px;
-        font-size: 12px;
-      }
-
-      .strategy-metric {
-        color: var(--muted);
-      }
-
-      .strategy-metric strong {
-        color: var(--text);
-        display: block;
-        margin-bottom: 2px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
+      /* legacy */
+      .strategy-hero { display: none; }
+      .strategy-secondary-grid { display: none; }
+      .strategy-summary-line { display: none; }
+      .strategy-card-header { display: none; }
+      .strategy-card-actions { display: none; }
+      .strategy-card-grid { display: none; }
+      .strategy-metric { display: none; }
+      .strategy-kpi-grid { display: none; }
+      .strategy-status-line { display: none; }
+      .strategy-position-row { display: none; }
 
       .trade-list {
         display: grid;
@@ -1339,6 +1376,7 @@ def render_admin_page() -> str:
         .status-board,
         .strategy-hero,
         .strategy-secondary-grid,
+        .strategy-kpi-row,
         .grid,
         .worker-grid {
           grid-template-columns: 1fr;
@@ -1686,10 +1724,6 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
             <div id="scheduler-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
           <div class="ctrl-section">
-            <div class="fetch-field-label">Disabled Strategies</div>
-            <div id="scheduler-disabled-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
-          </div>
-          <div class="ctrl-section">
             <div class="fetch-field-label">Active Symbols</div>
             <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
@@ -1833,24 +1867,24 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
           <div class="worker-grid">
             <div class="side-stat">
-              <label>Data Worker</label>
+              <label>Market Data</label>
               <div class="value" id="data-worker-status">Loading</div>
-              <div class="inline-note" id="data-worker-detail">Checking data worker heartbeat...</div>
+              <div class="inline-note" id="data-worker-detail">Checking market data heartbeat...</div>
             </div>
             <div class="side-stat">
-              <label>Strategy Worker</label>
+              <label>Pipeline</label>
               <div class="value" id="strategy-worker-status">Loading</div>
-              <div class="inline-note" id="strategy-worker-detail">Checking strategy worker heartbeat...</div>
+              <div class="inline-note" id="strategy-worker-detail">Checking pipeline heartbeat...</div>
             </div>
             <div class="side-stat">
-              <label>Risk Worker</label>
+              <label>Scheduler</label>
               <div class="value" id="risk-worker-status">Loading</div>
-              <div class="inline-note" id="risk-worker-detail">Checking risk worker heartbeat...</div>
+              <div class="inline-note" id="risk-worker-detail">Checking scheduler heartbeat...</div>
             </div>
             <div class="side-stat">
-              <label>Execution Worker</label>
+              <label>Alerting</label>
               <div class="value" id="execution-worker-status">Loading</div>
-              <div class="inline-note" id="execution-worker-detail">Checking execution worker heartbeat...</div>
+              <div class="inline-note" id="execution-worker-detail">Checking alerting heartbeat...</div>
             </div>
           </div>
           <details class="collapsible">
@@ -2098,6 +2132,44 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div class="inline-note" style="margin-top:16px">
             Next useful additions here are coverage, freshness, row-count, null-rate, and feature-set version views.
           </div>
+        </article>
+
+        <article class="panel data-card" style="grid-column: 1 / -1;">
+          <h2>Active Feature Set — V2 (19 features)</h2>
+          <p>Model input features used by PPO and LightGBM. All computed by <code>build_crypto_features()</code> in <code>app/features/crypto_features.py</code>. V2 adds trend, momentum, and K-bar pattern features — PPO walk-forward avg return improved from +40.97% → +80.16%.</p>
+          <table class="data-table" style="margin-top:14px">
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>Category</th>
+                <th>Normalization</th>
+                <th>Description</th>
+                <th class="num">IC t-stat</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><code>log_ret_1</code></td><td>Returns</td><td>clip ±0.20</td><td>1-bar log return</td><td class="num" style="color:#4ade80">−5.82 ✓</td></tr>
+              <tr><td><code>log_ret_3</code></td><td>Returns</td><td>clip ±0.30</td><td>3-bar log return</td><td class="num" style="color:#4ade80">−2.35 ✓</td></tr>
+              <tr><td><code>log_ret_5</code></td><td>Returns</td><td>clip ±0.40</td><td>5-bar log return</td><td class="num" style="color:#4ade80">−3.29 ✓</td></tr>
+              <tr><td><code>log_ret_10</code></td><td>Returns</td><td>clip ±0.60</td><td>10-bar log return</td><td class="num">−1.89</td></tr>
+              <tr><td><code>log_ret_20</code></td><td>Returns</td><td>clip ±0.80</td><td>20-bar log return</td><td class="num" style="color:#4ade80">−2.60 ✓</td></tr>
+              <tr><td><code>flow_imbalance</code></td><td>Order Flow</td><td>bounded [−1, 1]</td><td>Taker buy imbalance: 2×taker_buy/volume − 1</td><td class="num">−0.31</td></tr>
+              <tr><td><code>hl_spread</code></td><td>Volatility</td><td>clip [0, 0.5]</td><td>(high − low) / close</td><td class="num">+0.00</td></tr>
+              <tr><td><code>dist_sma_60</code></td><td>Trend</td><td>clip ±0.20</td><td>(close − SMA60) / close</td><td class="num" style="color:#4ade80">−3.07 ✓</td></tr>
+              <tr><td><code>rsi_14</code></td><td>Momentum</td><td>bounded [−1, 1]</td><td>RSI(14) normalised: RSI/50 − 1</td><td class="num">−1.38</td></tr>
+              <tr><td><code>close_location</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>(close − low) / (high − low) — 棒內收盤位置</td><td class="num" style="color:#4ade80">+2.61 ✓</td></tr>
+              <tr><td><code>upper_wick_ratio</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>上影線 / (high − low) — 賣壓拒絕</td><td class="num" style="color:#4ade80">−2.95 ✓</td></tr>
+              <tr><td><code>lower_wick_ratio</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>下影線 / (high − low) — 買盤支撐</td><td class="num" style="color:#4ade80">+2.68 ✓</td></tr>
+              <tr><td><code>atr_14_norm_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>ATR(14) / close z-scored</td><td class="num">−1.01</td></tr>
+              <tr><td><code>rv_20_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>20-bar realized volatility z-scored</td><td class="num">−0.62</td></tr>
+              <tr><td><code>hl_spread_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>hl_spread z-scored</td><td class="num" style="color:#4ade80">−2.13 ✓</td></tr>
+              <tr><td><code>log_vol_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(volume+1) z-scored</td><td class="num" style="color:#4ade80">−2.04 ✓</td></tr>
+              <tr><td><code>log_trades_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(trades+1) z-scored</td><td class="num">−1.33</td></tr>
+              <tr><td><code>avg_quote_per_trade_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>quote_asset_volume / trades z-scored</td><td class="num">−1.02</td></tr>
+              <tr><td><code>liquidity_proxy_z</code></td><td>Liquidity</td><td>log1p → robust z-score w=100</td><td>volume / hl_spread z-scored (IQR-based)</td><td class="num">−1.04</td></tr>
+            </tbody>
+          </table>
+          <div class="inline-note" style="margin-top:10px">✓ = |t-stat| &gt; 2（統計顯著，95% 信心水準）。IC 為負 = 均值回歸；IC 為正 = 動能延續。已移除：<code>dist_sma_20</code>（r=+0.92 與 log_ret_10 重複）、<code>body_ratio</code>（t=+0.23 無訊號）、<code>taker_ratio</code>（r=1.0 與 flow_imbalance 完全重複）。</div>
         </article>
 
       </section>
@@ -2364,6 +2436,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       const AUTO_REFRESH_INTERVAL_MS = 10000;
       let autoRefreshTimer = null;
       let autoRefreshEnabled = true;
+      let _schedulerPillsDirty = false;
       let schedulerLogsMode = "all";
       let schedulerControlFilterMode = "all";
       let strategySortMode = "gross_realized_pnl";
@@ -2385,7 +2458,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
         return escaped.replace(
-          /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+          /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
           (match) => {
             let cls = "json-num";
             if (/^"/.test(match)) {
@@ -2683,41 +2756,41 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           ? `${alertingRuntime.last_seen_at} | ${alertingRuntime.message}`
           : "No alerting heartbeat recorded yet.";
 
-        const dataWorker = heartbeatMap.data_worker;
+        const dataWorker = heartbeatMap.market_data;
         el("data-worker-status").textContent = dataWorker
           ? String(dataWorker.status).toUpperCase()
           : "NONE";
         el("data-worker-status").className = `value ${statusClass(dataWorker ? dataWorker.status : "degraded")}`;
         el("data-worker-detail").textContent = dataWorker
-          ? `${dataWorker.last_seen_at} | ${dataWorker.message}${(dataWorker.payload?.symbol_names || []).length ? ` | symbols: ${dataWorker.payload.symbol_names.join(", ")}` : ""}`
-          : "No data worker heartbeat recorded yet.";
+          ? `${dataWorker.last_seen_at} | ${dataWorker.message}`
+          : "No market data heartbeat recorded yet.";
 
-        const strategyWorker = heartbeatMap.strategy_worker;
+        const strategyWorker = heartbeatMap.pipeline;
         el("strategy-worker-status").textContent = strategyWorker
           ? String(strategyWorker.status).toUpperCase()
           : "NONE";
         el("strategy-worker-status").className = `value ${statusClass(strategyWorker ? strategyWorker.status : "degraded")}`;
         el("strategy-worker-detail").textContent = strategyWorker
-          ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}${(strategyWorker.payload?.symbol_names || []).length ? ` | symbols: ${strategyWorker.payload.symbol_names.join(", ")}` : ""}`
-          : "No strategy worker heartbeat recorded yet.";
+          ? `${strategyWorker.last_seen_at} | ${strategyWorker.message}`
+          : "No pipeline heartbeat recorded yet.";
 
-        const riskWorker = heartbeatMap.risk_worker;
+        const riskWorker = heartbeatMap.scheduler;
         el("risk-worker-status").textContent = riskWorker
           ? String(riskWorker.status).toUpperCase()
           : "NONE";
         el("risk-worker-status").className = `value ${statusClass(riskWorker ? riskWorker.status : "degraded")}`;
         el("risk-worker-detail").textContent = riskWorker
-          ? `${riskWorker.last_seen_at} | ${riskWorker.message}${(riskWorker.payload?.symbol_names || []).length ? ` | symbols: ${riskWorker.payload.symbol_names.join(", ")}` : ""}`
-          : "No risk worker heartbeat recorded yet.";
+          ? `${riskWorker.last_seen_at} | ${riskWorker.message}`
+          : "No scheduler heartbeat recorded yet.";
 
-        const executionWorker = heartbeatMap.execution_worker;
+        const executionWorker = heartbeatMap.alerting;
         el("execution-worker-status").textContent = executionWorker
           ? String(executionWorker.status).toUpperCase()
           : "NONE";
         el("execution-worker-status").className = `value ${statusClass(executionWorker ? executionWorker.status : "degraded")}`;
         el("execution-worker-detail").textContent = executionWorker
-          ? `${executionWorker.last_seen_at} | ${executionWorker.message}${(executionWorker.payload?.symbol_names || []).length ? ` | symbols: ${executionWorker.payload.symbol_names.join(", ")}` : ""}`
-          : "No execution worker heartbeat recorded yet.";
+          ? `${executionWorker.last_seen_at} | ${executionWorker.message}`
+          : "No alerting heartbeat recorded yet.";
 
         const heartbeatIssues = (heartbeatCheck.components || [])
           .filter((item) => ["failed", "stopped"].includes(item.status))
@@ -3033,17 +3106,26 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const strategyEntry = strategyEntryMap[item.strategy_name] || {};
           const latestSignal = item.latest_signal?.signal_type || "none";
           const latestRisk = item.latest_risk?.decision || "none";
+          const latestRiskReason = item.latest_risk?.reason || null;
+          const probBuy  = item.latest_signal?.short_ma != null ? (Number(item.latest_signal.short_ma) * 100).toFixed(1) + "%" : null;
+          const probSell = item.latest_signal?.long_ma  != null ? (Number(item.latest_signal.long_ma)  * 100).toFixed(1) + "%" : null;
+          const probHold = (probBuy != null && probSell != null)
+            ? ((1 - Number(item.latest_signal.short_ma) - Number(item.latest_signal.long_ma)) * 100).toFixed(1) + "%"
+            : null;
           const latestOrder = item.latest_order?.status || "none";
           const latestFill = item.latest_fill?.side || "none";
           const latestActivityAt = item.latest_activity_at || "none";
           const latestOrderAt = item.latest_order_at || "none";
           const latestFillAt = item.latest_fill_at || "none";
+          const openEntryPrice = item.open_entry_price != null
+            ? Number(item.open_entry_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : null;
           const latestClosedTrade = item.latest_closed_trade || null;
           const latestClosedSymbol = latestClosedTrade?.symbol || "none";
           const latestClosedStatus = latestClosedTrade?.status || "none";
           const latestClosedAt = latestClosedTrade?.closed_at || "none";
           const latestClosedPnl = latestClosedTrade
-            ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6)
+            ? parseFloat(Number(latestClosedTrade.realized_pnl || 0).toFixed(6)).toString()
             : "n/a";
           const latestClosedPnlClass = latestClosedTrade
             ? Number(latestClosedTrade.realized_pnl || 0) > 0
@@ -3081,47 +3163,125 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             `fill=${latestFill}`,
           ].join(" | ");
 
+          const netQty = Number(item.net_position_qty || 0);
+          const isLong = netQty > 0;
+          const sigClass = latestSignal === "BUY" ? "sig-buy" : latestSignal === "SELL" ? "sig-sell" : "sig-hold";
+          const netQtyStr = netQty === 0 ? "0" : parseFloat(netQty.toFixed(8)).toString();
+          const positionLabel = isLong
+            ? `${netQtyStr} BTC${openEntryPrice != null ? " @ " + openEntryPrice : ""}`
+            : "—";
+          const currentPrice = item.current_price != null
+            ? Number(item.current_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : null;
+          const priceSymbol = item.price_symbol || null;
+          const unrealizedPnl = (isLong && item.open_entry_price != null && item.current_price != null)
+            ? (Number(item.current_price) - Number(item.open_entry_price)) * netQty
+            : null;
+          const unrealizedPnlStr = unrealizedPnl != null
+            ? (unrealizedPnl >= 0 ? "+" : "") + parseFloat(unrealizedPnl.toFixed(4)).toString() + " USDT"
+            : null;
+          const unrealizedPnlClass = unrealizedPnl == null ? "muted" : unrealizedPnl > 0 ? "ok" : unrealizedPnl < 0 ? "bad" : "muted";
+
           return `
-            <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0" title="Filter recent closed trades for ${item.strategy_name}">
-              <div class="strategy-hero">
-                <div class="strategy-hero-main">
-                  <div class="strategy-rank">Rank #${index + 1}</div>
+            <div class="strategy-card clickable ${closedTradesStrategyFilter === item.strategy_name ? "selected" : ""}" data-strategy-name="${item.strategy_name}" role="button" tabindex="0">
+
+              <div class="strategy-card-top">
+                <div class="strategy-card-identity">
+                  <div class="strategy-rank"># ${index + 1}</div>
                   <div class="strategy-name-row">
                     <strong>${item.strategy_name}</strong>
                     <span class="${enabledClass}">${enabledLabel}</span>
-                    ${strategyEntry.enabled === false ? `<span class="chip">disabled=${disabledReason}</span>` : ""}
-                    ${strategyEntry.effective === false && strategyEntry.active ? `<span class="chip">limited by scheduler</span>` : ""}
-                  </div>
-                  <div class="strategy-summary-line">${summaryLine}</div>
-                  <div class="strategy-card-actions">
-                    ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}">Promote</button>` : ""}
-                    ${canDemote ? `<button type="button" class="secondary" data-demote-strategy="${item.strategy_name}">Demote</button>` : ""}
-                    ${strategyEntry.enabled !== false
-                      ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>`
-                      : `<button type="button" class="secondary" data-enable-strategy="${item.strategy_name}">Enable</button>`}
                   </div>
                 </div>
-                <div class="strategy-kpi-grid">
-                  <div class="strategy-kpi"><strong>Gross PnL</strong><span class="${pnlClass}">${pnl}</span></div>
-                  <div class="strategy-kpi"><strong>Win Rate</strong><span>${winRate}</span></div>
-                  <div class="strategy-kpi"><strong>Filled Orders</strong><span>${item.filled_order_count}</span></div>
-                  <div class="strategy-kpi"><strong>Net Qty</strong><span>${item.net_position_qty}</span></div>
+                <div class="strategy-card-action-group">
+                  ${canPromote ? `<button type="button" class="secondary" data-promote-strategy="${item.strategy_name}" title="Promote priority">↑</button>` : ""}
+                  ${canDemote ? `<button type="button" class="secondary" data-demote-strategy="${item.strategy_name}" title="Demote priority">↓</button>` : ""}
+                  ${strategyEntry.enabled !== false
+                    ? `<button type="button" class="secondary" data-disable-strategy="${item.strategy_name}">Disable</button>`
+                    : `<button type="button" class="secondary" data-enable-strategy="${item.strategy_name}">Enable</button>`}
                 </div>
               </div>
-              <div class="strategy-secondary-grid">
-                <div class="strategy-metric"><strong>Disabled Reason</strong>${disabledReason}</div>
-                <div class="strategy-metric"><strong>Latest Risk</strong>${latestRisk}</div>
-                <div class="strategy-metric"><strong>Filled Qty</strong>${item.filled_qty_total}</div>
-                <div class="strategy-metric"><strong>Wins</strong>${item.winning_trade_count}</div>
-                <div class="strategy-metric"><strong>Losses</strong>${item.losing_trade_count}</div>
-                <div class="strategy-metric"><strong>Latest Activity</strong>${latestActivityAt}</div>
-                <div class="strategy-metric"><strong>Latest Order At</strong>${latestOrderAt}</div>
-                <div class="strategy-metric"><strong>Latest Fill At</strong>${latestFillAt}</div>
-                <div class="strategy-metric"><strong>Latest Closed Symbol</strong>${latestClosedSymbol}</div>
-                <div class="strategy-metric"><strong>Latest Closed Status</strong><span class="${latestClosedPnlClass}">${latestClosedStatus}</span></div>
-                <div class="strategy-metric"><strong>Latest Closed At</strong>${latestClosedAt}</div>
-                <div class="strategy-metric"><strong>Latest Closed PnL</strong><span class="${latestClosedPnlClass}">${latestClosedPnl}</span></div>
+
+              <div class="strategy-signal-row">
+                <span class="strategy-signal-label">Signal</span>
+                <span class="strategy-signal-value ${sigClass}">${latestSignal}</span>
+                <span class="strategy-signal-divider">·</span>
+                <span class="strategy-signal-label">Risk</span>
+                <span class="strategy-signal-value sig-hold">${latestRisk}</span>
+                <span class="strategy-signal-divider">·</span>
+                <span class="strategy-signal-label">Last Fill</span>
+                <span class="strategy-signal-value sig-hold">${latestFill}</span>
               </div>
+              ${(latestRiskReason || probBuy != null) ? `
+              <div class="strategy-reject-reason" style="${latestRisk !== "REJECTED" ? "background:rgba(255,255,255,0.04);color:var(--muted);border-color:rgba(255,255,255,0.08);" : ""}">
+                ${latestRiskReason ? `<span>${latestRiskReason}</span>` : ""}
+                ${probBuy != null ? `<span class="strategy-prob-row" style="margin-top:${latestRiskReason ? "6px" : "0"};display:flex;gap:6px;">
+                  <span class="strategy-prob-item">HOLD ${probHold}</span>
+                  <span class="strategy-prob-item sig-buy">BUY ${probBuy}</span>
+                  <span class="strategy-prob-item sig-sell">SELL ${probSell}</span>
+                </span>` : ""}
+              </div>` : ""}
+
+              <div class="strategy-kpi-row">
+                <div class="strategy-kpi">
+                  <strong>Gross PnL</strong>
+                  <span class="${pnlClass}">${pnl}</span>
+                </div>
+                <div class="strategy-kpi">
+                  <strong>Win Rate</strong>
+                  <span>${winRate}</span>
+                </div>
+                <div class="strategy-kpi">
+                  <strong>W / L</strong>
+                  <span>${item.winning_trade_count} <span style="color:var(--muted);font-weight:400;font-size:13px;">/</span> ${item.losing_trade_count}</span>
+                </div>
+                <div class="strategy-kpi">
+                  <strong>Trades</strong>
+                  <span>${item.filled_order_count}</span>
+                </div>
+              </div>
+
+              <div class="strategy-info-row">
+                <div class="strategy-info-cell">
+                  <span class="strategy-info-label">Position</span>
+                  <span class="strategy-info-value ${isLong ? "ok" : "muted"}">${isLong ? "LONG  " + positionLabel : "Flat"}</span>
+                </div>
+                <div class="strategy-info-cell">
+                  <span class="strategy-info-label">Current Price</span>
+                  <span class="strategy-info-value">${currentPrice != null ? currentPrice + " USDT" : "—"}</span>
+                </div>
+                <div class="strategy-info-cell">
+                  <span class="strategy-info-label">Unrealized PnL</span>
+                  <span class="strategy-info-value ${unrealizedPnlClass}">${unrealizedPnlStr ?? "—"}</span>
+                </div>
+              </div>
+              <div class="strategy-info-row">
+                <div class="strategy-info-cell">
+                  <span class="strategy-info-label">Last Trade</span>
+                  <span class="strategy-info-value ${latestClosedTrade ? latestClosedPnlClass : "muted"}">
+                    ${latestClosedTrade ? latestClosedPnl + " USDT  (" + latestClosedStatus + ")" : "—"}
+                  </span>
+                </div>
+              </div>
+
+              <div class="strategy-card-footer">
+                <div class="strategy-footer-left">
+                  <div class="strategy-footer-item">
+                    <span>Volume</span>
+                    <span>${Number(item.filled_qty_total).toFixed(4)} BTC</span>
+                  </div>
+                  <div class="strategy-footer-item">
+                    <span>Last Active</span>
+                    <span>${latestActivityAt}</span>
+                  </div>
+                  ${latestClosedTrade ? `
+                  <div class="strategy-footer-item">
+                    <span>Closed At</span>
+                    <span>${latestClosedAt}</span>
+                  </div>` : ""}
+                </div>
+              </div>
+
             </div>
           `;
         }).join("");
@@ -3359,9 +3519,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const selectedSchedulerSymbols = Array.from(
           el("scheduler-symbol-pills")?.querySelectorAll(".toggle-pill.selected") || []
         ).map((p) => p.dataset.symbol);
-        const selectedDisabledStrategies = Array.from(
-          el("scheduler-disabled-strategy-pills")?.querySelectorAll(".toggle-pill.selected") || []
-        ).map((p) => p.dataset.strategy);
+        const selectedDisabledStrategies = [];
         const strategyPriorities = Object.fromEntries(
           Array.from(document.querySelectorAll("[data-strategy-priority]")).map((input, index) => [
             input.dataset.strategyPriority,
@@ -3675,33 +3833,23 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           executionBackendSelect.value = health?.checks?.execution_backend?.backend || "paper";
         }
         const schedulerStrategyPills = el("scheduler-strategy-pills");
-        if (schedulerStrategyPills && schedulerStrategy?.available_strategies) {
+        if (schedulerStrategyPills && schedulerStrategy?.available_strategies && !_schedulerPillsDirty) {
           const activeSet = new Set(schedulerStrategy.strategy_names || []);
           schedulerStrategyPills.innerHTML = schedulerStrategy.available_strategies
             .map((s) => `<button type="button" class="toggle-pill${activeSet.has(s) ? " selected" : ""}" data-strategy="${s}">${s}</button>`)
             .join("");
           schedulerStrategyPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-            pill.addEventListener("click", () => pill.classList.toggle("selected"));
-          });
-        }
-        const schedulerDisabledPills = el("scheduler-disabled-strategy-pills");
-        if (schedulerDisabledPills && schedulerStrategy?.available_strategies) {
-          const disabledSet = new Set(schedulerStrategy.disabled_strategy_names || []);
-          schedulerDisabledPills.innerHTML = schedulerStrategy.available_strategies
-            .map((s) => `<button type="button" class="toggle-pill${disabledSet.has(s) ? " selected" : ""}" data-strategy="${s}">${s}</button>`)
-            .join("");
-          schedulerDisabledPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+            pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
           });
         }
         const schedulerSymbolPills = el("scheduler-symbol-pills");
-        if (schedulerSymbolPills && schedulerSymbols?.available_symbols) {
+        if (schedulerSymbolPills && schedulerSymbols?.available_symbols && !_schedulerPillsDirty) {
           const activeSymbolSet = new Set(schedulerSymbols.symbol_names || []);
           schedulerSymbolPills.innerHTML = schedulerSymbols.available_symbols
             .map((s) => `<button type="button" class="toggle-pill${activeSymbolSet.has(s) ? " selected" : ""}" data-symbol="${s}">${s}</button>`)
             .join("");
           schedulerSymbolPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-            pill.addEventListener("click", () => pill.classList.toggle("selected"));
+            pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
           });
         }
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
@@ -3902,6 +4050,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               method: "POST",
               body: JSON.stringify(payload),
             });
+            _schedulerPillsDirty = false;
           } else if (type === "execution-backend-save") {
             result = await api("/execution/backend", {
               method: "POST",
