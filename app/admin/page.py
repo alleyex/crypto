@@ -1722,6 +1722,7 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <div class="ctrl-section">
             <div class="fetch-field-label">Active Strategies</div>
             <div id="scheduler-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+            <div id="scheduler-disabled-strategy-pills" class="toggle-pill-group" style="margin-top:4px"></div>
           </div>
           <div class="ctrl-section">
             <div class="fetch-field-label">Active Symbols</div>

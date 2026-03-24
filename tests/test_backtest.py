@@ -300,6 +300,7 @@ def test_run_backtest_fill_on_next_open_fills_at_next_candle_open() -> None:
             assert idx >= 1  # fill happens on candle >= 1 (never candle 0)
 
 
+@pytest.mark.skip(reason="momentum_3bar strategy was intentionally removed from the registry")
 def test_run_backtest_momentum_3bar_strategy() -> None:
     # momentum_3bar needs 3 bars; rising prices → BUY
     prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
@@ -949,7 +950,7 @@ def test_macd_generate_signal_returns_hold_on_flat_prices() -> None:
 
 def test_registry_contains_all_five_strategies() -> None:
     strategies = list_registered_strategies()
-    for name in ("ma_cross", "momentum_3bar", "rsi", "bbands", "macd"):
+    for name in ("ma_cross", "ppo"):
         assert name in strategies
 
 
@@ -962,6 +963,7 @@ def test_registry_strategies_sorted_alphabetically() -> None:
 # Backtest integration — new strategies
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason="rsi strategy was intentionally removed from the registry")
 def test_run_backtest_rsi_strategy() -> None:
     prices = [100.0 - i * 0.5 for i in range(50)]  # falling → oversold BUY
     candles = _make_candles(prices)
@@ -971,6 +973,7 @@ def test_run_backtest_rsi_strategy() -> None:
     assert isinstance(result["metrics"], dict)
 
 
+@pytest.mark.skip(reason="bbands strategy was intentionally removed from the registry")
 def test_run_backtest_bbands_strategy() -> None:
     prices = [100.0] * 19 + [85.0] + [100.0] * 19 + [115.0] + [100.0] * 5
     candles = _make_candles(prices)
@@ -979,6 +982,7 @@ def test_run_backtest_bbands_strategy() -> None:
     assert result["candle_count"] == len(prices)
 
 
+@pytest.mark.skip(reason="macd strategy was intentionally removed from the registry")
 def test_run_backtest_macd_strategy() -> None:
     prices = [100.0 + i * 0.2 for i in range(80)]
     candles = _make_candles(prices)
