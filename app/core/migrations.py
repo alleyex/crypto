@@ -634,6 +634,19 @@ def _migrate_remaining_real_columns_to_numeric(connection: DBConnection) -> None
             )
 
 
+def _add_fills_commission(connection: DBConnection) -> None:
+    """Add commission, commission_asset, quote_qty, transact_time columns to fills table."""
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(fills)").fetchall()}
+    if "commission" not in existing:
+        connection.execute("ALTER TABLE fills ADD COLUMN commission REAL DEFAULT NULL;")
+    if "commission_asset" not in existing:
+        connection.execute("ALTER TABLE fills ADD COLUMN commission_asset TEXT DEFAULT NULL;")
+    if "quote_qty" not in existing:
+        connection.execute("ALTER TABLE fills ADD COLUMN quote_qty REAL DEFAULT NULL;")
+    if "transact_time" not in existing:
+        connection.execute("ALTER TABLE fills ADD COLUMN transact_time INTEGER DEFAULT NULL;")
+
+
 def _add_retention_and_heartbeat_indexes(connection: DBConnection) -> None:
     """Add indexes to support efficient data retention queries."""
     connection.execute(
@@ -727,6 +740,7 @@ MIGRATIONS: list[Migration] = [
     ("036_add_missing_performance_indexes", _add_missing_performance_indexes),
     ("037_migrate_remaining_real_columns_to_numeric", _migrate_remaining_real_columns_to_numeric),
     ("038_add_retention_and_heartbeat_indexes", _add_retention_and_heartbeat_indexes),
+    ("039_add_fills_commission", _add_fills_commission),
 ]
 
 

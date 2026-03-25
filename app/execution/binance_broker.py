@@ -45,6 +45,15 @@ def _weighted_avg_fill_price(fills: list) -> float:
     return sum(float(f["price"]) * float(f["qty"]) for f in fills) / total_qty
 
 
+def _total_commission(fills: list) -> tuple[float, str]:
+    """Sum commission across all partial fills. Returns (amount, asset)."""
+    if not fills:
+        return 0.0, ""
+    asset = fills[0].get("commissionAsset", "")
+    total = sum(float(f.get("commission", 0)) for f in fills)
+    return total, asset
+
+
 class BinanceBrokerClient:
     """Live broker client targeting Binance Spot API.
 
@@ -163,11 +172,18 @@ class BinanceBrokerClient:
         fills = data.get("fills") or []
         fill_price = _weighted_avg_fill_price(fills) if fills else ref_price
         fill_qty = float(data.get("executedQty") or qty)
+        quote_qty = float(data.get("cummulativeQuoteQty") or 0) or None
+        transact_time = int(data["transactTime"]) if data.get("transactTime") else None
         status = str(data.get("status", "UNKNOWN"))
+        commission, commission_asset = _total_commission(fills)
 
         return {
             "status": status,
             "fill_price": fill_price,
             "fill_qty": fill_qty,
             "order_id": str(data.get("orderId", "")),
+            "commission": commission,
+            "commission_asset": commission_asset,
+            "quote_qty": quote_qty,
+            "transact_time": transact_time,
         }

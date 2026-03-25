@@ -27,6 +27,7 @@ def _get_choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
 
 
 DEFAULT_ORDER_QTY = _get_float("CRYPTO_ORDER_QTY", 0.001)
+COMMISSION_RATE = _get_float("CRYPTO_COMMISSION_RATE", 0.001)  # 0.1% per side
 MAX_POSITION_QTY = _get_float("CRYPTO_MAX_POSITION_QTY", 0.001)
 COOLDOWN_SECONDS = _get_int("CRYPTO_COOLDOWN_SECONDS", 300)
 CANDLE_STALENESS_SECONDS = _get_int("CRYPTO_CANDLE_STALENESS_SECONDS", 600)

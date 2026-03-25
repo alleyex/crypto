@@ -3119,6 +3119,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : Number(item.gross_realized_pnl || 0) < 0
               ? "bad"
               : "warn";
+          const commission = Number(item.total_commission || 0).toFixed(4);
+          const netPnl = Number(item.net_realized_pnl || 0).toFixed(6);
+          const netPnlClass = Number(item.net_realized_pnl || 0) > 0
+            ? "ok"
+            : Number(item.net_realized_pnl || 0) < 0
+              ? "bad"
+              : "warn";
           const enabledLabel = strategyEntry.enabled === false
             ? "DISABLED"
             : strategyEntry.effective === false && strategyEntry.active
@@ -3205,6 +3212,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div class="strategy-kpi">
                   <strong>Gross PnL</strong>
                   <span class="${pnlClass}">${pnl}</span>
+                </div>
+                <div class="strategy-kpi">
+                  <strong>Commission</strong>
+                  <span class="bad">-${commission}</span>
+                </div>
+                <div class="strategy-kpi">
+                  <strong>Net PnL</strong>
+                  <span class="${netPnlClass}">${netPnl}</span>
                 </div>
                 <div class="strategy-kpi">
                   <strong>Win Rate</strong>

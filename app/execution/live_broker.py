@@ -108,6 +108,10 @@ def execute_risk_event_id(
     fill_qty = float(fill_result["fill_qty"])
     order_status = str(fill_result["status"])
     broker_order_id = fill_result.get("order_id")
+    commission = fill_result.get("commission") or None
+    commission_asset = fill_result.get("commission_asset") or None
+    quote_qty = fill_result.get("quote_qty") or None
+    transact_time = fill_result.get("transact_time") or None
 
     client_order_id = str(uuid.uuid4())
     order_id = insert_and_get_rowid(
@@ -130,7 +134,7 @@ def execute_risk_event_id(
     insert_and_get_rowid(
         connection,
         INSERT_FILL_SQL,
-        (order_id, symbol, signal_type, fill_qty, fill_price),
+        (order_id, symbol, signal_type, fill_qty, fill_price, commission, commission_asset, quote_qty, transact_time),
     )
     rebuild_daily_realized_pnl(connection)
     connection.commit()

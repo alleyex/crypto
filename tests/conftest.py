@@ -29,3 +29,4 @@ def _reset_execution_backend_for_tests(monkeypatch, tmp_path):
     # Tests that need a specific backend still work by setting EXECUTION_BACKEND
     # or creating their own backend file via a separate monkeypatch.
     monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND_FILE", tmp_path / "execution.backend")
+    monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "paper")

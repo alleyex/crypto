@@ -94,8 +94,12 @@ INSERT INTO fills (
     symbol,
     side,
     qty,
-    price
-) VALUES (?, ?, ?, ?, ?);
+    price,
+    commission,
+    commission_asset,
+    quote_qty,
+    transact_time
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -172,7 +176,7 @@ def execute_risk_event_id(
     insert_and_get_rowid(
         connection,
         INSERT_FILL_SQL,
-        (order_id, symbol, signal_type, order_qty, latest_close),
+        (order_id, symbol, signal_type, order_qty, latest_close, None, None, None, None),
     )
     # Keep persisted daily realized PnL in sync with newly written fills.
     rebuild_daily_realized_pnl(connection)

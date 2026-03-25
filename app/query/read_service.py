@@ -500,6 +500,7 @@ def get_strategy_activity_summary(
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
 
         gross_realized_pnl = 0.0
+        total_commission = 0.0
         filled_qty_total = 0.0
         buy_fill_count = 0
         sell_fill_count = 0
@@ -509,11 +510,20 @@ def get_strategy_activity_summary(
         breakeven_trade_count = 0
         positions_by_symbol: dict[str, dict[str, float]] = {}
 
+        from app.core.settings import COMMISSION_RATE
+        fills_by_order_id = {f["order_id"]: f for f in fills}
         for order in filled_orders:
             symbol = order["symbol"]
             qty = float(order["qty"])
             price = float(order["price"])
             filled_qty_total += qty
+            fill_record = fills_by_order_id.get(order["id"])
+            if fill_record and fill_record.get("commission") is not None:
+                c = float(fill_record["commission"])
+                asset = fill_record.get("commission_asset", "")
+                total_commission += c * price if asset != "USDT" else c
+            else:
+                total_commission += qty * price * COMMISSION_RATE
             position = positions_by_symbol.setdefault(symbol, {"qty": 0.0, "cost": 0.0})
 
             if order["side"] == "BUY":
@@ -575,6 +585,8 @@ def get_strategy_activity_summary(
                 "current_price": current_price,
                 "price_symbol": price_symbol,
                 "gross_realized_pnl": gross_realized_pnl,
+                "total_commission": total_commission,
+                "net_realized_pnl": gross_realized_pnl - total_commission,
                 "buy_fill_count": buy_fill_count,
                 "sell_fill_count": sell_fill_count,
                 "realized_trade_count": realized_trade_count,
