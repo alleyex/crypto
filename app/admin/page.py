@@ -1804,28 +1804,6 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
         <article class="panel data-card">
           <h2>Strategy Activity</h2>
           <p>Latest signal, risk, fills, and trade outcomes grouped by strategy.</p>
-          <div class="inline-controls">
-            <label for="strategy-sort-select">Sort</label>
-            <select id="strategy-sort-select">
-              <option value="gross_realized_pnl">gross pnl</option>
-              <option value="winning_trade_count">wins</option>
-              <option value="filled_order_count">filled orders</option>
-              <option value="latest_activity_at">latest activity</option>
-              <option value="latest_closed_pnl">latest closed pnl</option>
-              <option value="realized_trade_count">realized trades</option>
-              <option value="strategy_name">name</option>
-            </select>
-            <label for="strategy-filter-select">Filter</label>
-            <select id="strategy-filter-select">
-              <option value="all">all</option>
-              <option value="active">active only</option>
-              <option value="open_positions">open positions</option>
-              <option value="winners">winners</option>
-              <option value="fresh">fresh</option>
-              <option value="stale">stale</option>
-              <option value="idle">idle</option>
-            </select>
-          </div>
           <div class="strategy-board" id="strategy-summary-board">
             <div class="strategy-card">Loading...</div>
           </div>

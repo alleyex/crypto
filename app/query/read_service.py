@@ -115,6 +115,25 @@ ORDER BY id DESC
 LIMIT ?;
 """
 
+SELECT_ALL_ORDERS_SQL = """
+SELECT
+    id,
+    client_order_id,
+    risk_event_id,
+    broker_name,
+    broker_order_id,
+    symbol,
+    timeframe,
+    strategy_name,
+    side,
+    qty,
+    price,
+    status,
+    created_at
+FROM orders
+ORDER BY id DESC;
+"""
+
 
 SELECT_FILLS_SQL = """
 SELECT
@@ -128,6 +147,19 @@ SELECT
 FROM fills
 ORDER BY id DESC
 LIMIT ?;
+"""
+
+SELECT_ALL_FILLS_SQL = """
+SELECT
+    id,
+    order_id,
+    symbol,
+    side,
+    qty,
+    price,
+    created_at
+FROM fills
+ORDER BY id DESC;
 """
 
 
@@ -216,6 +248,14 @@ def get_orders(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]
 
 def get_fills(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_FILLS_SQL, limit)
+
+
+def get_all_orders(connection: DBConnection) -> list[dict[str, Any]]:
+    return fetch_all_as_dicts(connection, SELECT_ALL_ORDERS_SQL)
+
+
+def get_all_fills(connection: DBConnection) -> list[dict[str, Any]]:
+    return fetch_all_as_dicts(connection, SELECT_ALL_FILLS_SQL)
 
 
 def get_positions(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
@@ -421,8 +461,8 @@ def get_strategy_activity_summary(
     strategy_names = list_registered_strategies()
     signals = get_signals(connection, limit=per_table_limit)
     risk_events = get_risk_events(connection, limit=per_table_limit)
-    orders = get_orders(connection, limit=per_table_limit)
-    fills = get_fills(connection, limit=per_table_limit)
+    orders = get_all_orders(connection)
+    fills = get_all_fills(connection)
     closed_trades = get_strategy_closed_trades(
         connection,
         limit=max(len(strategy_names), per_table_limit),
@@ -556,8 +596,8 @@ def get_strategy_closed_trades(
     per_table_limit: int = 200,
     strategy_name: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    orders = get_orders(connection, limit=per_table_limit)
-    fills = get_fills(connection, limit=per_table_limit)
+    orders = get_all_orders(connection)
+    fills = get_all_fills(connection)
     fills_by_order_id = {int(item["order_id"]): item for item in fills}
     strategy_filter = strategy_name.strip() if strategy_name else None
     filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
