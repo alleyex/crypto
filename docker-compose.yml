@@ -19,7 +19,7 @@ services:
   api:
     build:
       context: .
-    command: python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips ${CRYPTO_FORWARDED_ALLOW_IPS:-168.144.35.241}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,6 +37,7 @@ services:
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
       CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
       CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FORWARDED_ALLOW_IPS: ${CRYPTO_FORWARDED_ALLOW_IPS:-168.144.35.241}
       CRYPTO_USE_FAKE_KLINES: ${CRYPTO_USE_FAKE_KLINES:-}
       CRYPTO_FAKE_KLINE_CLOSES: ${CRYPTO_FAKE_KLINE_CLOSES:-}
       CRYPTO_BINANCE_API_KEY: ${CRYPTO_BINANCE_API_KEY:-}

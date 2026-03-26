@@ -8,6 +8,7 @@ OKX) should implement BrokerClient and be wired in here.
 import uuid
 from typing import Dict, List, Optional, Protocol, Union
 
+from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.data.candles_service import get_latest_close
@@ -71,6 +72,18 @@ class SimulatedBrokerClient:
         }
 
 
+def _error_payload(exc: Exception) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "error_type": exc.__class__.__name__,
+        "error_message": str(exc),
+    }
+    if hasattr(exc, "to_payload") and callable(getattr(exc, "to_payload")):
+        extra = exc.to_payload()
+        if isinstance(extra, dict):
+            payload.update(extra)
+    return payload
+
+
 def execute_risk_event_id(
     connection: DBConnection,
     risk_event_id: int,
@@ -98,12 +111,33 @@ def execute_risk_event_id(
     if ref_price is None:
         return {"risk_event_id": risk_event_id, "decision": "SKIPPED", "reason": "No candle data"}
 
-    fill_result = broker_client.place_order(
-        symbol=symbol,
-        side=signal_type,
-        qty=order_qty,
-        ref_price=ref_price,
-    )
+    try:
+        fill_result = broker_client.place_order(
+            symbol=symbol,
+            side=signal_type,
+            qty=order_qty,
+            ref_price=ref_price,
+        )
+    except Exception as exc:
+        insert_event(
+            connection,
+            event_type="order",
+            status="failed",
+            source="live_broker",
+            message=f"{signal_type} order failed for {symbol} via {broker_client.broker_name}.",
+            payload={
+                "risk_event_id": risk_event_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy_name": strategy_name,
+                "side": signal_type,
+                "qty": order_qty,
+                "broker": broker_client.broker_name,
+                "ref_price": ref_price,
+                **_error_payload(exc),
+            },
+        )
+        raise
     fill_price = float(fill_result["fill_price"])
     fill_qty = float(fill_result["fill_qty"])
     order_status = str(fill_result["status"])
@@ -138,6 +172,30 @@ def execute_risk_event_id(
     )
     rebuild_daily_realized_pnl(connection)
     connection.commit()
+    insert_event(
+        connection,
+        event_type="order",
+        status=order_status.lower(),
+        source="live_broker",
+        message=f"{signal_type} order {order_status} for {symbol} via {broker_client.broker_name}.",
+        payload={
+            "order_id": order_id,
+            "risk_event_id": risk_event_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "strategy_name": strategy_name,
+            "side": signal_type,
+            "qty": fill_qty,
+            "price": fill_price,
+            "status": order_status,
+            "broker": broker_client.broker_name,
+            "broker_order_id": str(broker_order_id) if broker_order_id not in (None, "") else None,
+            "commission": commission,
+            "commission_asset": commission_asset,
+            "quote_qty": quote_qty,
+            "transact_time": transact_time,
+        },
+    )
 
     return {
         "risk_event_id": risk_event_id,
@@ -149,6 +207,10 @@ def execute_risk_event_id(
         "status": order_status,
         "broker": broker_client.broker_name,
         "broker_order_id": str(broker_order_id) if broker_order_id not in (None, "") else None,
+        "commission": commission,
+        "commission_asset": commission_asset,
+        "quote_qty": quote_qty,
+        "transact_time": transact_time,
     }
 
 

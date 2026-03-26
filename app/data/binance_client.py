@@ -6,6 +6,8 @@ import requests
 
 
 BASE_URL = "https://api.binance.com/api/v3/klines"
+BOOK_TICKER_URL = "https://api.binance.com/api/v3/ticker/bookTicker"
+TESTNET_BOOK_TICKER_URL = "https://testnet.binance.vision/api/v3/ticker/bookTicker"
 DEFAULT_FAKE_CLOSES = (10.0, 11.0, 12.0, 13.0, 14.0)
 
 _DEFAULT_TIMEOUT = 10
@@ -66,6 +68,14 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def _use_testnet() -> bool:
+    return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _book_ticker_url() -> str:
+    return TESTNET_BOOK_TICKER_URL if _use_testnet() else BOOK_TICKER_URL
+
+
 def fetch_klines(
     symbol: str = "BTCUSDT",
     interval: str = "1m",
@@ -89,6 +99,35 @@ def fetch_klines(
             response = requests.get(BASE_URL, params=params, timeout=timeout)
             response.raise_for_status()
             return response.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries and _is_retryable(exc):
+                wait = backoff * (2 ** attempt)
+                time.sleep(wait)
+                continue
+            raise
+
+    raise last_exc
+
+
+def fetch_book_ticker(symbol: str = "BTCUSDT") -> dict:
+    timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
+    max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
+    backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
+
+    last_exc: Exception = RuntimeError("fetch_book_ticker: no attempts made")
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(_book_ticker_url(), params={"symbol": symbol}, timeout=timeout)
+            response.raise_for_status()
+            payload = response.json()
+            return {
+                "symbol": payload.get("symbol", symbol),
+                "bid_price": float(payload["bidPrice"]),
+                "bid_qty": float(payload["bidQty"]),
+                "ask_price": float(payload["askPrice"]),
+                "ask_qty": float(payload["askQty"]),
+            }
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries and _is_retryable(exc):

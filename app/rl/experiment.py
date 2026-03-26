@@ -11,7 +11,11 @@ embedded in params_json, so no new DB table is needed.
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.rl.environment import TradingEnv, buy_and_hold_return, episode_metrics
+from app.rl.environment import (
+    TradingEnv,
+    buy_and_hold_return_after_fees,
+    episode_metrics,
+)
 from app.rl.agent import ReinforceAgent
 from app.training.dataset import FEATURE_NAMES, _safe_float, train_test_split
 from app.training.trainer import predict as supervised_predict
@@ -49,9 +53,10 @@ def _evaluate_greedy(
     agent: ReinforceAgent,
     feature_rows: List[List[float]],
     closes: List[float],
+    fee_rate: float,
 ) -> Dict[str, Any]:
     """Run greedy rollout (no training) and return metrics."""
-    env = TradingEnv(feature_rows, closes)
+    env = TradingEnv(feature_rows, closes, fee_rate=fee_rate)
     obs = env.reset()
     actions: List[int] = []
     rewards: List[float] = []
@@ -73,6 +78,7 @@ def _evaluate_supervised(
     bias: float,
     feature_rows: List[List[float]],
     closes: List[float],
+    fee_rate: float,
     threshold: float = 0.5,
 ) -> Dict[str, Any]:
     """Simulate trading using supervised model signals."""
@@ -80,14 +86,17 @@ def _evaluate_supervised(
     rewards: List[float] = []
     actions: List[int] = []
     n = len(feature_rows)
+    prev_action = 0
     for i in range(n):
         action = preds[i]
         actions.append(action)
+        fee = fee_rate if action != prev_action else 0.0
         if action == 1 and i < n - 1 and closes[i] > 0:
-            reward = math.log(closes[i + 1] / closes[i])
+            reward = math.log(closes[i + 1] / closes[i]) - fee
         else:
-            reward = 0.0
+            reward = -fee
         rewards.append(reward)
+        prev_action = action
     return episode_metrics(rewards, actions)
 
 
@@ -102,6 +111,7 @@ def run_rl_experiment(
     gamma: float = 1.0,
     test_ratio: float = 0.2,
     seed: int = 42,
+    fee_rate: float = 0.0,
     supervised_weights: Optional[List[float]] = None,
     supervised_bias: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -129,6 +139,8 @@ def run_rl_experiment(
     """
     if len(vectors) < 10:
         raise ValueError(f"Need at least 10 feature vectors, got {len(vectors)}.")
+    if fee_rate < 0:
+        raise ValueError("fee_rate must be non-negative.")
 
     all_rows, all_closes = _extract_rows_and_closes(vectors)
     if len(all_rows) < 10:
@@ -149,7 +161,7 @@ def run_rl_experiment(
         seed=seed,
     )
 
-    train_env = TradingEnv(train_rows, train_closes)
+    train_env = TradingEnv(train_rows, train_closes, fee_rate=fee_rate)
     loss_history: List[float] = []
 
     for _ in range(n_episodes):
@@ -158,9 +170,9 @@ def run_rl_experiment(
             loss_history.append(round(ep["loss"], 6))
 
     # Evaluation
-    test_rl = _evaluate_greedy(agent, test_rows, test_closes)
+    test_rl = _evaluate_greedy(agent, test_rows, test_closes, fee_rate=fee_rate)
     test_bnh = {
-        "cumulative_return": round(buy_and_hold_return(test_closes), 6),
+        "cumulative_return": round(buy_and_hold_return_after_fees(test_closes, fee_rate=fee_rate), 6),
         "n_steps": len(test_closes),
         "n_trades": len(test_closes) - 1,
         "strategy": "buy_and_hold",
@@ -169,7 +181,7 @@ def run_rl_experiment(
     test_supervised: Optional[Dict[str, Any]] = None
     if supervised_weights is not None and supervised_bias is not None:
         test_supervised = _evaluate_supervised(
-            supervised_weights, supervised_bias, test_rows, test_closes
+            supervised_weights, supervised_bias, test_rows, test_closes, fee_rate=fee_rate
         )
         test_supervised["strategy"] = "supervised_champion"
 
@@ -195,6 +207,7 @@ def run_rl_experiment(
         "agent": agent.to_dict(),
         "train": {
             "n_episodes": n_episodes,
+            "fee_rate": fee_rate,
             "loss_history": loss_history,
             "final_loss": loss_history[-1] if loss_history else None,
         },
@@ -206,6 +219,7 @@ def run_rl_experiment(
             "n_total": n,
             "n_train": len(train_rows),
             "n_test": len(test_rows),
+            "fee_rate": fee_rate,
             "feature_names": FEATURE_NAMES,
         },
     }

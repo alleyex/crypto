@@ -13,7 +13,7 @@ Configuration (via environment variables):
 import hashlib
 import hmac
 import time
-from typing import Dict, Union
+from typing import Any, Dict, Optional, Union
 from urllib.parse import urlencode
 
 import requests
@@ -27,6 +27,45 @@ MAINNET_BASE_URL = "https://api.binance.com"
 _ORDER_ENDPOINT = "/api/v3/order"
 _ACCOUNT_ENDPOINT = "/api/v3/account"
 _ORDER_TEST_ENDPOINT = "/api/v3/order/test"
+
+
+class BinanceAPIError(RuntimeError):
+    """Structured Binance API failure with response details for logging."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        url: str = "",
+        response_text: str = "",
+        response_json: Optional[dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.url = url
+        self.response_text = response_text
+        self.response_json = response_json or None
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status_code": self.status_code,
+            "url": self.url,
+            "response_text": self.response_text,
+            "response_json": self.response_json,
+        }
+        if isinstance(self.response_json, dict):
+            payload["binance_code"] = self.response_json.get("code")
+            payload["binance_msg"] = self.response_json.get("msg")
+        return payload
+
+
+def _response_details(response: requests.Response) -> tuple[str, Optional[dict[str, Any]]]:
+    try:
+        response_json = response.json()
+    except ValueError:
+        response_json = None
+    return response.text, response_json
 
 
 def _sign(query_string: str, secret: str) -> str:
@@ -92,7 +131,23 @@ class BinanceBrokerClient:
             headers={"X-MBX-APIKEY": self._api_key},
             timeout=self._timeout,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            response_text, response_json = _response_details(response)
+            detail = ""
+            if isinstance(response_json, dict):
+                if response_json.get("code") is not None:
+                    detail = f" code={response_json.get('code')}"
+                if response_json.get("msg"):
+                    detail += f" msg={response_json.get('msg')}"
+            raise BinanceAPIError(
+                f"Binance API request failed with status {response.status_code}.{detail}".strip(),
+                status_code=response.status_code,
+                url=url,
+                response_text=response_text,
+                response_json=response_json,
+            ) from exc
         return response.json()
 
     def check_account_connectivity(self) -> Dict[str, Union[str, bool, int]]:

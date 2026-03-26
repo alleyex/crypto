@@ -675,11 +675,19 @@ def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) 
             "execution_backend_status": backend_status,
         }
     except Exception as exc:
+        error_detail: dict[str, Any] = {
+            "error_type": exc.__class__.__name__,
+            "execution_backend_status": backend_status,
+        }
+        if hasattr(exc, "to_payload") and callable(getattr(exc, "to_payload")):
+            extra = exc.to_payload()
+            if isinstance(extra, dict):
+                error_detail["error_detail"] = extra
         fail_job(
             connection,
             job_id,
             str(exc),
-            result={"error_type": exc.__class__.__name__, "execution_backend_status": backend_status},
+            result=error_detail,
         )
         failed_job = get_job(connection, job_id)
         return {

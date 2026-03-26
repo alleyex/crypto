@@ -72,6 +72,7 @@ from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import NoopExecutionAdapter
 from app.execution.adapter import SimulatedLiveExecutionAdapter
 from app.execution.adapter import get_execution_adapter_name
+from app.execution.binance_broker import BinanceAPIError
 from app.execution.live_broker import SimulatedBrokerClient
 from app.execution import live_broker
 from app.execution.runtime import get_execution_backend_runtime_status
@@ -97,6 +98,7 @@ from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
 from app.query.read_service import get_signals
+from app.query.read_service import get_execution_report
 from app.query.read_service import get_strategy_activity_summary
 from app.query.read_service import get_strategy_closed_trades
 from app.risk.risk_service import ensure_table as ensure_risk_table
@@ -250,6 +252,94 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         assert by_name["ppo"]["filled_qty_total"] == 0.0
         assert by_name["ppo"]["buy_fill_count"] == 0
         assert by_name["ppo"]["sell_fill_count"] == 0
+    finally:
+        connection.close()
+
+
+def test_get_strategy_activity_summary_enriches_bid_ask_when_requested(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
+        generate_signal(connection, strategy_name="ma_cross")
+
+        monkeypatch.setattr(
+            "app.query.read_service.fetch_book_ticker",
+            lambda symbol: {
+                "symbol": symbol,
+                "bid_price": 70850.1,
+                "bid_qty": 1.2,
+                "ask_price": 70850.9,
+                "ask_qty": 0.8,
+            },
+        )
+
+        summary = get_strategy_activity_summary(connection, include_live_book=True)
+
+        by_name = {item["strategy_name"]: item for item in summary}
+        assert by_name["ma_cross"]["bid_price"] == pytest.approx(70850.1)
+        assert by_name["ma_cross"]["ask_price"] == pytest.approx(70850.9)
+        assert by_name["ma_cross"]["current_price"] == pytest.approx(70850.5)
+    finally:
+        connection.close()
+
+
+def test_get_execution_report_summarizes_trades_and_failed_jobs() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, broker_name, broker_order_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES
+                ('buy-1', 1, 'binance', 'ext-1', 'BTCUSDT', '1m', 'ppo', 'BUY', 0.001, 70000.0, 'FILLED', '2026-03-25 00:00:00'),
+                ('sell-1', 2, 'binance', 'ext-2', 'BTCUSDT', '1m', 'ppo', 'SELL', 0.001, 70100.0, 'FILLED', '2026-03-25 00:05:00');
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO fills (
+                order_id, symbol, side, qty, price, commission, commission_asset, quote_qty, transact_time, created_at
+            ) VALUES
+                (1, 'BTCUSDT', 'BUY', 0.001, 70000.0, 0.028, 'USDT', 70.0, 1774500000000, '2026-03-25 00:00:00'),
+                (2, 'BTCUSDT', 'SELL', 0.001, 70100.0, 0.02804, 'USDT', 70.1, 1774500300000, '2026-03-25 00:05:00');
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
+            VALUES ('BTCUSDT', 0.0, 0.0, 0.1, '2026-03-25 00:05:00');
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO job_queue (
+                job_type, status, payload_json, result_json, error_message, attempt_count, created_at, completed_at
+            ) VALUES (
+                'execution',
+                'failed',
+                '{"symbol_names":["BTCUSDT"]}',
+                '{"error_detail":{"status_code":400,"binance_code":-2010,"binance_msg":"insufficient balance"}}',
+                'execution failed',
+                1,
+                '2026-03-25 00:06:00',
+                '2026-03-25 00:06:01'
+            );
+            """
+        )
+        connection.commit()
+
+        report = get_execution_report(connection, symbol="BTCUSDT", strategy_name="ppo", days=30, limit=10)
+
+        assert report["summary"]["fills"] == 2
+        assert report["summary"]["closed_trades"] == 1
+        assert report["summary"]["gross_pnl"] == pytest.approx(0.1)
+        assert report["summary"]["fees"] == pytest.approx(0.05604)
+        assert report["summary"]["net_pnl"] == pytest.approx(0.04396)
+        assert len(report["recent_failed_execution_jobs"]) == 1
+        assert report["recent_failed_execution_jobs"][0]["result"]["error_detail"]["binance_code"] == -2010
     finally:
         connection.close()
 
@@ -941,6 +1031,31 @@ def test_run_migrations_preserves_original_error_when_unlock_fails(monkeypatch) 
         raise AssertionError("Expected migration failure to raise.")
 
     assert connection.rolled_back is True
+
+
+def test_add_fills_commission_uses_backend_aware_column_lookup(monkeypatch) -> None:
+    executed: list[tuple[str, tuple]] = []
+
+    class FakeConnection:
+        def execute(self, query: str, params: tuple = ()):
+            executed.append((" ".join(query.split()), params))
+            return None
+
+    monkeypatch.setattr("app.core.migrations.table_exists", lambda _connection, table_name: table_name == "fills")
+    monkeypatch.setattr(
+        "app.core.migrations.get_table_columns",
+        lambda _connection, _table_name: {"id", "order_id", "symbol", "side", "qty", "price", "created_at"},
+    )
+
+    from app.core.migrations import _add_fills_commission
+
+    _add_fills_commission(FakeConnection())
+
+    assert all("PRAGMA table_info" not in query for query, _params in executed)
+    assert ("ALTER TABLE fills ADD COLUMN commission REAL DEFAULT NULL;", ()) in executed
+    assert ("ALTER TABLE fills ADD COLUMN commission_asset TEXT DEFAULT NULL;", ()) in executed
+    assert ("ALTER TABLE fills ADD COLUMN quote_qty REAL DEFAULT NULL;", ()) in executed
+    assert ("ALTER TABLE fills ADD COLUMN transact_time INTEGER DEFAULT NULL;", ()) in executed
 
 
 def test_make_env_defaults_postgres_runtime_settings(monkeypatch) -> None:
@@ -4675,13 +4790,15 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     monkeypatch.setattr("app.api.main.get_connection", lambda: object())
     monkeypatch.setattr(
         "app.api.main.get_strategy_activity_summary",
-        lambda connection: [
+        lambda connection, include_live_book=False: [
             {
                 "strategy_name": "ma_cross",
                 "latest_signal": {"signal_type": "BUY"},
                 "latest_risk": {"decision": "APPROVED"},
                 "latest_order": {"status": "FILLED"},
                 "latest_fill": {"side": "BUY"},
+                "bid_price": 70850.1,
+                "ask_price": 70850.9,
                 "filled_order_count": 1,
                 "filled_qty_total": 0.5,
                 "net_position_qty": 0.25,
@@ -4728,6 +4845,8 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[0]["strategy_name"] == "ma_cross"
     assert payload[0]["latest_risk"]["decision"] == "APPROVED"
     assert payload[0]["latest_fill"]["side"] == "BUY"
+    assert payload[0]["bid_price"] == 70850.1
+    assert payload[0]["ask_price"] == 70850.9
     assert payload[0]["filled_order_count"] == 1
     assert payload[0]["gross_realized_pnl"] == 12.5
     assert payload[0]["winning_trade_count"] == 1
@@ -5097,6 +5216,37 @@ def test_job_queue_lifecycle_round_trip() -> None:
             "symbol_names": ["ETHUSDT"],
         }
         assert "job_queue" in list_tables(connection)
+    finally:
+        connection.close()
+
+
+def test_run_next_queued_job_persists_structured_error_detail() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["BTCUSDT"]})
+
+        class RichError(RuntimeError):
+            def to_payload(self):
+                return {"status_code": 400, "binance_code": -2010, "binance_msg": "insufficient balance"}
+
+        def boom(connection, risk_event_ids=None, symbol_names=None):
+            raise RichError("execution failed")
+
+        import app.core.job_queue as jqmod
+        original_run_execution_job = jqmod.run_execution_job
+        jqmod.run_execution_job = boom
+        try:
+            result = run_next_queued_job(connection, job_type="execution")
+        finally:
+            jqmod.run_execution_job = original_run_execution_job
+
+        assert result["status"] == "failed"
+        failed_job = get_job(connection, job_id)
+        assert failed_job is not None
+        assert failed_job["result"]["error_detail"]["status_code"] == 400
+        assert failed_job["result"]["error_detail"]["binance_code"] == -2010
+        assert failed_job["result"]["error_detail"]["binance_msg"] == "insufficient balance"
     finally:
         connection.close()
 
@@ -6871,6 +7021,92 @@ def test_live_broker_persists_external_broker_order_id() -> None:
         order = get_orders(connection, limit=1)[0]
         assert order["broker_name"] == "binance"
         assert order["broker_order_id"] == "binance-123"
+    finally:
+        connection.close()
+
+
+def test_live_broker_persists_fill_commission_metadata() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        class FakeBroker:
+            broker_name = "binance"
+
+            def place_order(self, symbol, side, qty, ref_price):
+                return {
+                    "status": "FILLED",
+                    "fill_price": ref_price,
+                    "fill_qty": qty,
+                    "order_id": "binance-456",
+                    "commission": 0.028,
+                    "commission_asset": "USDT",
+                    "quote_qty": 70.0,
+                    "transact_time": 1774500000000,
+                }
+
+        result = live_broker.execute_risk_event_id(connection, int(risk["id"]), FakeBroker())
+
+        assert result is not None
+        assert result["commission"] == pytest.approx(0.028)
+        assert result["commission_asset"] == "USDT"
+
+        fill = get_fills(connection, limit=1)[0]
+        assert fill["commission"] == pytest.approx(0.028)
+        assert fill["commission_asset"] == "USDT"
+        assert fill["quote_qty"] == pytest.approx(70.0)
+        assert fill["transact_time"] == 1774500000000
+
+        events = get_audit_events(connection, limit=5)
+        order_event = next(event for event in events if event["event_type"] == "order")
+        payload = json.loads(order_event["payload_json"])
+        assert payload["commission"] == pytest.approx(0.028)
+        assert payload["broker_order_id"] == "binance-456"
+    finally:
+        connection.close()
+
+
+def test_live_broker_logs_structured_failure_event() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        class FailingBroker:
+            broker_name = "binance"
+
+            def place_order(self, symbol, side, qty, ref_price):
+                raise BinanceAPIError(
+                    "Binance API request failed with status 400. code=-2010 msg=Account has insufficient balance for requested action.",
+                    status_code=400,
+                    url="https://testnet.binance.vision/api/v3/order?symbol=BTCUSDT",
+                    response_text='{"code":-2010,"msg":"Account has insufficient balance for requested action."}',
+                    response_json={"code": -2010, "msg": "Account has insufficient balance for requested action."},
+                )
+
+        with pytest.raises(BinanceAPIError):
+            live_broker.execute_risk_event_id(connection, int(risk["id"]), FailingBroker())
+
+        events = get_audit_events(connection, limit=5)
+        failed_event = next(event for event in events if event["event_type"] == "order" and event["status"] == "failed")
+        payload = json.loads(failed_event["payload_json"])
+        assert payload["error_type"] == "BinanceAPIError"
+        assert payload["status_code"] == 400
+        assert payload["binance_code"] == -2010
+        assert "insufficient balance" in payload["binance_msg"].lower()
     finally:
         connection.close()
 

@@ -12,7 +12,12 @@ from app.core.migrations import run_migrations
 from app.features.compute import MIN_CANDLES, compute_features_for_candles
 from app.features.store import materialize_features
 from app.rl.agent import ReinforceAgent
-from app.rl.environment import TradingEnv, buy_and_hold_return, episode_metrics
+from app.rl.environment import (
+    TradingEnv,
+    buy_and_hold_return,
+    buy_and_hold_return_after_fees,
+    episode_metrics,
+)
 from app.rl.experiment import (
     _extract_rows_and_closes,
     run_rl_experiment,
@@ -152,6 +157,25 @@ def test_env_long_reward_is_log_return():
     assert reward == pytest.approx(math.log(110.0 / 100.0))
 
 
+def test_env_long_entry_fee_is_deducted():
+    rows = _flat_rows(5)
+    closes = [100.0, 110.0, 120.0, 130.0, 140.0]
+    env = TradingEnv(rows, closes, fee_rate=0.01)
+    env.reset()
+    _, reward, _ = env.step(1)
+    assert reward == pytest.approx(math.log(110.0 / 100.0) - 0.01)
+
+
+def test_env_hold_after_long_exit_fee_is_deducted():
+    rows = _flat_rows(5)
+    closes = [100.0, 110.0, 120.0, 130.0, 140.0]
+    env = TradingEnv(rows, closes, fee_rate=0.01)
+    env.reset()
+    env.step(1)
+    _, reward, _ = env.step(0)
+    assert reward == pytest.approx(-0.01)
+
+
 def test_env_last_step_reward_zero_even_if_long():
     # The last candle (is_last=True) yields 0 reward even for LONG action.
     # With 3 rows, t=2 is the last index.
@@ -186,6 +210,11 @@ def test_env_too_short_raises():
         TradingEnv(_flat_rows(1), _dummy_closes(1))
 
 
+def test_env_negative_fee_rate_raises():
+    with pytest.raises(ValueError):
+        TradingEnv(_flat_rows(5), _dummy_closes(5), fee_rate=-0.001)
+
+
 def test_buy_and_hold_return():
     closes = [100.0, 200.0]
     assert buy_and_hold_return(closes) == pytest.approx(math.log(2.0))
@@ -194,6 +223,11 @@ def test_buy_and_hold_return():
 def test_buy_and_hold_flat():
     closes = [100.0, 100.0, 100.0]
     assert buy_and_hold_return(closes) == pytest.approx(0.0)
+
+
+def test_buy_and_hold_after_fees_subtracts_entry_and_exit():
+    closes = [100.0, 200.0]
+    assert buy_and_hold_return_after_fees(closes, fee_rate=0.01) == pytest.approx(math.log(2.0) - 0.02)
 
 
 def test_episode_metrics_basic():
@@ -362,6 +396,19 @@ def test_experiment_reproducible():
     assert r1["verdict"] == r2["verdict"]
 
 
+def test_experiment_tracks_fee_rate_in_outputs():
+    vectors = _seeded_vectors()
+    result = run_rl_experiment(vectors, n_episodes=5, fee_rate=0.0025)
+    assert result["train"]["fee_rate"] == pytest.approx(0.0025)
+    assert result["dataset"]["fee_rate"] == pytest.approx(0.0025)
+
+
+def test_experiment_negative_fee_rate_raises():
+    vectors = _seeded_vectors()
+    with pytest.raises(ValueError):
+        run_rl_experiment(vectors, n_episodes=2, fee_rate=-0.001)
+
+
 def test_extract_rows_and_closes_filters_none():
     vectors = [
         {"open_time": 1000, "close": None, "returns_1": 0.0},
@@ -424,6 +471,19 @@ def test_api_rl_job_metrics_structure(monkeypatch):
     assert "test_bnh" in m
     assert "verdict" in m
     assert m["test_rl"]["n_steps"] > 0
+
+
+def test_api_rl_job_accepts_fee_rate(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    _seed_api_features(pconn)
+    resp = client.post(
+        "/training/rl-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "n_episodes": 3, "fee_rate": 0.002},
+    )
+    payload = resp.json()
+    assert payload["status"] == "done"
+    assert payload["model"]["fee_rate"] == pytest.approx(0.002)
+    assert payload["dataset"]["fee_rate"] == pytest.approx(0.002)
 
 
 def test_api_rl_job_stored_in_list(monkeypatch):

@@ -16,4 +16,4 @@ COPY README.md .
 
 RUN mkdir -p /app/storage /app/logs /app/runtime
 
-CMD ["python", "-m", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips ${CRYPTO_FORWARDED_ALLOW_IPS:-168.144.35.241}"]

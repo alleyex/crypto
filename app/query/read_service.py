@@ -6,6 +6,8 @@ from typing import Optional
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
 from app.core.db import parse_db_timestamp
+from app.core.settings import COMMISSION_RATE
+from app.data.binance_client import fetch_book_ticker
 from app.strategy.registry import list_registered_strategies
 
 
@@ -143,6 +145,10 @@ SELECT
     side,
     qty,
     price,
+    commission,
+    commission_asset,
+    quote_qty,
+    transact_time,
     created_at
 FROM fills
 ORDER BY id DESC
@@ -157,6 +163,10 @@ SELECT
     side,
     qty,
     price,
+    commission,
+    commission_asset,
+    quote_qty,
+    transact_time,
     created_at
 FROM fills
 ORDER BY id DESC;
@@ -457,6 +467,7 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
 def get_strategy_activity_summary(
     connection: DBConnection,
     per_table_limit: int = 100,
+    include_live_book: bool = False,
 ) -> list[dict[str, Any]]:
     strategy_names = list_registered_strategies()
     signals = get_signals(connection, limit=per_table_limit)
@@ -475,6 +486,7 @@ def get_strategy_activity_summary(
             latest_closed_trades[key] = item
 
     summaries: list[dict[str, Any]] = []
+    strategy_symbol_map: dict[str, str] = {}
     for strategy_name in strategy_names:
         latest_signal = next((item for item in signals if item["strategy_name"] == strategy_name), None)
         latest_risk = next((item for item in risk_events if item["strategy_name"] == strategy_name), None)
@@ -559,6 +571,7 @@ def get_strategy_activity_summary(
         sig_symbol = latest_signal["symbol"] if latest_signal else None
         sig_timeframe = latest_signal["timeframe"] if latest_signal else None
         if sig_symbol and sig_timeframe:
+            strategy_symbol_map[strategy_name] = sig_symbol
             price_row = connection.execute(
                 "SELECT close FROM candles WHERE symbol = ? AND timeframe = ? ORDER BY open_time DESC LIMIT 1",
                 (sig_symbol, sig_timeframe),
@@ -598,6 +611,29 @@ def get_strategy_activity_summary(
                 ),
             }
         )
+
+    if include_live_book:
+        book_tickers: dict[str, dict[str, Any]] = {}
+        for symbol in sorted({value for value in strategy_symbol_map.values() if value}):
+            try:
+                book_tickers[symbol] = fetch_book_ticker(symbol=symbol)
+            except Exception:
+                continue
+
+        for item in summaries:
+            symbol = strategy_symbol_map.get(item["strategy_name"])
+            book_ticker = book_tickers.get(symbol or "")
+            if not book_ticker:
+                continue
+            bid_price = book_ticker.get("bid_price")
+            ask_price = book_ticker.get("ask_price")
+            item["book_ticker"] = book_ticker
+            item["bid_price"] = bid_price
+            item["ask_price"] = ask_price
+            item["bid_qty"] = book_ticker.get("bid_qty")
+            item["ask_qty"] = book_ticker.get("ask_qty")
+            if bid_price is not None and ask_price is not None:
+                item["current_price"] = (float(bid_price) + float(ask_price)) / 2
 
     return summaries
 
@@ -656,3 +692,178 @@ def get_strategy_closed_trades(
 
     closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
     return closed_trades[:limit]
+
+
+def _commission_in_quote(fill_record: Optional[dict[str, Any]], price: float, qty: float) -> float:
+    if fill_record and fill_record.get("commission") is not None:
+        commission = float(fill_record["commission"])
+        asset = str(fill_record.get("commission_asset") or "")
+        return commission if asset == "USDT" else commission * price
+    return qty * price * COMMISSION_RATE
+
+
+def get_execution_report(
+    connection: DBConnection,
+    *,
+    symbol: str = "BTCUSDT",
+    strategy_name: Optional[str] = None,
+    days: int = 7,
+    limit: int = 10,
+) -> dict[str, Any]:
+    cutoff = _utc_now().astimezone(timezone.utc)
+    cutoff = cutoff.replace(microsecond=0)
+    from datetime import timedelta
+    cutoff = cutoff - timedelta(days=days)
+
+    orders = get_all_orders(connection)
+    fills = get_all_fills(connection)
+    positions = fetch_all_as_dicts(
+        connection,
+        "SELECT symbol, qty, avg_price, realized_pnl, updated_at FROM positions ORDER BY symbol ASC;",
+    )
+    queue_jobs = get_job_queue_jobs(connection, limit=200)
+
+    fills_by_order_id = {int(item["order_id"]): item for item in fills if item.get("order_id") is not None}
+    strategy_filter = strategy_name.strip() if strategy_name else None
+
+    filtered_orders = [
+        item for item in orders
+        if item.get("symbol") == symbol
+        and item.get("status") == "FILLED"
+        and (not strategy_filter or item.get("strategy_name") == strategy_filter)
+    ]
+    filtered_fills = [
+        item for item in fills
+        if item.get("symbol") == symbol
+        and parse_db_timestamp(item["created_at"]) >= cutoff
+        and (
+            not strategy_filter
+            or any(order.get("id") == item.get("order_id") and order.get("strategy_name") == strategy_filter for order in orders)
+        )
+    ]
+
+    filled_orders = list(reversed(filtered_orders))
+    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    closed_trades: list[dict[str, Any]] = []
+    total_fees = 0.0
+    for order in filled_orders:
+        fill_record = fills_by_order_id.get(int(order["id"]))
+        created_at = parse_db_timestamp(fill_record["created_at"] if fill_record else order["created_at"])
+        if created_at < cutoff:
+            continue
+        current_strategy_name = str(order["strategy_name"])
+        key = (current_strategy_name, symbol)
+        position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
+        qty = float(order["qty"])
+        price = float(order["price"])
+        total_fees += _commission_in_quote(fill_record, price, qty)
+
+        if order["side"] == "BUY":
+            position["qty"] += qty
+            position["cost"] += qty * price
+            continue
+
+        if order["side"] != "SELL" or position["qty"] <= 0:
+            continue
+
+        close_qty = min(qty, position["qty"])
+        average_entry_price = position["cost"] / position["qty"]
+        realized_pnl = (price - average_entry_price) * close_qty
+        hold_minutes = None
+        entry_order = next(
+            (
+                earlier
+                for earlier in reversed(filled_orders[:filled_orders.index(order)])
+                if earlier["side"] == "BUY"
+                and earlier["symbol"] == symbol
+                and earlier["strategy_name"] == current_strategy_name
+            ),
+            None,
+        )
+        entry_fill = fills_by_order_id.get(int(entry_order["id"])) if entry_order else None
+        if entry_fill is not None:
+            hold_minutes = round(
+                (parse_db_timestamp(fill_record["created_at"] if fill_record else order["created_at"]) - parse_db_timestamp(entry_fill["created_at"]))
+                .total_seconds() / 60,
+                2,
+            )
+        position["qty"] -= close_qty
+        position["cost"] -= close_qty * average_entry_price
+        closed_trades.append(
+            {
+                "strategy_name": current_strategy_name,
+                "symbol": symbol,
+                "qty": close_qty,
+                "entry_price": average_entry_price,
+                "exit_price": price,
+                "realized_pnl": realized_pnl,
+                "closed_at": fill_record["created_at"] if fill_record is not None else order["created_at"],
+                "hold_minutes": hold_minutes,
+                "order_id": order["id"],
+                "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
+            }
+        )
+
+    closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
+    gross_pnl = sum(float(item["realized_pnl"]) for item in closed_trades)
+    closed_trade_count = len(closed_trades)
+    wins = sum(1 for item in closed_trades if item["realized_pnl"] > 0)
+    hold_values = [float(item["hold_minutes"]) for item in closed_trades if item.get("hold_minutes") is not None]
+    best_trade = max((float(item["realized_pnl"]) for item in closed_trades), default=None)
+    worst_trade = min((float(item["realized_pnl"]) for item in closed_trades), default=None)
+    notional = sum(float(item["price"]) * float(item["qty"]) for item in filtered_fills)
+
+    daily_rows: dict[str, dict[str, Any]] = {}
+    for fill in filtered_fills:
+        trade_date = str(fill["created_at"])[:10]
+        row = daily_rows.setdefault(
+            trade_date,
+            {"trade_date": trade_date, "fills": 0, "notional": 0.0, "gross_pnl": 0.0, "fees": 0.0},
+        )
+        qty = float(fill["qty"])
+        price = float(fill["price"])
+        row["fills"] += 1
+        row["notional"] += qty * price
+        row["fees"] += _commission_in_quote(fill, price, qty)
+    for trade in closed_trades:
+        trade_date = str(trade["closed_at"])[:10]
+        row = daily_rows.setdefault(
+            trade_date,
+            {"trade_date": trade_date, "fills": 0, "notional": 0.0, "gross_pnl": 0.0, "fees": 0.0},
+        )
+        row["gross_pnl"] += float(trade["realized_pnl"])
+
+    daily = sorted(daily_rows.values(), key=lambda item: item["trade_date"], reverse=True)
+    for row in daily:
+        row["net_pnl"] = row["gross_pnl"] - row["fees"]
+
+    failed_execution_jobs = [
+        job for job in queue_jobs
+        if job.get("job_type") == "execution"
+        and job.get("status") == "failed"
+        and parse_db_timestamp(job["created_at"]) >= cutoff
+    ]
+    current_position = next((item for item in positions if item.get("symbol") == symbol), None)
+
+    return {
+        "summary": {
+            "symbol": symbol,
+            "strategy_name": strategy_filter or "all",
+            "days": days,
+            "fills": len(filtered_fills),
+            "closed_trades": closed_trade_count,
+            "notional": notional,
+            "gross_pnl": gross_pnl,
+            "fees": total_fees,
+            "net_pnl": gross_pnl - total_fees,
+            "win_rate": (wins / closed_trade_count) if closed_trade_count else None,
+            "avg_hold_minutes": (sum(hold_values) / len(hold_values)) if hold_values else None,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "current_position": current_position,
+        },
+        "daily": daily[:limit],
+        "recent_closed_trades": closed_trades[:limit],
+        "recent_failed_execution_jobs": failed_execution_jobs[:limit],
+        "recent_fills": sorted(filtered_fills, key=lambda item: str(item["created_at"]), reverse=True)[:limit],
+    }

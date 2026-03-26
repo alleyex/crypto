@@ -74,6 +74,7 @@ from app.query.read_service import get_orders
 from app.query.read_service import get_pnl_snapshots
 from app.query.read_service import get_positions
 from app.query.read_service import get_risk_events
+from app.query.read_service import get_execution_report
 from app.portfolio.portfolio_service import get_portfolio_config
 from app.portfolio.portfolio_service import get_portfolio_summary
 from app.portfolio.portfolio_service import set_portfolio_config
@@ -1156,7 +1157,7 @@ def strategies() -> dict[str, Any]:
 def strategy_summary() -> list[dict[str, Any]]:
     connection = get_connection()
     try:
-        return get_strategy_activity_summary(connection)
+        return get_strategy_activity_summary(connection, include_live_book=True)
     finally:
         connection.close()
 
@@ -1300,6 +1301,26 @@ def pnl(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
     connection = get_connection()
     try:
         return get_pnl_snapshots(connection, limit=limit)
+    finally:
+        connection.close()
+
+
+@app.get("/reports/testnet-execution")
+def testnet_execution_report(
+    symbol: str = Query(default="BTCUSDT"),
+    strategy_name: Optional[str] = Query(default=None),
+    days: int = Query(default=7, ge=1, le=30),
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict[str, Any]:
+    connection = get_connection()
+    try:
+        return get_execution_report(
+            connection,
+            symbol=symbol,
+            strategy_name=strategy_name,
+            days=days,
+            limit=limit,
+        )
     finally:
         connection.close()
 
@@ -2877,6 +2898,7 @@ class RLJobRequest(BaseModel):
     n_episodes: int = Field(default=200, ge=1, le=5000)
     learning_rate: float = Field(default=1e-3, gt=0.0)
     gamma: float = Field(default=1.0, ge=0.0, le=1.0)
+    fee_rate: float = Field(default=0.0004, ge=0.0, le=0.05)
     test_ratio: float = Field(default=0.2, ge=0.05, le=0.5)
     seed: int = Field(default=42)
     use_champion: bool = True  # compare against registry champion if available
@@ -2901,6 +2923,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
             "n_episodes": body.n_episodes,
             "learning_rate": body.learning_rate,
             "gamma": body.gamma,
+            "fee_rate": body.fee_rate,
             "test_ratio": body.test_ratio,
             "seed": body.seed,
             "use_champion": body.use_champion,
@@ -2951,6 +2974,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
                 n_episodes=body.n_episodes,
                 learning_rate=body.learning_rate,
                 gamma=body.gamma,
+                fee_rate=body.fee_rate,
                 test_ratio=body.test_ratio,
                 seed=body.seed,
                 supervised_weights=sup_weights,
@@ -2971,6 +2995,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
                 "timeframe": body.timeframe,
                 "feature_set": body.feature_set,
                 "n_episodes": body.n_episodes,
+                "fee_rate": body.fee_rate,
                 "train_loss_history": result["train"]["loss_history"],
             }
 

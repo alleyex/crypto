@@ -1164,6 +1164,12 @@ def render_admin_page() -> str:
       .strategy-name-row strong { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
       .strategy-current-price { font-size: 12px; color: var(--muted); margin-top: 2px; }
       .strategy-current-price span { font-size: 15px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+      .strategy-price-book { display: flex; flex-direction: column; gap: 4px; }
+      .strategy-price-book-main { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+      .strategy-price-book-line { font-variant-numeric: tabular-nums; }
+      .strategy-price-book-line strong { font-size: 11px; color: var(--muted); margin-right: 4px; }
+      .strategy-price-book-mid { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+      .strategy-price-book-spread { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
       .strategy-card-action-group { display: flex; gap: 6px; flex-shrink: 0; }
       .strategy-card-action-group button {
         font-size: 11px; padding: 4px 10px; border-radius: 7px;
@@ -1461,6 +1467,96 @@ def render_admin_page() -> str:
       }
       .tab-panel { display: none; }
       .tab-panel.active { display: block; }
+
+      .training-form-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 14px 0 10px;
+      }
+
+      .training-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .training-field label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .training-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .training-kpi-card {
+        padding: 14px;
+        border-radius: 14px;
+        background: #0b1219;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .training-kpi-card label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+
+      .training-kpi-card .value {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .training-job-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .training-job-row {
+        cursor: pointer;
+        transition: border-color 0.15s ease, transform 0.15s ease;
+      }
+
+      .training-job-row:hover {
+        border-color: rgba(119, 208, 255, 0.3);
+        transform: translateY(-1px);
+      }
+
+      .training-job-row.selected {
+        border-color: rgba(119, 208, 255, 0.6);
+      }
+
+      .training-job-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .training-inline-checks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 12px 0 4px;
+      }
+
+      .training-inline-checks label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -1474,6 +1570,8 @@ def render_admin_page() -> str:
           <button class="tab-btn" data-tab="features">Features</button>
           <button class="tab-btn" data-tab="monitor">Monitor</button>
           <button class="tab-btn" data-tab="ml">ML / AI</button>
+          <button class="tab-btn" data-tab="training">Training</button>
+          <button class="tab-btn" data-tab="reports">Reports</button>
           <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
         </nav>
       </div>
@@ -1900,6 +1998,19 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           </details>
         </article>
         <article class="panel data-card">
+          <h2>Recent Fills</h2>
+          <p>Latest exchange fills including commission, quote quantity, and exchange transact time when available.</p>
+          <div class="trade-list" id="fills-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+          <details class="collapsible">
+            <summary>View raw fills payload</summary>
+            <div class="collapsible-body">
+              <pre id="fills-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
+        <article class="panel data-card">
           <h2>Positions</h2>
           <p>Current position and realized PnL state.</p>
           <details class="collapsible">
@@ -2261,6 +2372,219 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <pre id="ml-rl-json" style="margin-top:12px;display:none"></pre>
         </article>
 
+      </section>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-training">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Training</div>
+            <h2>RL Training Workspace</h2>
+          </div>
+          <p>Configure RL hyperparameters, run training jobs directly from the console, and inspect the latest candidate metrics without switching back to the terminal.</p>
+        </div>
+      <section class="grid">
+        <article class="panel data-card">
+          <h2>Run RL Training</h2>
+          <p>Start a REINFORCE training job with explicit trading-cost assumptions and registry controls.</p>
+          <div class="training-form-grid">
+            <div class="training-field">
+              <label for="training-rl-symbol-input">Symbol</label>
+              <input id="training-rl-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-timeframe-input">Timeframe</label>
+              <input id="training-rl-timeframe-input" type="text" placeholder="1m" value="1m" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-episodes-input">Episodes</label>
+              <input id="training-rl-episodes-input" type="number" value="100" min="1" max="5000" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-learning-rate-input">Learning Rate</label>
+              <input id="training-rl-learning-rate-input" type="number" value="0.001" min="0.000001" max="1" step="0.0001" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-gamma-input">Gamma</label>
+              <input id="training-rl-gamma-input" type="number" value="1.0" min="0" max="1" step="0.01" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-fee-rate-input">Fee Rate</label>
+              <input id="training-rl-fee-rate-input" type="number" value="0.0004" min="0" max="0.05" step="0.0001" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-test-ratio-input">Test Ratio</label>
+              <input id="training-rl-test-ratio-input" type="number" value="0.2" min="0.05" max="0.5" step="0.05" />
+            </div>
+            <div class="training-field">
+              <label for="training-rl-seed-input">Seed</label>
+              <input id="training-rl-seed-input" type="number" value="42" min="0" max="999999" step="1" />
+            </div>
+          </div>
+          <div class="training-inline-checks">
+            <label>
+              <input id="training-rl-use-champion-input" type="checkbox" checked />
+              Compare against champion
+            </label>
+            <label>
+              <input id="training-rl-auto-promote-input" type="checkbox" />
+              Auto-promote on success
+            </label>
+          </div>
+          <div class="button-row">
+            <button data-action="training-rl-run">Run RL Training</button>
+            <button class="secondary" data-action="training-jobs-refresh">Refresh Jobs</button>
+          </div>
+          <div class="message" id="training-rl-message">Training workspace ready.</div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Latest Result</h2>
+          <p>Selected training job summary and deployment posture.</p>
+          <div class="training-kpi-grid" id="training-summary-kpis">
+            <div class="training-kpi-card"><label>Status</label><div class="value">Idle</div></div>
+            <div class="training-kpi-card"><label>Verdict</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>RL Return</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Registry</label><div class="value">n/a</div></div>
+          </div>
+          <div class="ops-card" style="margin-top:14px">
+            <div class="ops-card-header">
+              <div class="ops-card-title">Selected Job</div>
+              <div class="chip" id="training-selected-job-chip">No job selected</div>
+            </div>
+            <div class="ops-card-grid" id="training-summary-grid">
+              <div><strong>Dataset</strong>Run a training job to populate this workspace.</div>
+              <div><strong>Metrics</strong>RL, buy-and-hold, and champion comparison appear here.</div>
+              <div><strong>Hyperparameters</strong>Episodes, learning rate, gamma, fee rate, and split ratio.</div>
+              <div><strong>Model</strong>Registry candidate/champion state and model type.</div>
+            </div>
+          </div>
+          <pre id="training-rl-json" style="margin-top:12px;display:none"></pre>
+        </article>
+
+        <article class="panel data-card" style="grid-column: 1 / -1;">
+          <div class="section-header" style="margin-bottom:12px">
+            <div>
+              <div class="section-kicker">History</div>
+              <h2 style="margin:4px 0 0;font-size:20px">Recent Training Jobs</h2>
+            </div>
+            <p style="margin:0">Newest jobs first. Click any job to inspect its metrics and raw payload.</p>
+          </div>
+          <div class="training-job-list" id="training-jobs-board">
+            <div class="ops-card">
+              <div class="ops-card-title">Loading training jobs...</div>
+            </div>
+          </div>
+        </article>
+      </section>
+      </section>
+      </div>
+
+      <div class="tab-panel" id="tab-reports">
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="section-kicker">Reports</div>
+            <h2>Testnet Execution Report</h2>
+          </div>
+          <p>Review recent Binance testnet trading results with gross PnL, fees, net performance, failed executions, and latest fills in one place.</p>
+        </div>
+      <section class="grid">
+        <article class="panel data-card">
+          <h2>Report Filters</h2>
+          <p>Query the latest execution report for a symbol and optional strategy window.</p>
+          <div class="training-form-grid">
+            <div class="training-field">
+              <label for="report-symbol-input">Symbol</label>
+              <input id="report-symbol-input" type="text" value="BTCUSDT" placeholder="BTCUSDT" />
+            </div>
+            <div class="training-field">
+              <label for="report-strategy-input">Strategy</label>
+              <input id="report-strategy-input" type="text" value="ppo" placeholder="ppo or leave blank" />
+            </div>
+            <div class="training-field">
+              <label for="report-days-input">Days</label>
+              <input id="report-days-input" type="number" value="7" min="1" max="30" />
+            </div>
+          </div>
+          <div class="button-row">
+            <button data-action="report-refresh">Refresh Report</button>
+          </div>
+          <div class="message" id="report-message">Loading execution report...</div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Summary</h2>
+          <p>Top-line result after including recorded or estimated commissions.</p>
+          <div class="training-kpi-grid" id="report-summary-kpis">
+            <div class="training-kpi-card"><label>Gross PnL</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Fees</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Net PnL</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Win Rate</label><div class="value">n/a</div></div>
+          </div>
+          <div class="ops-card" style="margin-top:14px">
+            <div class="ops-card-grid" id="report-summary-grid">
+              <div><strong>Window</strong>Loading...</div>
+              <div><strong>Activity</strong>Loading...</div>
+              <div><strong>Holding</strong>Loading...</div>
+              <div><strong>Current Position</strong>Loading...</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Daily Breakdown</h2>
+          <p>Daily fills, notional, fees, and gross/net PnL.</p>
+          <div class="data-table-wrap">
+            <table class="data-table" id="report-daily-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th class="num">Fills</th>
+                  <th class="num">Notional</th>
+                  <th class="num">Fees</th>
+                  <th class="num">Gross</th>
+                  <th class="num">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="6" class="table-note">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Failed Executions</h2>
+          <p>Recent execution job failures with broker error detail.</p>
+          <div class="trade-list" id="report-failed-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Recent Closed Trades</h2>
+          <p>Latest closed trade outcomes for the selected report scope.</p>
+          <div class="trade-list" id="report-closed-trades-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Recent Fills</h2>
+          <p>Latest fills contributing to this report.</p>
+          <div class="trade-list" id="report-fills-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+          <details class="collapsible">
+            <summary>View raw report payload</summary>
+            <div class="collapsible-body">
+              <pre id="report-json">Loading...</pre>
+            </div>
+          </details>
+        </article>
       </section>
       </section>
       </div>
@@ -3159,6 +3483,18 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const currentPrice = item.current_price != null
             ? Number(item.current_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : null;
+          const bidPrice = item.bid_price != null
+            ? Number(item.bid_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : null;
+          const askPrice = item.ask_price != null
+            ? Number(item.ask_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : null;
+          const spreadValue = (item.bid_price != null && item.ask_price != null)
+            ? Number(item.ask_price) - Number(item.bid_price)
+            : null;
+          const spreadBps = (spreadValue != null && item.current_price != null && Number(item.current_price) > 0)
+            ? (spreadValue / Number(item.current_price)) * 10000
+            : null;
           const priceSymbol = item.price_symbol || null;
           const unrealizedPnl = (isLong && item.open_entry_price != null && item.current_price != null)
             ? (Number(item.current_price) - Number(item.open_entry_price)) * netQty
@@ -3241,8 +3577,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   <span class="strategy-info-value ${isLong ? "ok" : "muted"}">${isLong ? "LONG  " + positionLabel : "Flat"}</span>
                 </div>
                 <div class="strategy-info-cell">
-                  <span class="strategy-info-label">Current Price</span>
-                  <span class="strategy-info-value">${currentPrice != null ? currentPrice + " USDT" : "—"}</span>
+                  <span class="strategy-info-label">Bid / Ask</span>
+                  <span class="strategy-info-value strategy-price-book">
+                    ${bidPrice != null || askPrice != null ? `
+                      <span class="strategy-price-book-main">
+                        <span class="strategy-price-book-line"><strong>Bid</strong>${bidPrice ?? "—"}</span>
+                        <span class="strategy-price-book-line"><strong>Ask</strong>${askPrice ?? "—"}</span>
+                      </span>
+                      <span class="strategy-price-book-spread">Spread ${spreadValue != null ? spreadValue.toFixed(2) : "—"}${spreadBps != null ? ` (${spreadBps.toFixed(2)} bps)` : ""}</span>
+                      <span class="strategy-price-book-mid">Mid ${currentPrice != null ? currentPrice + " USDT" : "—"}${priceSymbol ? ` · ${priceSymbol}` : ""}</span>
+                    ` : `${currentPrice != null ? currentPrice + " USDT" : "—"}`}
+                  </span>
                 </div>
                 <div class="strategy-info-cell">
                   <span class="strategy-info-label">Unrealized PnL</span>
@@ -3697,8 +4042,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             : "";
           return `${jobType}: q=${item.queued ?? 0} f=${item.failed ?? 0} t=${item.total ?? 0} fail%=${Number(item.failure_ratio || 0) * 100}% avg=${item.avg_attempt_count ?? 0}${latestTypeFailed}${latestTypeRetry}${trend}`;
         });
+        const latestFailedDetail = latestFailedJob?.result?.error_detail || null;
         const latestFailedBit = latestFailedJob
-          ? `Latest failed: #${latestFailedJob.id} ${latestFailedJob.job_type} attempts=${latestFailedJob.attempt_count}${latestFailedJob.error_message ? ` error=${latestFailedJob.error_message}` : ""}`
+          ? `Latest failed: #${latestFailedJob.id} ${latestFailedJob.job_type} attempts=${latestFailedJob.attempt_count}${latestFailedJob.error_message ? ` error=${latestFailedJob.error_message}` : ""}${latestFailedDetail?.status_code ? ` status=${latestFailedDetail.status_code}` : ""}${latestFailedDetail?.binance_code != null ? ` binance_code=${latestFailedDetail.binance_code}` : ""}${latestFailedDetail?.binance_msg ? ` binance_msg=${latestFailedDetail.binance_msg}` : ""}`
           : "Latest failed: none";
         const latestRetryBit = latestRetryJob
           ? `Latest retry: #${latestRetryJob.id} ${latestRetryJob.job_type} attempts=${latestRetryJob.attempt_count}`
@@ -3736,7 +4082,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <span class="chip">created=${job.created_at}</span>
                 <span class="chip">backend=${job.payload?.execution_backend || "unknown"}</span>
               </div>
-              <div class="ops-card-note"><strong>Payload</strong> ${payloadText}${errorText}</div>
+              <div class="ops-card-note"><strong>Payload</strong> ${payloadText}${errorText}${job.result?.error_detail ? `<br><strong>Broker Error</strong> ${formatJson(job.result.error_detail)}` : ""}</div>
             </div>
           `;
         }).join("") + `
@@ -3756,6 +4102,40 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="ops-card-note">${batchBits}</div>
           </div>
         `;
+      }
+
+      function renderRecentFills(fills) {
+        const board = el("fills-board");
+        if (!board) return;
+        if (!Array.isArray(fills) || fills.length === 0) {
+          board.innerHTML = '<div class="strategy-card">No fills recorded yet.</div>';
+          return;
+        }
+        board.innerHTML = fills.map((fill) => {
+          const commission = fill.commission != null
+            ? `${Number(fill.commission).toFixed(8)} ${fill.commission_asset || ""}`.trim()
+            : "n/a";
+          const quoteQty = fill.quote_qty != null ? Number(fill.quote_qty).toFixed(6) : "n/a";
+          const transactTime = fill.transact_time
+            ? new Date(Number(fill.transact_time)).toISOString().replace("T", " ").slice(0, 19)
+            : "n/a";
+          const sideClass = fill.side === "BUY" ? "ok" : fill.side === "SELL" ? "bad" : "";
+          return `
+            <div class="ops-card">
+              <div class="ops-card-header">
+                <div class="ops-card-title">${fill.symbol} · <span class="${sideClass}">${fill.side}</span> · ${fill.qty}</div>
+                <div class="chip">fill #${fill.id}</div>
+              </div>
+              <div class="ops-card-grid">
+                <div><strong>Price</strong>${fill.price}</div>
+                <div><strong>Commission</strong>${commission}</div>
+                <div><strong>Quote Qty</strong>${quoteQty}</div>
+                <div><strong>Exchange Time</strong>${transactTime}</div>
+              </div>
+              <div class="ops-card-note">order_id=${fill.order_id} | recorded_at=${fill.created_at}</div>
+            </div>
+          `;
+        }).join("");
       }
 
       function updateAutoRefreshStatus() {
@@ -3791,10 +4171,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, soakSummary, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
+        const [health, positions, orders, fills, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, soakSummary, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
           api("/health"),
           api("/positions?limit=10"),
           api("/orders?limit=10"),
+          api("/fills?limit=10"),
           api("/strategies/summary"),
           api(`/strategies/closed-trades?${closedTradesQuery.toString()}`),
           api("/pnl?limit=10"),
@@ -3926,10 +4307,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         updateClosedTrades(closedTrades);
         updateSchedulerControlActivity(auditEvents);
         renderQueueSummary(queueSummary);
+        renderRecentFills(fills);
         updateHeartbeats(health);
         el("health-json").textContent = formatJson(health);
         el("positions-json").textContent = formatJson(positions);
         el("orders-json").textContent = formatJson(orders);
+        el("fills-json").textContent = formatJson(fills);
         el("pnl-json").textContent = formatJson(pnl);
         el("logs-json").textContent = formatJson(logs);
         el("audit-json").textContent = formatJson(auditEvents);
@@ -4171,6 +4554,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       document.querySelectorAll("[data-action]").forEach((button) => {
+        if (button.dataset.action.startsWith("ml-")) return;
+        if (button.dataset.action.startsWith("training-")) return;
+        if (button.dataset.action.startsWith("report-")) return;
         if (button.dataset.action.startsWith("market-")) return;
         if (button.dataset.action.startsWith("retention-")) return;
         if (button.dataset.action.startsWith("candles-")) return;
@@ -4383,6 +4769,26 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
       refreshMarketStatus();
       refreshFetchHistory();
+      refreshTrainingWorkspace().catch((error) => {
+        const msg = el("training-rl-message");
+        if (msg) {
+          msg.textContent = `Failed to load training jobs: ${error.message}`;
+          msg.className = "message bad";
+        }
+      });
+      refreshExecutionReport().then((report) => {
+        const msg = el("report-message");
+        if (msg) {
+          msg.textContent = `Loaded ${report.summary?.symbol ?? "n/a"} report for the last ${report.summary?.days ?? "n/a"} days.`;
+          msg.className = "message ok";
+        }
+      }).catch((error) => {
+        const msg = el("report-message");
+        if (msg) {
+          msg.textContent = `Failed to load report: ${error.message}`;
+          msg.className = "message bad";
+        }
+      });
       (function() {
         const d = new Date();
         d.setDate(d.getDate() - 7);
@@ -4398,6 +4804,30 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
           btn.classList.add("active");
           document.getElementById("tab-" + tabId).classList.add("active");
+          if (tabId === "training") {
+            refreshTrainingWorkspace(trainingSelectedJobId).catch((error) => {
+              const msg = el("training-rl-message");
+              if (msg) {
+                msg.textContent = `Failed to load training jobs: ${error.message}`;
+                msg.className = "message bad";
+              }
+            });
+          }
+          if (tabId === "reports") {
+            refreshExecutionReport().then((report) => {
+              const msg = el("report-message");
+              if (msg) {
+                msg.textContent = `Loaded ${report.summary?.symbol ?? "n/a"} report for the last ${report.summary?.days ?? "n/a"} days.`;
+                msg.className = "message ok";
+              }
+            }).catch((error) => {
+              const msg = el("report-message");
+              if (msg) {
+                msg.textContent = `Failed to load report: ${error.message}`;
+                msg.className = "message bad";
+              }
+            });
+          }
         });
       });
 
@@ -4473,6 +4903,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       function mlInferTimeframe() { return el("ml-infer-timeframe-input")?.value.trim() || "1m"; }
       function mlRlSymbol() { return el("ml-rl-symbol-input")?.value.trim() || "BTCUSDT"; }
       function mlRlTimeframe() { return el("ml-rl-timeframe-input")?.value.trim() || "1m"; }
+      function trainingRlSymbol() { return el("training-rl-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function trainingRlTimeframe() { return el("training-rl-timeframe-input")?.value.trim() || "1m"; }
+      function reportSymbol() { return el("report-symbol-input")?.value.trim() || "BTCUSDT"; }
+      function reportStrategy() { return el("report-strategy-input")?.value.trim() || ""; }
 
       function showMlJson(preId, msgId, data, msgText) {
         const pre = el(preId);
@@ -4484,6 +4918,240 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       function showMlError(msgId, err) {
         const msg = el(msgId);
         if (msg) { msg.textContent = String(err); msg.className = "message bad"; }
+      }
+
+      let trainingJobsState = [];
+      let trainingJobsTotal = 0;
+      let trainingSelectedJobId = null;
+
+      function renderExecutionReport(report) {
+        const summary = report?.summary || {};
+        const kpis = el("report-summary-kpis");
+        const grid = el("report-summary-grid");
+        const dailyTableBody = document.querySelector("#report-daily-table tbody");
+        const failedBoard = el("report-failed-board");
+        const closedBoard = el("report-closed-trades-board");
+        const fillsBoard = el("report-fills-board");
+        const raw = el("report-json");
+
+        if (kpis) {
+          const gross = Number(summary.gross_pnl || 0);
+          const fees = Number(summary.fees || 0);
+          const net = Number(summary.net_pnl || 0);
+          const winRate = summary.win_rate == null ? "n/a" : `${(Number(summary.win_rate) * 100).toFixed(1)}%`;
+          kpis.innerHTML = `
+            <div class="training-kpi-card"><label>Gross PnL</label><div class="value ${gross > 0 ? "ok" : gross < 0 ? "bad" : ""}">${gross.toFixed(6)}</div></div>
+            <div class="training-kpi-card"><label>Fees</label><div class="value bad">-${fees.toFixed(6)}</div></div>
+            <div class="training-kpi-card"><label>Net PnL</label><div class="value ${net > 0 ? "ok" : net < 0 ? "bad" : ""}">${net.toFixed(6)}</div></div>
+            <div class="training-kpi-card"><label>Win Rate</label><div class="value">${winRate}</div></div>`;
+        }
+
+        if (grid) {
+          const pos = summary.current_position || {};
+          grid.innerHTML = `
+            <div><strong>Window</strong>${summary.symbol || "n/a"} · strategy=${summary.strategy_name || "all"} · ${summary.days || 0}d</div>
+            <div><strong>Activity</strong>${summary.fills || 0} fills · ${summary.closed_trades || 0} closed trades · notional=${Number(summary.notional || 0).toFixed(4)}</div>
+            <div><strong>Holding</strong>avg=${summary.avg_hold_minutes == null ? "n/a" : `${Number(summary.avg_hold_minutes).toFixed(2)} min`} · best=${summary.best_trade == null ? "n/a" : Number(summary.best_trade).toFixed(6)} · worst=${summary.worst_trade == null ? "n/a" : Number(summary.worst_trade).toFixed(6)}</div>
+            <div><strong>Current Position</strong>${pos.qty != null ? `${pos.qty} @ ${pos.avg_price || 0}` : "n/a"}</div>`;
+        }
+
+        if (dailyTableBody) {
+          const daily = Array.isArray(report?.daily) ? report.daily : [];
+          dailyTableBody.innerHTML = daily.length
+            ? daily.map((row) => `<tr>
+                <td>${row.trade_date}</td>
+                <td class="num">${row.fills}</td>
+                <td class="num">${Number(row.notional || 0).toFixed(4)}</td>
+                <td class="num">${Number(row.fees || 0).toFixed(4)}</td>
+                <td class="num" style="color:${Number(row.gross_pnl || 0) >= 0 ? 'var(--ok)' : 'var(--bad)'}">${Number(row.gross_pnl || 0).toFixed(6)}</td>
+                <td class="num" style="color:${Number(row.net_pnl || 0) >= 0 ? 'var(--ok)' : 'var(--bad)'}">${Number(row.net_pnl || 0).toFixed(6)}</td>
+              </tr>`).join("")
+            : `<tr><td colspan="6" class="table-note">No report data in the selected window.</td></tr>`;
+        }
+
+        if (failedBoard) {
+          const jobs = Array.isArray(report?.recent_failed_execution_jobs) ? report.recent_failed_execution_jobs : [];
+          failedBoard.innerHTML = jobs.length
+            ? jobs.map((job) => {
+                const detail = job.result?.error_detail || {};
+                return `<div class="ops-card">
+                  <div class="ops-card-header">
+                    <div class="ops-card-title">Execution Job #${job.id}</div>
+                    <div class="chip"><span class="bad">${String(job.status).toUpperCase()}</span></div>
+                  </div>
+                  <div class="ops-card-grid">
+                    <div><strong>Created</strong>${job.created_at}</div>
+                    <div><strong>Error</strong>${job.error_message || "n/a"}</div>
+                    <div><strong>HTTP Status</strong>${detail.status_code ?? "n/a"}</div>
+                    <div><strong>Binance</strong>${detail.binance_code ?? "n/a"} ${detail.binance_msg || ""}</div>
+                  </div>
+                </div>`;
+              }).join("")
+            : '<div class="strategy-card">No failed execution jobs in the selected window.</div>';
+        }
+
+        if (closedBoard) {
+          const trades = Array.isArray(report?.recent_closed_trades) ? report.recent_closed_trades : [];
+          closedBoard.innerHTML = trades.length
+            ? trades.map((trade) => `<div class="ops-card">
+                <div class="ops-card-header">
+                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}</div>
+                  <div class="chip"><span class="${Number(trade.realized_pnl || 0) >= 0 ? "ok" : "bad"}">${Number(trade.realized_pnl || 0).toFixed(6)}</span></div>
+                </div>
+                <div class="ops-card-grid">
+                  <div><strong>Closed At</strong>${trade.closed_at}</div>
+                  <div><strong>Hold</strong>${trade.hold_minutes == null ? "n/a" : `${trade.hold_minutes} min`}</div>
+                  <div><strong>Entry</strong>${Number(trade.entry_price || 0).toFixed(2)}</div>
+                  <div><strong>Exit</strong>${Number(trade.exit_price || 0).toFixed(2)}</div>
+                </div>
+              </div>`).join("")
+            : '<div class="strategy-card">No closed trades in the selected window.</div>';
+        }
+
+        if (fillsBoard) {
+          const fills = Array.isArray(report?.recent_fills) ? report.recent_fills : [];
+          fillsBoard.innerHTML = fills.length
+            ? fills.map((fill) => `<div class="ops-card">
+                <div class="ops-card-header">
+                  <div class="ops-card-title">${fill.symbol} · ${fill.side}</div>
+                  <div class="chip">fill #${fill.id}</div>
+                </div>
+                <div class="ops-card-grid">
+                  <div><strong>Recorded</strong>${fill.created_at}</div>
+                  <div><strong>Price</strong>${Number(fill.price || 0).toFixed(2)}</div>
+                  <div><strong>Commission</strong>${fill.commission == null ? "n/a" : `${Number(fill.commission).toFixed(8)} ${fill.commission_asset || ""}`}</div>
+                  <div><strong>Quote Qty</strong>${fill.quote_qty == null ? "n/a" : Number(fill.quote_qty).toFixed(6)}</div>
+                </div>
+              </div>`).join("")
+            : '<div class="strategy-card">No fills in the selected window.</div>';
+        }
+
+        if (raw) raw.textContent = formatJson(report);
+      }
+
+      async function refreshExecutionReport() {
+        const params = new URLSearchParams({
+          symbol: reportSymbol(),
+          days: String(parseInt(el("report-days-input")?.value || "7")),
+          limit: "10",
+        });
+        const strategyName = reportStrategy();
+        if (strategyName) params.set("strategy_name", strategyName);
+        const report = await api(`/reports/testnet-execution?${params.toString()}`);
+        renderExecutionReport(report);
+        return report;
+      }
+
+      function trainingFormatNumber(value, digits = 6) {
+        if (value === null || value === undefined || value === "") return "n/a";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return String(value);
+        return number.toFixed(digits);
+      }
+
+      function trainingStatusTone(status) {
+        if (status === "done") return "ok";
+        if (status === "failed") return "bad";
+        if (status === "running" || status === "pending") return "warn";
+        return "";
+      }
+
+      function renderTrainingSummary(job) {
+        const kpis = el("training-summary-kpis");
+        const grid = el("training-summary-grid");
+        const chip = el("training-selected-job-chip");
+        const raw = el("training-rl-json");
+        if (!job) {
+          if (kpis) {
+            kpis.innerHTML = `
+              <div class="training-kpi-card"><label>Status</label><div class="value">Idle</div></div>
+              <div class="training-kpi-card"><label>Verdict</label><div class="value">n/a</div></div>
+              <div class="training-kpi-card"><label>RL Return</label><div class="value">n/a</div></div>
+              <div class="training-kpi-card"><label>Registry</label><div class="value">n/a</div></div>`;
+          }
+          if (grid) {
+            grid.innerHTML = `
+              <div><strong>Dataset</strong>No training job selected.</div>
+              <div><strong>Metrics</strong>Run or select a training job.</div>
+              <div><strong>Hyperparameters</strong>Configure the form and start training.</div>
+              <div><strong>Model</strong>Registry details appear after a successful run.</div>`;
+          }
+          if (chip) chip.textContent = "No job selected";
+          if (raw) raw.style.display = "none";
+          return;
+        }
+
+        const metrics = job.metrics || {};
+        const dataset = job.dataset || {};
+        const params = job.params || {};
+        const model = job.model || {};
+        if (kpis) {
+          kpis.innerHTML = `
+            <div class="training-kpi-card"><label>Status</label><div class="value ${trainingStatusTone(job.status)}">${String(job.status || "unknown").toUpperCase()}</div></div>
+            <div class="training-kpi-card"><label>Verdict</label><div class="value">${metrics.verdict || "n/a"}</div></div>
+            <div class="training-kpi-card"><label>RL Return</label><div class="value">${trainingFormatNumber(metrics.test_rl?.cumulative_return)}</div></div>
+            <div class="training-kpi-card"><label>Registry</label><div class="value">${job.registry_status || "candidate"}</div></div>`;
+        }
+        if (grid) {
+          grid.innerHTML = `
+            <div><strong>Dataset</strong>${dataset.n_train ?? "n/a"} train / ${dataset.n_test ?? "n/a"} test / ${dataset.n_total ?? "n/a"} total</div>
+            <div><strong>Metrics</strong>RL=${trainingFormatNumber(metrics.test_rl?.cumulative_return)}, BnH=${trainingFormatNumber(metrics.test_bnh?.cumulative_return)}, loss=${trainingFormatNumber(metrics.final_train_loss)}</div>
+            <div><strong>Hyperparameters</strong>episodes=${params.n_episodes ?? model.n_episodes ?? "n/a"}, lr=${params.learning_rate ?? model.learning_rate ?? "n/a"}, gamma=${params.gamma ?? model.gamma ?? "n/a"}, fee=${params.fee_rate ?? model.fee_rate ?? dataset.fee_rate ?? "0"}</div>
+            <div><strong>Model</strong>${model.model_type || "n/a"} · features=${model.n_features ?? "n/a"} · created=${job.finished_at || job.created_at || "n/a"}</div>`;
+        }
+        if (chip) chip.textContent = `Job #${job.id} · ${job.symbol}/${job.timeframe}`;
+        if (raw) {
+          raw.textContent = JSON.stringify(job, null, 2);
+          raw.style.display = "block";
+        }
+      }
+
+      function renderTrainingJobs(payload, selectedJobId = null) {
+        const board = el("training-jobs-board");
+        if (!board) return;
+        const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+        trainingJobsState = jobs;
+        trainingJobsTotal = Number(payload?.total || jobs.length || 0);
+        if (!jobs.length) {
+          board.innerHTML = `<div class="ops-card"><div class="ops-card-title">No training jobs found.</div><div class="ops-card-note">Run RL training from this workspace to create the first job.</div></div>`;
+          renderTrainingSummary(null);
+          return;
+        }
+        const resolvedSelectedId = selectedJobId ?? trainingSelectedJobId ?? jobs[0].id;
+        trainingSelectedJobId = resolvedSelectedId;
+        board.innerHTML = jobs.map((job) => {
+          const metrics = job.metrics || {};
+          const params = job.params || {};
+          const statusTone = trainingStatusTone(job.status);
+          const isSelected = Number(job.id) === Number(resolvedSelectedId);
+          return `
+            <div class="ops-card training-job-row${isSelected ? " selected" : ""}" data-training-job-id="${job.id}">
+              <div class="ops-card-header">
+                <div class="ops-card-title">Job #${job.id} · ${job.symbol}/${job.timeframe}</div>
+                <div class="chip"><span class="${statusTone}">${String(job.status || "unknown").toUpperCase()}</span></div>
+              </div>
+              <div class="training-job-meta">
+                <span class="chip">episodes=${params.n_episodes ?? "n/a"}</span>
+                <span class="chip">fee=${params.fee_rate ?? job.dataset?.fee_rate ?? "0"}</span>
+                <span class="chip">verdict=${metrics.verdict || "n/a"}</span>
+                <span class="chip">registry=${job.registry_status || "candidate"}</span>
+              </div>
+              <div class="ops-card-grid">
+                <div><strong>RL Return</strong>${trainingFormatNumber(metrics.test_rl?.cumulative_return)}</div>
+                <div><strong>Buy & Hold</strong>${trainingFormatNumber(metrics.test_bnh?.cumulative_return)}</div>
+                <div><strong>Final Loss</strong>${trainingFormatNumber(metrics.final_train_loss)}</div>
+                <div><strong>Finished</strong>${job.finished_at || job.created_at || "n/a"}</div>
+              </div>
+              <div class="ops-card-note">${job.error || "Select this job to inspect the full metrics, model payload, and dataset stats."}</div>
+            </div>`;
+        }).join("");
+        renderTrainingSummary(jobs.find((job) => Number(job.id) === Number(resolvedSelectedId)) || jobs[0]);
+      }
+
+      async function refreshTrainingWorkspace(selectedJobId = null) {
+        const payload = await api(`/training/jobs?limit=12`);
+        renderTrainingJobs(payload, selectedJobId);
+        return payload;
       }
 
       document.addEventListener("click", async (event) => {
@@ -4559,6 +5227,110 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             showMlJson("ml-rl-json", "ml-rl-message", r, `RL job done — verdict: ${r.metrics?.verdict ?? r.status}, registry: ${r.registry_status ?? "n/a"}`);
           } catch (e) { showMlError("ml-rl-message", e); }
         }
+      });
+
+      document.addEventListener("click", async (event) => {
+        const action = event.target.dataset?.action;
+        if (!action?.startsWith("training-")) return;
+
+        if (action === "training-jobs-refresh") {
+          try {
+            await refreshTrainingWorkspace(trainingSelectedJobId);
+            const msg = el("training-rl-message");
+            if (msg) {
+              msg.textContent = `Loaded ${trainingJobsTotal} training jobs.`;
+              msg.className = "message ok";
+            }
+          } catch (error) {
+            const msg = el("training-rl-message");
+            if (msg) {
+              msg.textContent = String(error);
+              msg.className = "message bad";
+            }
+          }
+          return;
+        }
+
+        if (action === "training-rl-run") {
+          const button = event.target.closest("[data-action='training-rl-run']");
+          const msg = el("training-rl-message");
+          if (button) {
+            button.disabled = true;
+            button.textContent = "Training...";
+          }
+          if (msg) {
+            msg.textContent = "Submitting RL training job...";
+            msg.className = "message";
+          }
+          try {
+            const payload = {
+              symbol: trainingRlSymbol(),
+              timeframe: trainingRlTimeframe(),
+              n_episodes: parseInt(el("training-rl-episodes-input")?.value || "100"),
+              learning_rate: parseFloat(el("training-rl-learning-rate-input")?.value || "0.001"),
+              gamma: parseFloat(el("training-rl-gamma-input")?.value || "1"),
+              fee_rate: parseFloat(el("training-rl-fee-rate-input")?.value || "0.0004"),
+              test_ratio: parseFloat(el("training-rl-test-ratio-input")?.value || "0.2"),
+              seed: parseInt(el("training-rl-seed-input")?.value || "42"),
+              use_champion: el("training-rl-use-champion-input")?.checked ?? true,
+              auto_promote: el("training-rl-auto-promote-input")?.checked ?? false,
+            };
+            const result = await api(`/training/rl-jobs`, {
+              method: "POST",
+              body: JSON.stringify(payload),
+            });
+            if (msg) {
+              msg.textContent = `RL job #${result.id} completed. Verdict: ${result.metrics?.verdict ?? result.status}. Registry: ${result.registry_status ?? "n/a"}.`;
+              msg.className = "message ok";
+            }
+            renderTrainingSummary(result);
+            const raw = el("training-rl-json");
+            if (raw) {
+              raw.textContent = JSON.stringify(result, null, 2);
+              raw.style.display = "block";
+            }
+            await refreshTrainingWorkspace(result.id);
+          } catch (error) {
+            if (msg) {
+              msg.textContent = String(error);
+              msg.className = "message bad";
+            }
+          } finally {
+            if (button) {
+              button.disabled = false;
+              button.textContent = "Run RL Training";
+            }
+          }
+        }
+      });
+
+      document.addEventListener("click", async (event) => {
+        const action = event.target.dataset?.action;
+        if (action !== "report-refresh") return;
+        const msg = el("report-message");
+        if (msg) {
+          msg.textContent = "Refreshing execution report...";
+          msg.className = "message";
+        }
+        try {
+          const report = await refreshExecutionReport();
+          if (msg) {
+            msg.textContent = `Loaded ${report.summary?.fills ?? 0} fills and ${report.summary?.closed_trades ?? 0} closed trades for ${report.summary?.symbol ?? "n/a"}.`;
+            msg.className = "message ok";
+          }
+        } catch (error) {
+          if (msg) {
+            msg.textContent = String(error);
+            msg.className = "message bad";
+          }
+        }
+      });
+
+      el("training-jobs-board")?.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-training-job-id]");
+        if (!card) return;
+        trainingSelectedJobId = Number(card.dataset.trainingJobId);
+        renderTrainingJobs({ jobs: trainingJobsState, total: trainingJobsTotal }, trainingSelectedJobId);
       });
 
       // ---- Market Data actions ----
