@@ -636,7 +636,9 @@ def _migrate_remaining_real_columns_to_numeric(connection: DBConnection) -> None
 
 def _add_fills_commission(connection: DBConnection) -> None:
     """Add commission, commission_asset, quote_qty, transact_time columns to fills table."""
-    existing = {row[1] for row in connection.execute("PRAGMA table_info(fills)").fetchall()}
+    if not table_exists(connection, "fills"):
+        return
+    existing = get_table_columns(connection, "fills")
     if "commission" not in existing:
         connection.execute("ALTER TABLE fills ADD COLUMN commission REAL DEFAULT NULL;")
     if "commission_asset" not in existing:
