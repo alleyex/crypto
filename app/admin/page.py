@@ -1468,6 +1468,28 @@ def render_admin_page() -> str:
       .tab-panel { display: none; }
       .tab-panel.active { display: block; }
 
+      .confirm-overlay {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+      }
+      .confirm-overlay.active { display: flex; }
+      .confirm-box {
+        background: var(--panel-1);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 14px;
+        padding: 28px 32px;
+        min-width: 320px;
+        max-width: 420px;
+        text-align: center;
+      }
+      .confirm-box h3 { margin: 0 0 8px; font-size: 16px; }
+      .confirm-box p  { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+      .confirm-box .button-row { justify-content: center; gap: 12px; }
+
       .training-form-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5293,7 +5315,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (action === "ppo-job-delete") {
           const jobId = event.target.dataset?.jobId;
           if (!jobId) return;
-          if (!confirm(`Delete Job #${jobId}? This cannot be undone.`)) return;
+          if (!await showConfirm("Delete Training Job", `Delete Job #${jobId}? This cannot be undone.`)) return;
           try {
             await api(`/training/jobs/${jobId}`, { method: "DELETE" });
             if (Number(jobId) === ppoSelectedJobId) { ppoSelectedJobId = null; renderPPOSummary(null); }
@@ -5654,7 +5676,36 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           btn.textContent = "Run Check";
         }
       });
+      // Custom confirm dialog
+      let _confirmResolve = null;
+      function showConfirm(title, message) {
+        return new Promise((resolve) => {
+          _confirmResolve = resolve;
+          el("confirm-title").textContent   = title;
+          el("confirm-message").textContent = message;
+          el("confirm-overlay").classList.add("active");
+        });
+      }
+      el("confirm-ok")?.addEventListener("click", () => {
+        el("confirm-overlay").classList.remove("active");
+        if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
+      });
+      el("confirm-cancel")?.addEventListener("click", () => {
+        el("confirm-overlay").classList.remove("active");
+        if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+      });
     </script>
+
+    <div class="confirm-overlay" id="confirm-overlay">
+      <div class="confirm-box">
+        <h3 id="confirm-title">Confirm</h3>
+        <p id="confirm-message"></p>
+        <div class="button-row">
+          <button id="confirm-cancel" class="secondary">Cancel</button>
+          <button id="confirm-ok">OK</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
 """
