@@ -1492,7 +1492,7 @@ def render_admin_page() -> str:
 
       .training-form-grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
         margin: 14px 0 10px;
       }
@@ -1501,6 +1501,11 @@ def render_admin_page() -> str:
         display: flex;
         flex-direction: column;
         gap: 6px;
+      }
+
+      .training-field input {
+        width: 100%;
+        box-sizing: border-box;
       }
 
       .training-field label {
@@ -1819,6 +1824,11 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <div class="fetch-actions" style="margin-top:4px">
             <button class="fetch-btn-primary" data-action="pipeline">Run Pipeline</button>
             <button class="fetch-btn-secondary" data-refresh="all">Refresh Data</button>
+          </div>
+          <div class="ctrl-section" style="margin-top:14px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase">Kill Switch</span>
+            <span id="kill-switch-badge" class="chip">Loading…</span>
+            <button class="secondary" id="kill-switch-btn" data-action="kill-switch-toggle" style="padding:3px 14px;font-size:12px">—</button>
           </div>
           <div class="auto-refresh" style="margin-top:12px">
             <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
@@ -2471,8 +2481,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div style="margin-top:10px;font-size:12px;color:var(--muted)">
             TensorBoard:
             <a id="ppo-tb-link" href="http://localhost:6006" target="_blank" style="color:var(--accent)">http://localhost:6006</a>
-            &nbsp;—&nbsp;start with:
-            <code style="font-size:11px;background:var(--panel-2);padding:2px 6px;border-radius:4px">.venv/bin/tensorboard --logdir runtime/tb_logs</code>
           </div>
         </article>
 
@@ -4427,8 +4435,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-retry-execution": "queue-message",
           "alert-test": "alerts-message",
           "soak-record": "soak-message",
+          "kill-switch-toggle": "kill-switch-badge",
         };
         const target = el(messages[type]);
+        if (!target) return;
         target.textContent = "Running...";
 
         try {
@@ -4607,6 +4617,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             });
           } else if (type === "soak-record") {
             result = await api("/validation/soak/record", { method: "POST" });
+          } else if (type === "kill-switch-toggle") {
+            const currentlyEnabled = el("kill-switch-badge")?.dataset.enabled === "true";
+            const endpoint = currentlyEnabled ? "/kill-switch/disable" : "/kill-switch/enable";
+            result = await api(endpoint, { method: "POST" });
+            updateKillSwitchUI(result);
+            return;
           }
           target.textContent = formatJson(result);
           await refreshAll();
@@ -4625,6 +4641,26 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (button.dataset.action === "market-fetch-history-refresh") return;
         button.addEventListener("click", () => runAction(button.dataset.action));
       });
+
+      function updateKillSwitchUI(status) {
+        const badge = el("kill-switch-badge");
+        const btn   = el("kill-switch-btn");
+        if (!badge || !btn) return;
+        const enabled = !!status?.enabled;
+        badge.dataset.enabled = String(enabled);
+        badge.textContent     = enabled ? "ENABLED" : "OFF";
+        badge.style.background = enabled ? "var(--bad)" : "var(--good)";
+        badge.style.color      = "#fff";
+        btn.textContent        = enabled ? "Disable" : "Enable";
+        btn.style.borderColor  = enabled ? "var(--bad)" : "";
+      }
+
+      (async () => {
+        try {
+          const status = await api("/kill-switch/status");
+          updateKillSwitchUI(status);
+        } catch (_) {}
+      })();
 
       async function refreshFetchHistory() {
         const board = el("fetch-history-board");
@@ -5686,13 +5722,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           el("confirm-overlay").classList.add("active");
         });
       }
-      el("confirm-ok")?.addEventListener("click", () => {
-        el("confirm-overlay").classList.remove("active");
-        if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
-      });
-      el("confirm-cancel")?.addEventListener("click", () => {
-        el("confirm-overlay").classList.remove("active");
-        if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+      document.addEventListener("click", (e) => {
+        if (e.target.id === "confirm-ok") {
+          document.getElementById("confirm-overlay").classList.remove("active");
+          if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
+        } else if (e.target.id === "confirm-cancel") {
+          document.getElementById("confirm-overlay").classList.remove("active");
+          if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+        }
       });
     </script>
 

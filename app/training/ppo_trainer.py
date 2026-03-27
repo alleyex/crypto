@@ -98,7 +98,7 @@ def _make_progress_callback(
                 super().__init__(verbose=0)
 
             def _on_step(self) -> bool:
-                if on_progress and self.n_calls % 10_000 == 0:
+                if on_progress and self.n_calls % 2_048 == 0:
                     on_progress(self.num_timesteps, total_steps)
                 return True
 

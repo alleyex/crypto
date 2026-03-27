@@ -4,6 +4,9 @@ data/
 storage/
 logs/
 runtime/
+.claude/
+artifacts/
+backups/
 *.pyc
 
 .DS_Store

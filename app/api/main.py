@@ -3106,6 +3106,12 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
         from datetime import datetime, timezone as _tz
         started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
         update_training_job(connection, job_id, status="running", started_at=started_at)
+        # Write initial progress so the bar shows immediately
+        connection.execute(
+            "UPDATE training_jobs SET progress_json=? WHERE id=?;",
+            (_json.dumps({"pct": 0, "step": 0, "total": body.total_steps}), job_id),
+        )
+        connection.commit()
         job = get_training_job(connection, job_id)
     finally:
         connection.close()
@@ -3240,15 +3246,34 @@ def deploy_ppo_job(job_id: int) -> Dict[str, Any]:
 
 @app.delete("/training/jobs/{job_id}")
 def delete_training_job(job_id: int) -> Dict[str, Any]:
-    """Delete a training job record by id."""
+    """Delete a training job record and its TensorBoard log directory."""
+    import shutil
+    from pathlib import Path as _Path
+
     connection = get_connection()
     try:
         run_migrations(connection)
         job = get_training_job(connection, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Training job {job_id} not found.")
+
+        symbol    = job.get("symbol", "")
+        timeframe = job.get("timeframe", "")
+
         connection.execute("DELETE FROM training_jobs WHERE id = ?;", (job_id,))
         connection.commit()
-        return {"deleted": True, "job_id": job_id}
     finally:
         connection.close()
+
+    # Remove TensorBoard log directories for this job.
+    # SB3 names them: ppo_{symbol}_{timeframe}_job{id}_1, _2, …
+    tb_logs_dir = _Path(__file__).resolve().parent.parent.parent / "runtime" / "tb_logs"
+    deleted_dirs: list[str] = []
+    if symbol and timeframe and tb_logs_dir.is_dir():
+        prefix = f"ppo_{symbol}_{timeframe}_job{job_id}_"
+        for entry in tb_logs_dir.iterdir():
+            if entry.is_dir() and entry.name.startswith(prefix):
+                shutil.rmtree(entry, ignore_errors=True)
+                deleted_dirs.append(entry.name)
+
+    return {"deleted": True, "job_id": job_id, "tb_dirs_removed": deleted_dirs}
