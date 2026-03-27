@@ -9,4 +9,5 @@ pytest==8.4.2
 requests==2.32.5
 scikit-learn>=1.4
 stable-baselines3>=2.0
+tensorboard>=2.14
 uvicorn==0.37.0
