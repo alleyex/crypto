@@ -14,6 +14,8 @@ progress/results to the training_jobs table.
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 import warnings
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -41,6 +43,28 @@ DEFAULT_PPO_KWARGS: Dict[str, Any] = dict(
     verbose=0,
     seed=42,
 )
+
+TB_PORT = 6006
+
+
+def _ensure_tensorboard_running() -> None:
+    """Start TensorBoard in the background if not already running."""
+    import socket
+    # Check if port is already in use (TensorBoard already running)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("localhost", TB_PORT)) == 0:
+            return  # already up
+
+    TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [sys.executable, "-m", "tensorboard.main",
+         "--logdir", str(TB_LOGS_DIR),
+         "--port", str(TB_PORT),
+         "--host", "localhost"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
 
 TRAIN_FRAC   = 0.70
 TRAIN_EP_LEN = 1440   # 1 day of 1m bars
@@ -178,6 +202,8 @@ def run_ppo_training(
         avg_ppo_pct, avg_bnh_pct, avg_edge, win_rate,
         model_path: str (candidate .zip path),
     """
+    _ensure_tensorboard_running()
+
     from stable_baselines3 import PPO
     from stable_baselines3.common.monitor import Monitor
     from app.core.db import get_connection
