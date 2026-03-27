@@ -5193,7 +5193,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div class="ops-card-title">Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe} \u00b7 PPO</div>
                 <div style="display:flex;gap:8px;align-items:center">
                   <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
-                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-delete" data-job-id="${job.id}" onclick="event.stopPropagation()">Delete</button>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-delete" data-job-id="${job.id}">Delete</button>
                 </div>
               </div>
               <div class="training-job-meta">
@@ -5328,6 +5328,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("ppo-jobs-board")?.addEventListener("click", (event) => {
+        if (event.target.closest("[data-action='ppo-job-delete']")) return;
         const card = event.target.closest("[data-ppo-job-id]");
         if (!card) return;
         ppoSelectedJobId = Number(card.dataset.ppoJobId);
