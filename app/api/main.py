@@ -2898,7 +2898,7 @@ class RLJobRequest(BaseModel):
     n_episodes: int = Field(default=200, ge=1, le=5000)
     learning_rate: float = Field(default=1e-3, gt=0.0)
     gamma: float = Field(default=1.0, ge=0.0, le=1.0)
-    fee_rate: float = Field(default=0.0004, ge=0.0, le=0.05)
+    fee_rate: float = Field(default=0.001, ge=0.0, le=0.05)  # 0.1% matches testnet commission
     test_ratio: float = Field(default=0.2, ge=0.05, le=0.5)
     seed: int = Field(default=42)
     use_champion: bool = True  # compare against registry champion if available
@@ -3046,3 +3046,191 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
         return job
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# PPO training endpoints
+# ---------------------------------------------------------------------------
+
+class PPOJobRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1m"
+    total_steps: int = Field(default=1_000_000, ge=10_000, le=10_000_000)
+    eval_windows: int = Field(default=8, ge=1, le=20)
+    fee_rate: float = Field(default=0.001, ge=0.0, le=0.05)
+    learning_rate: float = Field(default=3e-4, gt=0.0)
+    n_steps: int = Field(default=2048, ge=64)
+    batch_size: int = Field(default=256, ge=16)
+    n_epochs: int = Field(default=10, ge=1, le=50)
+    gamma: float = Field(default=0.99, ge=0.0, le=1.0)
+    seed: int = Field(default=42)
+
+
+@app.post("/training/ppo-jobs")
+def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
+    """Start a PPO training job in a background thread.
+
+    Returns immediately with the job record (status='running').
+    Poll GET /training/jobs/{job_id} to check progress and results.
+    """
+    import json as _json
+    import threading
+
+    from app.training.ppo_trainer import run_ppo_training
+    from app.core.db import get_connection as _get_conn
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+
+        params = {
+            "job_type":      "ppo",
+            "total_steps":   body.total_steps,
+            "eval_windows":  body.eval_windows,
+            "fee_rate":      body.fee_rate,
+            "learning_rate": body.learning_rate,
+            "n_steps":       body.n_steps,
+            "batch_size":    body.batch_size,
+            "n_epochs":      body.n_epochs,
+            "gamma":         body.gamma,
+            "seed":          body.seed,
+        }
+        job_id = create_training_job(
+            connection,
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            feature_set="ppo",
+            params=params,
+        )
+
+        from datetime import datetime, timezone as _tz
+        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        update_training_job(connection, job_id, status="running", started_at=started_at)
+        job = get_training_job(connection, job_id)
+    finally:
+        connection.close()
+
+    def _bg_train():
+        def _on_progress(current: int, total: int) -> None:
+            pct = round(current / total * 100, 1) if total > 0 else 0
+            prog = _json.dumps({"pct": pct, "step": current, "total": total})
+            try:
+                conn = _get_conn()
+                conn.execute(
+                    "UPDATE training_jobs SET progress_json=? WHERE id=?;",
+                    (prog, job_id),
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        try:
+            result = run_ppo_training(
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                total_steps=body.total_steps,
+                eval_windows=body.eval_windows,
+                fee_rate=body.fee_rate,
+                learning_rate=body.learning_rate,
+                n_steps=body.n_steps,
+                batch_size=body.batch_size,
+                n_epochs=body.n_epochs,
+                gamma=body.gamma,
+                seed=body.seed,
+                job_id=job_id,
+                on_progress=_on_progress,
+            )
+
+            metrics = {
+                "verdict":     result["verdict"],
+                "win_rate":    result["win_rate"],
+                "avg_ppo_pct": result["avg_ppo_pct"],
+                "avg_bnh_pct": result["avg_bnh_pct"],
+                "avg_edge":    result["avg_edge"],
+                "walk_forward": result["walk_forward"],
+            }
+            dataset = {
+                "n_total":  result["n_total"],
+                "n_train":  result["n_train"],
+                "fee_rate": result["fee_rate"],
+            }
+            from datetime import datetime, timezone as _tz2
+            finished_at = datetime.now(_tz2.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+            conn = _get_conn()
+            update_training_job(
+                conn, job_id,
+                status="done",
+                dataset=dataset,
+                metrics=metrics,
+                model={"model_path": result["model_path"], "job_type": "ppo"},
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            conn.execute(
+                "UPDATE training_jobs SET progress_json=? WHERE id=?;",
+                (_json.dumps({"pct": 100, "step": body.total_steps, "total": body.total_steps}), job_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            from datetime import datetime, timezone as _tz3
+            finished_at = datetime.now(_tz3.utc).strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                conn = _get_conn()
+                update_training_job(
+                    conn, job_id,
+                    status="failed",
+                    error=str(exc),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+    thread = threading.Thread(target=_bg_train, daemon=True)
+    thread.start()
+
+    return job or {"id": job_id, "status": "running"}
+
+
+@app.post("/training/ppo-jobs/{job_id}/deploy")
+def deploy_ppo_job(job_id: int) -> Dict[str, Any]:
+    """Deploy a completed PPO candidate model as the active model.
+
+    Copies runtime/models/ppo_{symbol}_{tf}_candidate_{job_id}.zip
+    to runtime/models/ppo_{symbol}_{tf}.zip and clears the in-memory cache.
+    """
+    from app.training.ppo_trainer import deploy_candidate_model
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        job = get_training_job(connection, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"PPO job {job_id} not found.")
+        if job.get("status") != "done":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Job {job_id} status={job.get('status')!r}. Only 'done' jobs can be deployed.",
+            )
+    finally:
+        connection.close()
+
+    symbol    = job["symbol"]
+    timeframe = job["timeframe"]
+    try:
+        active_path = deploy_candidate_model(symbol, timeframe, job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return {
+        "job_id":      job_id,
+        "symbol":      symbol,
+        "timeframe":   timeframe,
+        "active_path": active_path,
+        "deployed":    True,
+    }

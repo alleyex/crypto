@@ -649,6 +649,17 @@ def _add_fills_commission(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE fills ADD COLUMN transact_time INTEGER DEFAULT NULL;")
 
 
+def _add_training_jobs_progress(connection: DBConnection) -> None:
+    """Add progress_json and job_type columns to training_jobs table."""
+    if not table_exists(connection, "training_jobs"):
+        return
+    existing = get_table_columns(connection, "training_jobs")
+    if "progress_json" not in existing:
+        connection.execute("ALTER TABLE training_jobs ADD COLUMN progress_json TEXT DEFAULT NULL;")
+    if "job_type" not in existing:
+        connection.execute("ALTER TABLE training_jobs ADD COLUMN job_type TEXT DEFAULT 'supervised';")
+
+
 def _add_retention_and_heartbeat_indexes(connection: DBConnection) -> None:
     """Add indexes to support efficient data retention queries."""
     connection.execute(
@@ -743,6 +754,7 @@ MIGRATIONS: list[Migration] = [
     ("037_migrate_remaining_real_columns_to_numeric", _migrate_remaining_real_columns_to_numeric),
     ("038_add_retention_and_heartbeat_indexes", _add_retention_and_heartbeat_indexes),
     ("039_add_fills_commission", _add_fills_commission),
+    ("040_add_training_jobs_progress", _add_training_jobs_progress),
 ]
 
 

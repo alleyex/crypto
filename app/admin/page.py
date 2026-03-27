@@ -2381,103 +2381,137 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <div class="section-header">
           <div>
             <div class="section-kicker">Training</div>
-            <h2>RL Training Workspace</h2>
+            <h2>PPO Training Workspace</h2>
           </div>
-          <p>Configure RL hyperparameters, run training jobs directly from the console, and inspect the latest candidate metrics without switching back to the terminal.</p>
+          <p>Train the PPO (Stable Baselines3) strategy model directly from this console. The trained candidate model can be deployed to replace the active model used in live trading.</p>
         </div>
       <section class="grid">
+
         <article class="panel data-card">
-          <h2>Run RL Training</h2>
-          <p>Start a REINFORCE training job with explicit trading-cost assumptions and registry controls.</p>
+          <h2>Run PPO Training</h2>
+          <p>Trains the <strong>PPO (Stable Baselines3)</strong> model — the same model used in live trading. Training runs in the background; refresh the job list to check progress.</p>
           <div class="training-form-grid">
             <div class="training-field">
-              <label for="training-rl-symbol-input">Symbol</label>
-              <input id="training-rl-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
+              <label for="ppo-symbol-input">Symbol</label>
+              <input id="ppo-symbol-input" type="text" placeholder="BTCUSDT" value="BTCUSDT" />
             </div>
             <div class="training-field">
-              <label for="training-rl-timeframe-input">Timeframe</label>
-              <input id="training-rl-timeframe-input" type="text" placeholder="1m" value="1m" />
+              <label for="ppo-timeframe-input">Timeframe</label>
+              <input id="ppo-timeframe-input" type="text" placeholder="1m" value="1m" />
             </div>
             <div class="training-field">
-              <label for="training-rl-episodes-input">Episodes</label>
-              <input id="training-rl-episodes-input" type="number" value="100" min="1" max="5000" />
+              <label for="ppo-steps-input">Total Steps</label>
+              <input id="ppo-steps-input" type="number" value="1000000" min="10000" max="10000000" step="100000" />
             </div>
             <div class="training-field">
-              <label for="training-rl-learning-rate-input">Learning Rate</label>
-              <input id="training-rl-learning-rate-input" type="number" value="0.001" min="0.000001" max="1" step="0.0001" />
+              <label for="ppo-eval-windows-input">Eval Windows</label>
+              <input id="ppo-eval-windows-input" type="number" value="8" min="1" max="20" />
             </div>
             <div class="training-field">
-              <label for="training-rl-gamma-input">Gamma</label>
-              <input id="training-rl-gamma-input" type="number" value="1.0" min="0" max="1" step="0.01" />
+              <label for="ppo-fee-rate-input">Fee Rate (per side)</label>
+              <input id="ppo-fee-rate-input" type="number" value="0.001" min="0" max="0.05" step="0.0001" />
             </div>
             <div class="training-field">
-              <label for="training-rl-fee-rate-input">Fee Rate</label>
-              <input id="training-rl-fee-rate-input" type="number" value="0.0004" min="0" max="0.05" step="0.0001" />
-            </div>
-            <div class="training-field">
-              <label for="training-rl-test-ratio-input">Test Ratio</label>
-              <input id="training-rl-test-ratio-input" type="number" value="0.2" min="0.05" max="0.5" step="0.05" />
-            </div>
-            <div class="training-field">
-              <label for="training-rl-seed-input">Seed</label>
-              <input id="training-rl-seed-input" type="number" value="42" min="0" max="999999" step="1" />
+              <label for="ppo-seed-input">Seed</label>
+              <input id="ppo-seed-input" type="number" value="42" min="0" max="999999" />
             </div>
           </div>
-          <div class="training-inline-checks">
-            <label>
-              <input id="training-rl-use-champion-input" type="checkbox" checked />
-              Compare against champion
-            </label>
-            <label>
-              <input id="training-rl-auto-promote-input" type="checkbox" />
-              Auto-promote on success
-            </label>
-          </div>
+          <details style="margin:12px 0 4px">
+            <summary style="cursor:pointer;color:var(--muted);font-size:12px;letter-spacing:0.08em;text-transform:uppercase">Advanced Hyperparameters</summary>
+            <div class="training-form-grid" style="margin-top:10px">
+              <div class="training-field">
+                <label for="ppo-lr-input">Learning Rate</label>
+                <input id="ppo-lr-input" type="number" value="0.0003" min="0.000001" max="0.1" step="0.0001" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-n-steps-input">N Steps</label>
+                <input id="ppo-n-steps-input" type="number" value="2048" min="64" max="8192" step="64" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-batch-size-input">Batch Size</label>
+                <input id="ppo-batch-size-input" type="number" value="256" min="16" max="2048" step="16" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-n-epochs-input">N Epochs</label>
+                <input id="ppo-n-epochs-input" type="number" value="10" min="1" max="50" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-gamma-input">Gamma</label>
+                <input id="ppo-gamma-input" type="number" value="0.99" min="0" max="1" step="0.01" />
+              </div>
+            </div>
+          </details>
           <div class="button-row">
-            <button data-action="training-rl-run">Run RL Training</button>
-            <button class="secondary" data-action="training-jobs-refresh">Refresh Jobs</button>
+            <button data-action="ppo-train-run">Start PPO Training</button>
+            <button class="secondary" data-action="ppo-jobs-refresh">Refresh Jobs</button>
           </div>
-          <div class="message" id="training-rl-message">Training workspace ready.</div>
+          <div class="message" id="ppo-train-message">PPO training workspace ready.</div>
         </article>
 
         <article class="panel data-card">
-          <h2>Latest Result</h2>
-          <p>Selected training job summary and deployment posture.</p>
-          <div class="training-kpi-grid" id="training-summary-kpis">
-            <div class="training-kpi-card"><label>Status</label><div class="value">Idle</div></div>
-            <div class="training-kpi-card"><label>Verdict</label><div class="value">n/a</div></div>
-            <div class="training-kpi-card"><label>RL Return</label><div class="value">n/a</div></div>
-            <div class="training-kpi-card"><label>Registry</label><div class="value">n/a</div></div>
+          <h2>Selected Job</h2>
+          <p>Click a job in the history list to inspect its result and deploy.</p>
+          <div class="training-kpi-grid" id="ppo-summary-kpis">
+            <div class="training-kpi-card"><label>Status</label><div class="value" id="ppo-kpi-status">—</div></div>
+            <div class="training-kpi-card"><label>Verdict</label><div class="value" id="ppo-kpi-verdict">—</div></div>
+            <div class="training-kpi-card"><label>PPO avg return</label><div class="value" id="ppo-kpi-ppo-ret">—</div></div>
+            <div class="training-kpi-card"><label>B&H avg return</label><div class="value" id="ppo-kpi-bnh-ret">—</div></div>
+          </div>
+          <div id="ppo-progress-wrap" style="display:none;margin-top:14px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+              <span style="font-size:12px;color:var(--muted)">Training progress</span>
+              <span style="font-size:12px;color:var(--muted)" id="ppo-progress-label">0%</span>
+            </div>
+            <div style="background:var(--panel-2);border-radius:4px;height:8px;overflow:hidden">
+              <div id="ppo-progress-bar" style="background:var(--accent);height:100%;width:0%;transition:width 0.5s ease"></div>
+            </div>
           </div>
           <div class="ops-card" style="margin-top:14px">
             <div class="ops-card-header">
-              <div class="ops-card-title">Selected Job</div>
-              <div class="chip" id="training-selected-job-chip">No job selected</div>
+              <div class="ops-card-title" id="ppo-selected-job-title">No job selected</div>
+              <div class="chip" id="ppo-selected-job-chip">—</div>
             </div>
-            <div class="ops-card-grid" id="training-summary-grid">
-              <div><strong>Dataset</strong>Run a training job to populate this workspace.</div>
-              <div><strong>Metrics</strong>RL, buy-and-hold, and champion comparison appear here.</div>
-              <div><strong>Hyperparameters</strong>Episodes, learning rate, gamma, fee rate, and split ratio.</div>
-              <div><strong>Model</strong>Registry candidate/champion state and model type.</div>
+            <div class="ops-card-grid" id="ppo-summary-grid">
+              <div><strong>Dataset</strong>Select or run a training job.</div>
+              <div><strong>Walk-forward</strong>Win rate and per-window results appear here.</div>
+              <div><strong>Hyperparameters</strong>Steps, fee rate, and SB3 params appear here.</div>
+              <div><strong>Model</strong>Candidate path and deploy status appear here.</div>
             </div>
           </div>
-          <pre id="training-rl-json" style="margin-top:12px;display:none"></pre>
+          <div id="ppo-wf-table-wrap" style="display:none;margin-top:14px">
+            <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Walk-Forward Results</div>
+            <div class="data-table-wrap">
+              <table class="data-table" id="ppo-wf-table">
+                <thead><tr><th>Win</th><th class="num">PPO ret</th><th class="num">B&H ret</th><th class="num">Edge</th><th class="num">Trades</th><th>Result</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div id="ppo-deploy-wrap" style="display:none;margin-top:14px">
+            <div class="button-row">
+              <button data-action="ppo-deploy" id="ppo-deploy-btn">Deploy as Active Model</button>
+            </div>
+            <div class="message" id="ppo-deploy-message"></div>
+          </div>
+          <details style="margin-top:12px">
+            <summary style="cursor:pointer;color:var(--muted);font-size:12px">View raw payload</summary>
+            <pre id="ppo-job-json" style="margin-top:8px;display:none"></pre>
+          </details>
         </article>
 
         <article class="panel data-card" style="grid-column: 1 / -1;">
           <div class="section-header" style="margin-bottom:12px">
             <div>
               <div class="section-kicker">History</div>
-              <h2 style="margin:4px 0 0;font-size:20px">Recent Training Jobs</h2>
+              <h2 style="margin:4px 0 0;font-size:20px">PPO Training Jobs</h2>
             </div>
-            <p style="margin:0">Newest jobs first. Click any job to inspect its metrics and raw payload.</p>
+            <p style="margin:0">Newest jobs first. Click any job to inspect its metrics and deploy.</p>
           </div>
-          <div class="training-job-list" id="training-jobs-board">
-            <div class="ops-card">
-              <div class="ops-card-title">Loading training jobs...</div>
-            </div>
+          <div class="training-job-list" id="ppo-jobs-board">
+            <div class="ops-card"><div class="ops-card-title">Loading...</div></div>
           </div>
         </article>
+
       </section>
       </section>
       </div>
@@ -4769,10 +4803,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
       refreshMarketStatus();
       refreshFetchHistory();
-      refreshTrainingWorkspace().catch((error) => {
-        const msg = el("training-rl-message");
+      refreshPPOJobs().catch((error) => {
+        const msg = el("ppo-train-message");
         if (msg) {
-          msg.textContent = `Failed to load training jobs: ${error.message}`;
+          msg.textContent = `Failed to load PPO jobs: ${error.message}`;
           msg.className = "message bad";
         }
       });
@@ -4805,10 +4839,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           btn.classList.add("active");
           document.getElementById("tab-" + tabId).classList.add("active");
           if (tabId === "training") {
-            refreshTrainingWorkspace(trainingSelectedJobId).catch((error) => {
-              const msg = el("training-rl-message");
+            refreshPPOJobs(ppoSelectedJobId).catch((error) => {
+              const msg = el("ppo-train-message");
               if (msg) {
-                msg.textContent = `Failed to load training jobs: ${error.message}`;
+                msg.textContent = `Failed to load PPO jobs: ${error.message}`;
                 msg.className = "message bad";
               }
             });
@@ -4919,10 +4953,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const msg = el(msgId);
         if (msg) { msg.textContent = String(err); msg.className = "message bad"; }
       }
-
-      let trainingJobsState = [];
-      let trainingJobsTotal = 0;
-      let trainingSelectedJobId = null;
 
       function renderExecutionReport(report) {
         const summary = report?.summary || {};
@@ -5042,295 +5072,238 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         return report;
       }
 
-      function trainingFormatNumber(value, digits = 6) {
-        if (value === null || value === undefined || value === "") return "n/a";
-        const number = Number(value);
-        if (!Number.isFinite(number)) return String(value);
-        return number.toFixed(digits);
-      }
+      // ---- PPO Training ----
+      let ppoJobsState = [];
+      let ppoSelectedJobId = null;
+      let ppoPollingTimer = null;
 
-      function trainingStatusTone(status) {
+      function ppoStatusTone(status) {
         if (status === "done") return "ok";
         if (status === "failed") return "bad";
         if (status === "running" || status === "pending") return "warn";
         return "";
       }
 
-      function renderTrainingSummary(job) {
-        const kpis = el("training-summary-kpis");
-        const grid = el("training-summary-grid");
-        const chip = el("training-selected-job-chip");
-        const raw = el("training-rl-json");
+      function ppoFmt(value, digits = 4) {
+        if (value == null || value === "") return "n/a";
+        const n = Number(value);
+        return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(digits) : String(value);
+      }
+
+      function renderPPOSummary(job) {
         if (!job) {
-          if (kpis) {
-            kpis.innerHTML = `
-              <div class="training-kpi-card"><label>Status</label><div class="value">Idle</div></div>
-              <div class="training-kpi-card"><label>Verdict</label><div class="value">n/a</div></div>
-              <div class="training-kpi-card"><label>RL Return</label><div class="value">n/a</div></div>
-              <div class="training-kpi-card"><label>Registry</label><div class="value">n/a</div></div>`;
-          }
-          if (grid) {
-            grid.innerHTML = `
-              <div><strong>Dataset</strong>No training job selected.</div>
-              <div><strong>Metrics</strong>Run or select a training job.</div>
-              <div><strong>Hyperparameters</strong>Configure the form and start training.</div>
-              <div><strong>Model</strong>Registry details appear after a successful run.</div>`;
-          }
-          if (chip) chip.textContent = "No job selected";
-          if (raw) raw.style.display = "none";
+          el("ppo-kpi-status").textContent = "\u2014";
+          el("ppo-kpi-verdict").textContent = "\u2014";
+          el("ppo-kpi-ppo-ret").textContent = "\u2014";
+          el("ppo-kpi-bnh-ret").textContent = "\u2014";
+          el("ppo-selected-job-title").textContent = "No job selected";
+          el("ppo-selected-job-chip").textContent = "\u2014";
+          el("ppo-summary-grid").innerHTML = `
+            <div><strong>Dataset</strong>Select or run a training job.</div>
+            <div><strong>Walk-forward</strong>Win rate and per-window results appear here.</div>
+            <div><strong>Hyperparameters</strong>Steps, fee rate, and SB3 params appear here.</div>
+            <div><strong>Model</strong>Candidate path and deploy status appear here.</div>`;
+          el("ppo-wf-table-wrap").style.display = "none";
+          el("ppo-deploy-wrap").style.display = "none";
+          el("ppo-progress-wrap").style.display = "none";
+          el("ppo-job-json").style.display = "none";
           return;
         }
-
         const metrics = job.metrics || {};
         const dataset = job.dataset || {};
-        const params = job.params || {};
-        const model = job.model || {};
-        if (kpis) {
-          kpis.innerHTML = `
-            <div class="training-kpi-card"><label>Status</label><div class="value ${trainingStatusTone(job.status)}">${String(job.status || "unknown").toUpperCase()}</div></div>
-            <div class="training-kpi-card"><label>Verdict</label><div class="value">${metrics.verdict || "n/a"}</div></div>
-            <div class="training-kpi-card"><label>RL Return</label><div class="value">${trainingFormatNumber(metrics.test_rl?.cumulative_return)}</div></div>
-            <div class="training-kpi-card"><label>Registry</label><div class="value">${job.registry_status || "candidate"}</div></div>`;
+        const params  = job.params  || {};
+        const model   = job.model   || {};
+        const tone    = ppoStatusTone(job.status);
+        el("ppo-kpi-status").className  = "value " + tone;
+        el("ppo-kpi-status").textContent = String(job.status || "unknown").toUpperCase();
+        el("ppo-kpi-verdict").textContent = metrics.verdict || "n/a";
+        el("ppo-kpi-ppo-ret").textContent = ppoFmt(metrics.avg_ppo_pct);
+        el("ppo-kpi-bnh-ret").textContent = ppoFmt(metrics.avg_bnh_pct);
+        el("ppo-selected-job-title").textContent = `Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe}`;
+        el("ppo-selected-job-chip").textContent   = String(job.status || "\u2014").toUpperCase();
+        el("ppo-summary-grid").innerHTML = `
+          <div><strong>Dataset</strong>${dataset.n_train ?? "n/a"} train / ${dataset.n_total ?? "n/a"} total \u00b7 fee=${dataset.fee_rate ?? params.fee_rate ?? "n/a"}</div>
+          <div><strong>Walk-forward</strong>Win rate ${metrics.win_rate != null ? (metrics.win_rate * 100).toFixed(0) + "%" : "n/a"} \u00b7 avg edge ${ppoFmt(metrics.avg_edge)}</div>
+          <div><strong>Hyperparameters</strong>steps=${params.total_steps ?? "n/a"}, lr=${params.learning_rate ?? "n/a"}, batch=${params.batch_size ?? "n/a"}, gamma=${params.gamma ?? "n/a"}</div>
+          <div><strong>Model</strong>${model.model_path ? model.model_path.split("/").pop() : "n/a"} \u00b7 finished=${job.finished_at || "running..."}</div>`;
+        const prog = job.progress_json;
+        if (job.status === "running" && prog) {
+          el("ppo-progress-wrap").style.display = "block";
+          el("ppo-progress-bar").style.width    = (prog.pct || 0) + "%";
+          el("ppo-progress-label").textContent  = `${prog.pct ?? 0}% (${(prog.step ?? 0).toLocaleString()} / ${(prog.total ?? 0).toLocaleString()} steps)`;
+        } else {
+          el("ppo-progress-wrap").style.display = "none";
         }
-        if (grid) {
-          grid.innerHTML = `
-            <div><strong>Dataset</strong>${dataset.n_train ?? "n/a"} train / ${dataset.n_test ?? "n/a"} test / ${dataset.n_total ?? "n/a"} total</div>
-            <div><strong>Metrics</strong>RL=${trainingFormatNumber(metrics.test_rl?.cumulative_return)}, BnH=${trainingFormatNumber(metrics.test_bnh?.cumulative_return)}, loss=${trainingFormatNumber(metrics.final_train_loss)}</div>
-            <div><strong>Hyperparameters</strong>episodes=${params.n_episodes ?? model.n_episodes ?? "n/a"}, lr=${params.learning_rate ?? model.learning_rate ?? "n/a"}, gamma=${params.gamma ?? model.gamma ?? "n/a"}, fee=${params.fee_rate ?? model.fee_rate ?? dataset.fee_rate ?? "0"}</div>
-            <div><strong>Model</strong>${model.model_type || "n/a"} · features=${model.n_features ?? "n/a"} · created=${job.finished_at || job.created_at || "n/a"}</div>`;
+        const wf = Array.isArray(metrics.walk_forward) ? metrics.walk_forward : [];
+        if (wf.length > 0) {
+          el("ppo-wf-table-wrap").style.display = "block";
+          el("ppo-wf-table").querySelector("tbody").innerHTML = wf.map((r) => {
+            const flag = r.beats_bnh ? '<span class="ok">\u2713</span>' : '<span class="bad">\u2717</span>';
+            const edge = ((r.ppo?.log_ret ?? 0) - (r.bnh?.log_ret ?? 0)).toFixed(5);
+            return `<tr>
+              <td>${r.window}</td>
+              <td class="num">${ppoFmt(r.ppo?.pct_ret)}</td>
+              <td class="num">${ppoFmt(r.bnh?.pct_ret)}</td>
+              <td class="num">${edge}</td>
+              <td class="num">${r.ppo?.n_trades ?? "\u2014"}</td>
+              <td>${flag}</td>
+            </tr>`;
+          }).join("");
+        } else {
+          el("ppo-wf-table-wrap").style.display = "none";
         }
-        if (chip) chip.textContent = `Job #${job.id} · ${job.symbol}/${job.timeframe}`;
-        if (raw) {
-          raw.textContent = JSON.stringify(job, null, 2);
-          raw.style.display = "block";
+        el("ppo-deploy-wrap").style.display = job.status === "done" ? "block" : "none";
+        const deployBtn = el("ppo-deploy-btn");
+        if (deployBtn) deployBtn.dataset.jobId = job.id;
+        const rawEl = el("ppo-job-json");
+        if (rawEl) { rawEl.textContent = JSON.stringify(job, null, 2); rawEl.style.display = "block"; }
+        if (job.error) {
+          const msg = el("ppo-train-message");
+          if (msg) { msg.textContent = job.error; msg.className = "message bad"; }
         }
       }
 
-      function renderTrainingJobs(payload, selectedJobId = null) {
-        const board = el("training-jobs-board");
+      function renderPPOJobs(payload, selectedId = null) {
+        const board = el("ppo-jobs-board");
         if (!board) return;
         const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-        trainingJobsState = jobs;
-        trainingJobsTotal = Number(payload?.total || jobs.length || 0);
+        ppoJobsState = jobs;
         if (!jobs.length) {
-          board.innerHTML = `<div class="ops-card"><div class="ops-card-title">No training jobs found.</div><div class="ops-card-note">Run RL training from this workspace to create the first job.</div></div>`;
-          renderTrainingSummary(null);
+          board.innerHTML = `<div class="ops-card"><div class="ops-card-title">No PPO jobs yet.</div><div class="ops-card-note">Click "Start PPO Training" to create the first job.</div></div>`;
+          renderPPOSummary(null);
           return;
         }
-        const resolvedSelectedId = selectedJobId ?? trainingSelectedJobId ?? jobs[0].id;
-        trainingSelectedJobId = resolvedSelectedId;
+        const resolvedId = selectedId ?? ppoSelectedJobId ?? jobs[0].id;
+        ppoSelectedJobId = resolvedId;
         board.innerHTML = jobs.map((job) => {
           const metrics = job.metrics || {};
-          const params = job.params || {};
-          const statusTone = trainingStatusTone(job.status);
-          const isSelected = Number(job.id) === Number(resolvedSelectedId);
+          const params  = job.params  || {};
+          const tone    = ppoStatusTone(job.status);
+          const sel     = Number(job.id) === Number(resolvedId);
+          const verdictTone = metrics.verdict === "PASS" ? "ok" : metrics.verdict === "FAIL" ? "bad" : "warn";
           return `
-            <div class="ops-card training-job-row${isSelected ? " selected" : ""}" data-training-job-id="${job.id}">
+            <div class="ops-card training-job-row${sel ? " selected" : ""}" data-ppo-job-id="${job.id}">
               <div class="ops-card-header">
-                <div class="ops-card-title">Job #${job.id} · ${job.symbol}/${job.timeframe}</div>
-                <div class="chip"><span class="${statusTone}">${String(job.status || "unknown").toUpperCase()}</span></div>
+                <div class="ops-card-title">Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe} \u00b7 PPO</div>
+                <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
               </div>
               <div class="training-job-meta">
-                <span class="chip">episodes=${params.n_episodes ?? "n/a"}</span>
-                <span class="chip">fee=${params.fee_rate ?? job.dataset?.fee_rate ?? "0"}</span>
-                <span class="chip">verdict=${metrics.verdict || "n/a"}</span>
-                <span class="chip">registry=${job.registry_status || "candidate"}</span>
+                <span class="chip">steps=${(params.total_steps ?? "?").toLocaleString()}</span>
+                <span class="chip">fee=${params.fee_rate ?? "?"}</span>
+                <span class="chip"><span class="${verdictTone}">verdict=${metrics.verdict || "\u2014"}</span></span>
+                <span class="chip">win=${metrics.win_rate != null ? (metrics.win_rate * 100).toFixed(0) + "%" : "\u2014"}</span>
               </div>
               <div class="ops-card-grid">
-                <div><strong>RL Return</strong>${trainingFormatNumber(metrics.test_rl?.cumulative_return)}</div>
-                <div><strong>Buy & Hold</strong>${trainingFormatNumber(metrics.test_bnh?.cumulative_return)}</div>
-                <div><strong>Final Loss</strong>${trainingFormatNumber(metrics.final_train_loss)}</div>
-                <div><strong>Finished</strong>${job.finished_at || job.created_at || "n/a"}</div>
+                <div><strong>PPO avg ret</strong>${ppoFmt(metrics.avg_ppo_pct)}</div>
+                <div><strong>B&H avg ret</strong>${ppoFmt(metrics.avg_bnh_pct)}</div>
+                <div><strong>Avg edge</strong>${ppoFmt(metrics.avg_edge)}</div>
+                <div><strong>Finished</strong>${job.finished_at || job.created_at || "\u2014"}</div>
               </div>
-              <div class="ops-card-note">${job.error || "Select this job to inspect the full metrics, model payload, and dataset stats."}</div>
+              ${job.error ? `<div class="ops-card-note" style="color:var(--bad)">${job.error}</div>` : ""}
             </div>`;
         }).join("");
-        renderTrainingSummary(jobs.find((job) => Number(job.id) === Number(resolvedSelectedId)) || jobs[0]);
+        renderPPOSummary(jobs.find((j) => Number(j.id) === Number(resolvedId)) || jobs[0]);
       }
 
-      async function refreshTrainingWorkspace(selectedJobId = null) {
-        const payload = await api(`/training/jobs?limit=12`);
-        renderTrainingJobs(payload, selectedJobId);
-        return payload;
+      async function refreshPPOJobs(selectedId = null) {
+        const payload = await api(`/training/jobs?limit=20`);
+        const ppoOnly = { ...payload, jobs: (payload?.jobs || []).filter((j) => j.params?.job_type === "ppo" || j.feature_set === "ppo") };
+        renderPPOJobs(ppoOnly, selectedId);
+        return ppoOnly;
+      }
+
+      function startPPOPolling(jobId) {
+        if (ppoPollingTimer) clearInterval(ppoPollingTimer);
+        ppoPollingTimer = setInterval(async () => {
+          try {
+            const job = await api(`/training/jobs/${jobId}`);
+            renderPPOSummary(job);
+            const idx = ppoJobsState.findIndex((j) => j.id === job.id);
+            if (idx >= 0) ppoJobsState[idx] = job;
+            renderPPOJobs({ jobs: ppoJobsState }, ppoSelectedJobId);
+            if (job.status !== "running" && job.status !== "pending") {
+              clearInterval(ppoPollingTimer);
+              ppoPollingTimer = null;
+            }
+          } catch (_) {}
+        }, 5000);
       }
 
       document.addEventListener("click", async (event) => {
         const action = event.target.dataset?.action;
-        if (!action?.startsWith("ml-")) return;
+        if (!action?.startsWith("ppo-")) return;
 
-        if (action === "ml-train") {
+        if (action === "ppo-jobs-refresh") {
           try {
-            const epochs = parseInt(el("ml-train-epochs-input")?.value || "50");
-            const r = await api(`/training/jobs`, { method: "POST", body: JSON.stringify({ symbol: mlTrainSymbol(), timeframe: mlTrainTimeframe(), n_epochs: epochs }) });
-            showMlJson("ml-train-json", "ml-train-message", r, `Training job ${r.id} — status: ${r.status}`);
-          } catch (e) { showMlError("ml-train-message", e); }
-        }
-
-        if (action === "ml-train-list") {
-          try {
-            const r = await api(`/training/jobs`);
-            showMlJson("ml-train-json", "ml-train-message", r, `${r.total} training jobs found.`);
-          } catch (e) { showMlError("ml-train-message", e); }
-        }
-
-        if (action === "ml-champion") {
-          try {
-            const r = await api(`/registry/champion/${mlRegistrySymbol()}?timeframe=${mlRegistryTimeframe()}`);
-            showMlJson("ml-registry-json", "ml-registry-message", r, r.champion ? `Champion: ${r.champion.version}` : "No champion.");
-          } catch (e) { showMlError("ml-registry-message", e); }
-        }
-
-        if (action === "ml-registry-list") {
-          try {
-            const r = await api(`/registry/models?symbol=${mlRegistrySymbol()}`);
-            showMlJson("ml-registry-json", "ml-registry-message", r, `${r.total} models found.`);
-          } catch (e) { showMlError("ml-registry-message", e); }
-        }
-
-        if (action === "ml-promote") {
-          const modelId = el("ml-registry-model-id-input")?.value;
-          if (!modelId) { showMlError("ml-registry-message", "Enter a Model ID first."); return; }
-          try {
-            const r = await api(`/registry/models/${modelId}/promote`, { method: "POST" });
-            showMlJson("ml-registry-json", "ml-registry-message", r, `Model ${modelId} promoted to champion.`);
-          } catch (e) { showMlError("ml-registry-message", e); }
-        }
-
-        if (action === "ml-archive") {
-          const modelId = el("ml-registry-model-id-input")?.value;
-          if (!modelId) { showMlError("ml-registry-message", "Enter a Model ID first."); return; }
-          try {
-            const r = await api(`/registry/models/${modelId}/archive`, { method: "POST" });
-            showMlJson("ml-registry-json", "ml-registry-message", r, `Model ${modelId} archived.`);
-          } catch (e) { showMlError("ml-registry-message", e); }
-        }
-
-        if (action === "ml-infer-status") {
-          try {
-            const r = await api(`/inference/status/${mlInferSymbol()}?timeframe=${mlInferTimeframe()}`);
-            showMlJson("ml-infer-json", "ml-infer-message", r, r.ready ? "Inference ready." : "Not ready — no champion or no features.");
-          } catch (e) { showMlError("ml-infer-message", e); }
-        }
-
-        if (action === "ml-infer-predict") {
-          try {
-            const r = await api(`/inference/predict/${mlInferSymbol()}?timeframe=${mlInferTimeframe()}`);
-            showMlJson("ml-infer-json", "ml-infer-message", r, `Signal: ${r.signal}, probability: ${r.probability}`);
-          } catch (e) { showMlError("ml-infer-message", e); }
-        }
-
-        if (action === "ml-rl-train") {
-          try {
-            const episodes = parseInt(el("ml-rl-episodes-input")?.value || "100");
-            const autoPromote = el("ml-rl-auto-promote")?.checked || false;
-            const r = await api(`/training/rl-jobs`, { method: "POST", body: JSON.stringify({ symbol: mlRlSymbol(), timeframe: mlRlTimeframe(), n_episodes: episodes, auto_promote: autoPromote }) });
-            showMlJson("ml-rl-json", "ml-rl-message", r, `RL job done — verdict: ${r.metrics?.verdict ?? r.status}, registry: ${r.registry_status ?? "n/a"}`);
-          } catch (e) { showMlError("ml-rl-message", e); }
-        }
-      });
-
-      document.addEventListener("click", async (event) => {
-        const action = event.target.dataset?.action;
-        if (!action?.startsWith("training-")) return;
-
-        if (action === "training-jobs-refresh") {
-          try {
-            await refreshTrainingWorkspace(trainingSelectedJobId);
-            const msg = el("training-rl-message");
-            if (msg) {
-              msg.textContent = `Loaded ${trainingJobsTotal} training jobs.`;
-              msg.className = "message ok";
-            }
-          } catch (error) {
-            const msg = el("training-rl-message");
-            if (msg) {
-              msg.textContent = String(error);
-              msg.className = "message bad";
-            }
+            const payload = await refreshPPOJobs(ppoSelectedJobId);
+            const msg = el("ppo-train-message");
+            if (msg) { msg.textContent = `Loaded ${payload.jobs?.length ?? 0} PPO jobs.`; msg.className = "message ok"; }
+          } catch (e) {
+            const msg = el("ppo-train-message");
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
           }
           return;
         }
 
-        if (action === "training-rl-run") {
-          const button = event.target.closest("[data-action='training-rl-run']");
-          const msg = el("training-rl-message");
-          if (button) {
-            button.disabled = true;
-            button.textContent = "Training...";
-          }
-          if (msg) {
-            msg.textContent = "Submitting RL training job...";
-            msg.className = "message";
-          }
+        if (action === "ppo-train-run") {
+          const btn = event.target.closest("[data-action='ppo-train-run']");
+          const msg = el("ppo-train-message");
+          if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; }
+          if (msg) { msg.textContent = "Starting PPO training job in background..."; msg.className = "message"; }
           try {
-            const payload = {
-              symbol: trainingRlSymbol(),
-              timeframe: trainingRlTimeframe(),
-              n_episodes: parseInt(el("training-rl-episodes-input")?.value || "100"),
-              learning_rate: parseFloat(el("training-rl-learning-rate-input")?.value || "0.001"),
-              gamma: parseFloat(el("training-rl-gamma-input")?.value || "1"),
-              fee_rate: parseFloat(el("training-rl-fee-rate-input")?.value || "0.0004"),
-              test_ratio: parseFloat(el("training-rl-test-ratio-input")?.value || "0.2"),
-              seed: parseInt(el("training-rl-seed-input")?.value || "42"),
-              use_champion: el("training-rl-use-champion-input")?.checked ?? true,
-              auto_promote: el("training-rl-auto-promote-input")?.checked ?? false,
+            const body = {
+              symbol:        el("ppo-symbol-input")?.value.trim() || "BTCUSDT",
+              timeframe:     el("ppo-timeframe-input")?.value.trim() || "1m",
+              total_steps:   parseInt(el("ppo-steps-input")?.value || "1000000"),
+              eval_windows:  parseInt(el("ppo-eval-windows-input")?.value || "8"),
+              fee_rate:      parseFloat(el("ppo-fee-rate-input")?.value || "0.001"),
+              seed:          parseInt(el("ppo-seed-input")?.value || "42"),
+              learning_rate: parseFloat(el("ppo-lr-input")?.value || "0.0003"),
+              n_steps:       parseInt(el("ppo-n-steps-input")?.value || "2048"),
+              batch_size:    parseInt(el("ppo-batch-size-input")?.value || "256"),
+              n_epochs:      parseInt(el("ppo-n-epochs-input")?.value || "10"),
+              gamma:         parseFloat(el("ppo-gamma-input")?.value || "0.99"),
             };
-            const result = await api(`/training/rl-jobs`, {
-              method: "POST",
-              body: JSON.stringify(payload),
-            });
-            if (msg) {
-              msg.textContent = `RL job #${result.id} completed. Verdict: ${result.metrics?.verdict ?? result.status}. Registry: ${result.registry_status ?? "n/a"}.`;
-              msg.className = "message ok";
-            }
-            renderTrainingSummary(result);
-            const raw = el("training-rl-json");
-            if (raw) {
-              raw.textContent = JSON.stringify(result, null, 2);
-              raw.style.display = "block";
-            }
-            await refreshTrainingWorkspace(result.id);
-          } catch (error) {
-            if (msg) {
-              msg.textContent = String(error);
-              msg.className = "message bad";
-            }
+            const result = await api("/training/ppo-jobs", { method: "POST", body: JSON.stringify(body) });
+            ppoSelectedJobId = result.id;
+            if (msg) { msg.textContent = `PPO job #${result.id} started. Training in background \u2014 auto-refreshes every 5s.`; msg.className = "message ok"; }
+            await refreshPPOJobs(result.id);
+            startPPOPolling(result.id);
+          } catch (e) {
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
           } finally {
-            if (button) {
-              button.disabled = false;
-              button.textContent = "Run RL Training";
+            if (btn) { btn.disabled = false; btn.textContent = "Start PPO Training"; }
+          }
+          return;
+        }
+
+        if (action === "ppo-deploy") {
+          const jobId = event.target.dataset?.jobId || ppoSelectedJobId;
+          const deployMsg = el("ppo-deploy-message");
+          const btn = event.target;
+          if (!jobId) return;
+          btn.disabled = true;
+          if (deployMsg) { deployMsg.textContent = "Deploying..."; deployMsg.className = "message"; }
+          try {
+            const result = await api(`/training/ppo-jobs/${jobId}/deploy`, { method: "POST" });
+            if (deployMsg) {
+              deployMsg.textContent = `Deployed \u2192 ${result.active_path?.split("/").pop() ?? "active model updated"}`;
+              deployMsg.className = "message ok";
             }
+          } catch (e) {
+            if (deployMsg) { deployMsg.textContent = String(e); deployMsg.className = "message bad"; }
+          } finally {
+            btn.disabled = false;
           }
+          return;
         }
       });
 
-      document.addEventListener("click", async (event) => {
-        const action = event.target.dataset?.action;
-        if (action !== "report-refresh") return;
-        const msg = el("report-message");
-        if (msg) {
-          msg.textContent = "Refreshing execution report...";
-          msg.className = "message";
-        }
-        try {
-          const report = await refreshExecutionReport();
-          if (msg) {
-            msg.textContent = `Loaded ${report.summary?.fills ?? 0} fills and ${report.summary?.closed_trades ?? 0} closed trades for ${report.summary?.symbol ?? "n/a"}.`;
-            msg.className = "message ok";
-          }
-        } catch (error) {
-          if (msg) {
-            msg.textContent = String(error);
-            msg.className = "message bad";
-          }
-        }
-      });
-
-      el("training-jobs-board")?.addEventListener("click", (event) => {
-        const card = event.target.closest("[data-training-job-id]");
+      el("ppo-jobs-board")?.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-ppo-job-id]");
         if (!card) return;
-        trainingSelectedJobId = Number(card.dataset.trainingJobId);
-        renderTrainingJobs({ jobs: trainingJobsState, total: trainingJobsTotal }, trainingSelectedJobId);
+        ppoSelectedJobId = Number(card.dataset.ppoJobId);
+        renderPPOJobs({ jobs: ppoJobsState }, ppoSelectedJobId);
       });
 
       // ---- Market Data actions ----
