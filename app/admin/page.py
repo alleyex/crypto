@@ -5191,7 +5191,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="ops-card training-job-row${sel ? " selected" : ""}" data-ppo-job-id="${job.id}">
               <div class="ops-card-header">
                 <div class="ops-card-title">Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe} \u00b7 PPO</div>
-                <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-delete" data-job-id="${job.id}" onclick="event.stopPropagation()">Delete</button>
+                </div>
               </div>
               <div class="training-job-meta">
                 <span class="chip">steps=${(params.total_steps ?? "?").toLocaleString()}</span>
@@ -5283,6 +5286,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
           } finally {
             if (btn) { btn.disabled = false; btn.textContent = "Start PPO Training"; }
+          }
+          return;
+        }
+
+        if (action === "ppo-job-delete") {
+          const jobId = event.target.dataset?.jobId;
+          if (!jobId) return;
+          if (!confirm(`Delete Job #${jobId}? This cannot be undone.`)) return;
+          try {
+            await api(`/training/jobs/${jobId}`, { method: "DELETE" });
+            if (Number(jobId) === ppoSelectedJobId) { ppoSelectedJobId = null; renderPPOSummary(null); }
+            await refreshPPOJobs(ppoSelectedJobId);
+          } catch (e) {
+            const msg = el("ppo-train-message");
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
           }
           return;
         }

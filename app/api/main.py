@@ -3236,3 +3236,19 @@ def deploy_ppo_job(job_id: int) -> Dict[str, Any]:
         "active_path": active_path,
         "deployed":    True,
     }
+
+
+@app.delete("/training/jobs/{job_id}")
+def delete_training_job(job_id: int) -> Dict[str, Any]:
+    """Delete a training job record by id."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        job = get_training_job(connection, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Training job {job_id} not found.")
+        connection.execute("DELETE FROM training_jobs WHERE id = ?;", (job_id,))
+        connection.commit()
+        return {"deleted": True, "job_id": job_id}
+    finally:
+        connection.close()
