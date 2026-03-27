@@ -24,7 +24,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-MODELS_DIR = ROOT / "runtime" / "models"
+MODELS_DIR  = ROOT / "runtime" / "models"
+TB_LOGS_DIR = ROOT / "runtime" / "tb_logs"
 
 # Default PPO hyperparameters (mirrors scripts/train_ppo.py)
 DEFAULT_PPO_KWARGS: Dict[str, Any] = dict(
@@ -235,10 +236,12 @@ def run_ppo_training(
                       "gamma": gamma,
                       "seed": seed}
 
-        model = PPO("MlpPolicy", train_env, **ppo_kwargs)
+        tb_log_name = f"ppo_{symbol}_{timeframe}" + (f"_job{job_id}" if job_id else "")
+        TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        model = PPO("MlpPolicy", train_env, tensorboard_log=str(TB_LOGS_DIR), **ppo_kwargs)
 
         cb = _make_progress_callback(total_steps, on_progress)
-        model.learn(total_timesteps=total_steps, callback=cb)
+        model.learn(total_timesteps=total_steps, callback=cb, tb_log_name=tb_log_name)
 
         if on_progress:
             on_progress(total_steps, total_steps)

@@ -2446,6 +2446,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="ppo-jobs-refresh">Refresh Jobs</button>
           </div>
           <div class="message" id="ppo-train-message">PPO training workspace ready.</div>
+          <div style="margin-top:10px;font-size:12px;color:var(--muted)">
+            TensorBoard:
+            <a id="ppo-tb-link" href="http://localhost:6006" target="_blank" style="color:var(--accent)">http://localhost:6006</a>
+            &nbsp;—&nbsp;start with:
+            <code style="font-size:11px;background:var(--panel-2);padding:2px 6px;border-radius:4px">.venv/bin/tensorboard --logdir runtime/tb_logs</code>
+          </div>
         </article>
 
         <article class="panel data-card">
@@ -5266,7 +5272,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             };
             const result = await api("/training/ppo-jobs", { method: "POST", body: JSON.stringify(body) });
             ppoSelectedJobId = result.id;
-            if (msg) { msg.textContent = `PPO job #${result.id} started. Training in background \u2014 auto-refreshes every 5s.`; msg.className = "message ok"; }
+            if (msg) {
+              msg.innerHTML = `PPO job #${result.id} started \u2014 training in background, auto-refreshes every 5s. `
+                + `TensorBoard: <a href="${result.tensorboard_url || 'http://localhost:6006'}" target="_blank" style="color:var(--accent)">${result.tensorboard_url || 'http://localhost:6006'}</a>`;
+              msg.className = "message ok";
+            }
             await refreshPPOJobs(result.id);
             startPPOPolling(result.id);
           } catch (e) {

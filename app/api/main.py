@@ -3194,7 +3194,9 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
     thread = threading.Thread(target=_bg_train, daemon=True)
     thread.start()
 
-    return job or {"id": job_id, "status": "running"}
+    result = job or {"id": job_id, "status": "running"}
+    result["tensorboard_url"] = "http://localhost:6006"
+    return result
 
 
 @app.post("/training/ppo-jobs/{job_id}/deploy")
