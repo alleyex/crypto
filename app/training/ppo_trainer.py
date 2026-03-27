@@ -48,19 +48,29 @@ TB_PORT = 6006
 
 
 def _ensure_tensorboard_running() -> None:
-    """Start TensorBoard in the background if not already running."""
+    """Start TensorBoard in the background if not already running.
+
+    TensorBoard 2.x has a numpy 2.0 incompatibility (uses removed np.string_).
+    We launch it via a wrapper script that monkey-patches numpy before import.
+    """
     import socket
-    # Check if port is already in use (TensorBoard already running)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if s.connect_ex(("localhost", TB_PORT)) == 0:
-            return  # already up
+            return  # already running
 
     TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Inline wrapper that patches numpy before tensorboard imports
+    wrapper = (
+        "import numpy as np; "
+        "np.string_ = np.bytes_; "
+        "np.unicode_ = np.str_; "
+        f"import sys; sys.argv = ['tensorboard', '--logdir', {str(TB_LOGS_DIR)!r}, "
+        f"'--port', '{TB_PORT}', '--host', 'localhost']; "
+        "from tensorboard.main import run_main; run_main()"
+    )
     subprocess.Popen(
-        [sys.executable, "-m", "tensorboard.main",
-         "--logdir", str(TB_LOGS_DIR),
-         "--port", str(TB_PORT),
-         "--host", "localhost"],
+        [sys.executable, "-c", wrapper],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
