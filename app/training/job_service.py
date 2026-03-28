@@ -152,8 +152,11 @@ def list_jobs(
 def _deserialise(row: Dict[str, Any]) -> Dict[str, Any]:
     """Parse JSON fields in a training_jobs row."""
     result = dict(row)
-    for field in ("params_json", "dataset_json", "metrics_json", "model_json", "progress_json"):
+    for field in ("params_json", "dataset_json", "metrics_json", "model_json"):
         raw = result.pop(field, None)
         key = field.replace("_json", "")
         result[key] = json.loads(raw) if raw else None
+    # Keep the key name as progress_json so the JS can read job.progress_json
+    raw_progress = result.get("progress_json")
+    result["progress_json"] = json.loads(raw_progress) if raw_progress else None
     return result

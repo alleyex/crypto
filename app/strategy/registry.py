@@ -6,15 +6,15 @@ from app.strategy.ppo_strategy import generate_signal as generate_ppo_signal
 
 
 StrategyResult = Optional[Dict[str, Union[float, str]]]
-StrategyGenerator = Callable[[DBConnection, str], StrategyResult]
+StrategyGenerator = Callable[[DBConnection, str, str], StrategyResult]
 
 
-def _run_ma_cross(connection: DBConnection, symbol: str) -> StrategyResult:
-    return generate_ma_cross_signal(connection, symbol=symbol)
+def _run_ma_cross(connection: DBConnection, symbol: str, timeframe: str) -> StrategyResult:
+    return generate_ma_cross_signal(connection, symbol=symbol, timeframe=timeframe)
 
 
-def _run_ppo(connection: DBConnection, symbol: str) -> StrategyResult:
-    return generate_ppo_signal(connection, symbol=symbol)
+def _run_ppo(connection: DBConnection, symbol: str, timeframe: str) -> StrategyResult:
+    return generate_ppo_signal(connection, symbol=symbol, timeframe=timeframe)
 
 
 STRATEGY_REGISTRY: dict[str, StrategyGenerator] = {
@@ -37,6 +37,7 @@ def generate_registered_signal(
     connection: DBConnection,
     strategy_name: str = "ma_cross",
     symbol: str = "BTCUSDT",
+    timeframe: str = "1m",
 ) -> StrategyResult:
     strategy = get_strategy(strategy_name)
-    return strategy(connection, symbol)
+    return strategy(connection, symbol, timeframe)

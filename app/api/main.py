@@ -3063,7 +3063,11 @@ class PPOJobRequest(BaseModel):
     batch_size: int = Field(default=256, ge=16)
     n_epochs: int = Field(default=10, ge=1, le=50)
     gamma: float = Field(default=0.99, ge=0.0, le=1.0)
+    gae_lambda: float = Field(default=0.95, ge=0.0, le=1.0)
+    clip_range: float = Field(default=0.2, ge=0.0, le=1.0)
+    ent_coef: float = Field(default=0.01, ge=0.0, le=1.0)
     seed: int = Field(default=42)
+    frame_stack: int = Field(default=1, ge=1, le=20)
 
 
 @app.post("/training/ppo-jobs")
@@ -3076,12 +3080,14 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
     import json as _json
     import threading
 
+    from app.training.ppo_trainer import resolve_episode_lengths
     from app.training.ppo_trainer import run_ppo_training
     from app.core.db import get_connection as _get_conn
 
     connection = get_connection()
     try:
         run_migrations(connection)
+        train_ep_len, eval_ep_len = resolve_episode_lengths(body.timeframe)
 
         params = {
             "job_type":      "ppo",
@@ -3093,7 +3099,13 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
             "batch_size":    body.batch_size,
             "n_epochs":      body.n_epochs,
             "gamma":         body.gamma,
+            "gae_lambda":    body.gae_lambda,
+            "clip_range":    body.clip_range,
+            "ent_coef":      body.ent_coef,
+            "train_ep_len":  train_ep_len,
+            "eval_ep_len":   eval_ep_len,
             "seed":          body.seed,
+            "frame_stack":   body.frame_stack,
         }
         job_id = create_training_job(
             connection,
@@ -3143,7 +3155,11 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
                 batch_size=body.batch_size,
                 n_epochs=body.n_epochs,
                 gamma=body.gamma,
+                gae_lambda=body.gae_lambda,
+                clip_range=body.clip_range,
+                ent_coef=body.ent_coef,
                 seed=body.seed,
+                frame_stack=body.frame_stack,
                 job_id=job_id,
                 on_progress=_on_progress,
             )

@@ -1570,6 +1570,72 @@ def render_admin_page() -> str:
         margin-bottom: 12px;
       }
 
+      .ppo-job-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .ppo-job-details {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .ppo-job-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .ppo-job-detail-card {
+        padding: 12px;
+        border-radius: 12px;
+        background: #0b1219;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .ppo-job-detail-card strong {
+        display: block;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .ppo-job-detail-card code {
+        font-size: 11px;
+        word-break: break-all;
+      }
+
+      .ppo-job-detail-list {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+      }
+
+      .ppo-job-detail-list div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .ppo-job-detail-list span:last-child {
+        text-align: right;
+        color: var(--text);
+      }
+
+      .ppo-job-detail-table-wrap {
+        margin-top: 12px;
+      }
+
+      .ppo-job-detail-note {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
       .training-inline-checks {
         display: flex;
         flex-wrap: wrap;
@@ -1857,6 +1923,10 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <div class="ctrl-section">
             <div class="fetch-field-label">Active Symbols</div>
             <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Timeframes</div>
+            <div id="scheduler-timeframe-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
           <div style="margin-bottom:18px">
             <button class="fetch-btn-primary" data-action="scheduler-strategy-save">Apply Strategy State</button>
@@ -2471,6 +2541,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <label for="ppo-gamma-input">Gamma</label>
                 <input id="ppo-gamma-input" type="number" value="0.99" min="0" max="1" step="0.01" />
               </div>
+              <div class="training-field">
+                <label for="ppo-gae-lambda-input">GAE Lambda</label>
+                <input id="ppo-gae-lambda-input" type="number" value="0.95" min="0" max="1" step="0.01" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-clip-range-input">Clip Range</label>
+                <input id="ppo-clip-range-input" type="number" value="0.2" min="0" max="1" step="0.01" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-ent-coef-input">Entropy Coef</label>
+                <input id="ppo-ent-coef-input" type="number" value="0.01" min="0" max="1" step="0.001" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-frame-stack-input">Frame Stack</label>
+                <input id="ppo-frame-stack-input" type="number" value="1" min="1" max="20" step="1" />
+              </div>
             </div>
           </details>
           <div class="button-row">
@@ -2478,10 +2564,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="ppo-jobs-refresh">Refresh Jobs</button>
           </div>
           <div class="message" id="ppo-train-message">PPO training workspace ready.</div>
-          <div style="margin-top:10px;font-size:12px;color:var(--muted)">
-            TensorBoard:
-            <a id="ppo-tb-link" href="http://localhost:6006" target="_blank" style="color:var(--accent)">http://localhost:6006</a>
-          </div>
         </article>
 
         <article class="panel data-card">
@@ -4297,6 +4379,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
           });
         }
+        const schedulerTimeframePills = el("scheduler-timeframe-pills");
+        if (schedulerTimeframePills && !_schedulerPillsDirty) {
+          try {
+            const tfData = await api("/scheduler/timeframes");
+            const tfOrder = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
+            const supportedTf = (tfData?.supported_timeframes || ["1m","5m"]).slice().sort((a,b) => (tfOrder[a]||0)-(tfOrder[b]||0));
+            const activeTfSet = new Set(tfData?.timeframe_names || ["1m"]);
+            schedulerTimeframePills.innerHTML = supportedTf
+              .map((tf) => `<button type="button" class="toggle-pill${activeTfSet.has(tf) ? " selected" : ""}" data-tf="${tf}">${tf}</button>`)
+              .join("");
+            schedulerTimeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
+              pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
+            });
+          } catch (e) { /* ignore */ }
+        }
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
         if (schedulerEffectiveLimitInput) {
           schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
@@ -4495,6 +4592,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 symbol_names: payload.symbol_names,
               }),
             });
+            const selectedTf = Array.from(
+              el("scheduler-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []
+            ).map((p) => p.dataset.tf);
+            if (selectedTf.length > 0) {
+              await api("/scheduler/timeframes", {
+                method: "POST",
+                body: JSON.stringify({ timeframe_names: selectedTf }),
+              });
+            }
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify(payload),
@@ -5140,6 +5246,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let ppoJobsState = [];
       let ppoSelectedJobId = null;
       let ppoPollingTimer = null;
+      let ppoExpandedJobIds = new Set();
 
       function ppoStatusTone(status) {
         if (status === "done") return "ok";
@@ -5152,6 +5259,85 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (value == null || value === "") return "n/a";
         const n = Number(value);
         return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(digits) : String(value);
+      }
+
+      function renderPPOJobDetails(job) {
+        const params = job.params || {};
+        const metrics = job.metrics || {};
+        const model = job.model || {};
+        const wf = Array.isArray(metrics.walk_forward) ? metrics.walk_forward : [];
+        const paramRows = [
+          ["total_steps", (params.total_steps ?? "n/a").toLocaleString?.() || String(params.total_steps ?? "n/a")],
+          ["eval_windows", params.eval_windows ?? "n/a"],
+          ["learning_rate", params.learning_rate ?? "n/a"],
+          ["n_steps", params.n_steps ?? "n/a"],
+          ["batch_size", params.batch_size ?? "n/a"],
+          ["n_epochs", params.n_epochs ?? "n/a"],
+          ["train_ep_len", params.train_ep_len ?? "n/a"],
+          ["eval_ep_len", params.eval_ep_len ?? "n/a"],
+          ["gamma", params.gamma ?? "n/a"],
+          ["gae_lambda", params.gae_lambda ?? "n/a"],
+          ["clip_range", params.clip_range ?? "n/a"],
+          ["ent_coef", params.ent_coef ?? "n/a"],
+          ["frame_stack", params.frame_stack ?? 1],
+          ["fee_rate", params.fee_rate ?? "n/a"],
+          ["seed", params.seed ?? "n/a"],
+        ];
+
+        return `
+          <div class="ppo-job-details">
+            <div class="ppo-job-detail-grid">
+              <div class="ppo-job-detail-card">
+                <strong>Training Parameters</strong>
+                <div class="ppo-job-detail-list">
+                  ${paramRows.map(([label, value]) => `<div><span>${label}</span><span>${value}</span></div>`).join("")}
+                </div>
+              </div>
+              <div class="ppo-job-detail-card">
+                <strong>Run Summary</strong>
+                <div class="ppo-job-detail-list">
+                  <div><span>status</span><span>${String(job.status || "n/a").toUpperCase()}</span></div>
+                  <div><span>verdict</span><span>${metrics.verdict || "n/a"}</span></div>
+                  <div><span>win_rate</span><span>${metrics.win_rate != null ? (metrics.win_rate * 100).toFixed(1) + "%" : "n/a"}</span></div>
+                  <div><span>avg_edge</span><span>${ppoFmt(metrics.avg_edge)}</span></div>
+                  <div><span>finished_at</span><span>${job.finished_at || "running..."}</span></div>
+                  <div><span>model</span><span>${model.model_path ? `<code>${model.model_path.split("/").pop()}</code>` : "n/a"}</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="ppo-job-detail-table-wrap">
+              <strong style="display:block;margin-bottom:8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)">Eval Windows</strong>
+              ${wf.length ? `
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Window</th>
+                        <th class="num">PPO Ret</th>
+                        <th class="num">B&H Ret</th>
+                        <th class="num">Edge</th>
+                        <th class="num">Trades</th>
+                        <th>Beats</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${wf.map((r) => {
+                        const edge = ((r.ppo?.log_ret ?? 0) - (r.bnh?.log_ret ?? 0)).toFixed(5);
+                        return `<tr>
+                          <td>${r.window ?? "—"}</td>
+                          <td class="num">${ppoFmt(r.ppo?.pct_ret)}</td>
+                          <td class="num">${ppoFmt(r.bnh?.pct_ret)}</td>
+                          <td class="num">${edge}</td>
+                          <td class="num">${r.ppo?.n_trades ?? "—"}</td>
+                          <td>${r.beats_bnh ? '<span class="ok">YES</span>' : '<span class="bad">NO</span>'}</td>
+                        </tr>`;
+                      }).join("")}
+                    </tbody>
+                  </table>
+                </div>
+              ` : `<div class="ppo-job-detail-note">Eval window results are not available yet for this job.</div>`}
+            </div>
+          </div>`;
       }
 
       function renderPPOSummary(job) {
@@ -5232,6 +5418,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (!board) return;
         const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
         ppoJobsState = jobs;
+        ppoExpandedJobIds = new Set([...ppoExpandedJobIds].filter((id) => jobs.some((job) => Number(job.id) === Number(id))));
         if (!jobs.length) {
           board.innerHTML = `<div class="ops-card"><div class="ops-card-title">No PPO jobs yet.</div><div class="ops-card-note">Click "Start PPO Training" to create the first job.</div></div>`;
           renderPPOSummary(null);
@@ -5244,13 +5431,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const params  = job.params  || {};
           const tone    = ppoStatusTone(job.status);
           const sel     = Number(job.id) === Number(resolvedId);
+          const expanded = ppoExpandedJobIds.has(Number(job.id));
           const verdictTone = metrics.verdict === "PASS" ? "ok" : metrics.verdict === "FAIL" ? "bad" : "warn";
           return `
             <div class="ops-card training-job-row${sel ? " selected" : ""}" data-ppo-job-id="${job.id}">
               <div class="ops-card-header">
                 <div class="ops-card-title">Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe} \u00b7 PPO</div>
-                <div style="display:flex;gap:8px;align-items:center">
+                <div class="ppo-job-actions">
                   <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-toggle" data-job-id="${job.id}">${expanded ? "Hide Details" : "Details"}</button>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-reuse" data-job-id="${job.id}">Reuse</button>
+                  ${job.status === "done" ? `<button class="secondary" style="padding:2px 10px;font-size:11px;border-color:var(--accent);color:var(--accent)" data-action="ppo-job-deploy" data-job-id="${job.id}">Deploy</button>` : ""}
                   <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-delete" data-job-id="${job.id}">Delete</button>
                 </div>
               </div>
@@ -5266,6 +5457,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div><strong>Avg edge</strong>${ppoFmt(metrics.avg_edge)}</div>
                 <div><strong>Finished</strong>${job.finished_at || job.created_at || "\u2014"}</div>
               </div>
+              ${expanded ? renderPPOJobDetails(job) : ""}
               ${job.error ? `<div class="ops-card-note" style="color:var(--bad)">${job.error}</div>` : ""}
             </div>`;
         }).join("");
@@ -5330,6 +5522,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               batch_size:    parseInt(el("ppo-batch-size-input")?.value || "256"),
               n_epochs:      parseInt(el("ppo-n-epochs-input")?.value || "10"),
               gamma:         parseFloat(el("ppo-gamma-input")?.value || "0.99"),
+              gae_lambda:    parseFloat(el("ppo-gae-lambda-input")?.value || "0.95"),
+              clip_range:    parseFloat(el("ppo-clip-range-input")?.value || "0.2"),
+              ent_coef:      parseFloat(el("ppo-ent-coef-input")?.value || "0.01"),
+              frame_stack:   parseInt(el("ppo-frame-stack-input")?.value || "1"),
             };
             const result = await api("/training/ppo-jobs", { method: "POST", body: JSON.stringify(body) });
             ppoSelectedJobId = result.id;
@@ -5363,6 +5559,63 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
+        if (action === "ppo-job-deploy") {
+          const jobId = event.target.dataset?.jobId;
+          if (!jobId) return;
+          const btn = event.target;
+          btn.disabled = true;
+          btn.textContent = "Deploying...";
+          try {
+            await api(`/training/ppo-jobs/${jobId}/deploy`, { method: "POST" });
+            btn.textContent = "Deployed";
+            btn.style.borderColor = "var(--good)";
+            btn.style.color = "var(--good)";
+            const msg = document.getElementById("ppo-train-message");
+            if (msg) { msg.textContent = `Job #${jobId} deployed as active model.`; msg.className = "message ok"; }
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = "Deploy";
+            const msg = document.getElementById("ppo-train-message");
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
+          }
+          return;
+        }
+
+        if (action === "ppo-job-reuse") {
+          const jobId = Number(event.target.dataset?.jobId);
+          const job   = ppoJobsState.find((j) => j.id === jobId);
+          if (!job) return;
+          const p = job.params || {};
+          const setVal = (id, val) => { const el2 = document.getElementById(id); if (el2 && val != null) el2.value = val; };
+          setVal("ppo-symbol-input",       job.symbol);
+          setVal("ppo-timeframe-input",    job.timeframe);
+          setVal("ppo-steps-input",        p.total_steps);
+          setVal("ppo-eval-windows-input", p.eval_windows);
+          setVal("ppo-fee-rate-input",     p.fee_rate);
+          setVal("ppo-seed-input",         p.seed);
+          setVal("ppo-lr-input",           p.learning_rate);
+          setVal("ppo-n-steps-input",      p.n_steps);
+          setVal("ppo-batch-size-input",   p.batch_size);
+          setVal("ppo-n-epochs-input",     p.n_epochs);
+          setVal("ppo-gamma-input",        p.gamma);
+          setVal("ppo-gae-lambda-input",   p.gae_lambda);
+          setVal("ppo-clip-range-input",   p.clip_range);
+          setVal("ppo-ent-coef-input",     p.ent_coef);
+          setVal("ppo-frame-stack-input",  p.frame_stack);
+          const msg = document.getElementById("ppo-train-message");
+          if (msg) { msg.textContent = `Parameters loaded from Job #${jobId}.`; msg.className = "message ok"; }
+          return;
+        }
+
+        if (action === "ppo-job-toggle") {
+          const jobId = Number(event.target.dataset?.jobId);
+          if (!jobId) return;
+          if (ppoExpandedJobIds.has(jobId)) ppoExpandedJobIds.delete(jobId);
+          else ppoExpandedJobIds.add(jobId);
+          renderPPOJobs({ jobs: ppoJobsState }, ppoSelectedJobId);
+          return;
+        }
+
         if (action === "ppo-deploy") {
           const jobId = event.target.dataset?.jobId || ppoSelectedJobId;
           const deployMsg = el("ppo-deploy-message");
@@ -5386,7 +5639,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("ppo-jobs-board")?.addEventListener("click", (event) => {
+        if (event.target.closest("[data-action='ppo-job-toggle']")) return;
         if (event.target.closest("[data-action='ppo-job-delete']")) return;
+        if (event.target.closest("[data-action='ppo-job-reuse']")) return;
+        if (event.target.closest("[data-action='ppo-job-deploy']")) return;
         const card = event.target.closest("[data-ppo-job-id]");
         if (!card) return;
         ppoSelectedJobId = Number(card.dataset.ppoJobId);

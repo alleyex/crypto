@@ -58,13 +58,13 @@ INSERT INTO signals (
 # State persistence
 # ---------------------------------------------------------------------------
 
-def _state_path(symbol: str) -> Path:
+def _state_path(symbol: str, timeframe: str) -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    return STATE_DIR / f"{symbol.lower()}.json"
+    return STATE_DIR / f"{symbol.lower()}_{timeframe.lower()}.json"
 
 
-def _load_state(symbol: str) -> dict:
-    p = _state_path(symbol)
+def _load_state(symbol: str, timeframe: str) -> dict:
+    p = _state_path(symbol, timeframe)
     if p.exists():
         try:
             return json.loads(p.read_text())
@@ -73,28 +73,34 @@ def _load_state(symbol: str) -> dict:
     return {"position": 0, "entry_price": None, "bars_held": 0}
 
 
-def _save_state(symbol: str, state: dict) -> None:
-    _state_path(symbol).write_text(json.dumps(state))
+def _save_state(symbol: str, timeframe: str, state: dict) -> None:
+    _state_path(symbol, timeframe).write_text(json.dumps(state))
 
 
 # ---------------------------------------------------------------------------
-# Model loader (cached per process)
+# Model loader (cached per process, invalidated by model file mtime)
 # ---------------------------------------------------------------------------
 
 _model_cache: Dict[str, Any] = {}
+_model_cache_mtime: Dict[str, float] = {}
 
 
 def _load_model(symbol: str, timeframe: str = "1m"):
     key = f"{symbol}_{timeframe}"
-    if key not in _model_cache:
+    model_path = MODELS_DIR / f"ppo_{symbol}_{timeframe}.zip"
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"PPO model not found: {model_path}\n"
+            f"Run: python scripts/train_ppo.py --symbol {symbol} --timeframe {timeframe}"
+        )
+
+    model_mtime = model_path.stat().st_mtime
+    cached_mtime = _model_cache_mtime.get(key)
+    if key not in _model_cache or cached_mtime != model_mtime:
         from stable_baselines3 import PPO
-        model_path = MODELS_DIR / f"ppo_{symbol}_{timeframe}.zip"
-        if not model_path.exists():
-            raise FileNotFoundError(
-                f"PPO model not found: {model_path}\n"
-                f"Run: python scripts/train_ppo.py --symbol {symbol} --timeframe {timeframe}"
-            )
+
         _model_cache[key] = PPO.load(str(model_path))
+        _model_cache_mtime[key] = model_mtime
     return _model_cache[key]
 
 
@@ -206,7 +212,7 @@ def generate_signal(
         return None  # model not trained yet; skip silently
 
     # Load + sync position state
-    state = _load_state(symbol)
+    state = _load_state(symbol, timeframe)
     db_position = _get_db_position(connection, symbol)
 
     # If DB disagrees with cached state, trust DB and reset bars_held
@@ -275,7 +281,7 @@ def generate_signal(
         state["bars_held"] = state.get("bars_held", 0) + 1
 
     state["position"] = new_position
-    _save_state(symbol, state)
+    _save_state(symbol, timeframe, state)
 
     # Persist signal to DB
     # short_ma = prob_buy, long_ma = prob_sell

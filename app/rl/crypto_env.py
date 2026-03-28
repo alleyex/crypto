@@ -27,6 +27,7 @@ Episode:
 from __future__ import annotations
 
 import math
+from collections import deque
 import numpy as np
 import pandas as pd
 import gymnasium as gym
@@ -79,6 +80,7 @@ class CryptoTradingEnv(gym.Env):
         episode_length: int = DEFAULT_EP_LEN,
         deterministic: bool = False,
         seed: Optional[int] = None,
+        frame_stack: int = 1,
     ) -> None:
         super().__init__()
 
@@ -90,6 +92,7 @@ class CryptoTradingEnv(gym.Env):
         self._df            = df.reset_index(drop=True)
         self._episode_length = episode_length
         self._deterministic = deterministic
+        self._frame_stack   = frame_stack
 
         # Pre-extract numpy arrays for speed
         self._feat_arr  = df[_FEAT_COLS].to_numpy(dtype=np.float32)
@@ -108,12 +111,19 @@ class CryptoTradingEnv(gym.Env):
             )
 
         # Gymnasium spaces
+        obs_dim_total = OBS_DIM * frame_stack
         self.observation_space = spaces.Box(
-            low  = np.full(OBS_DIM, -10.0, dtype=np.float32),
-            high = np.full(OBS_DIM,  10.0, dtype=np.float32),
+            low  = np.full(obs_dim_total, -10.0, dtype=np.float32),
+            high = np.full(obs_dim_total,  10.0, dtype=np.float32),
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(3)
+
+        # Frame buffer (pre-filled with zeros)
+        self._frame_buffer: deque = deque(
+            [np.zeros(OBS_DIM, dtype=np.float32)] * frame_stack,
+            maxlen=frame_stack,
+        )
 
         # Episode state (initialised in reset)
         self._start_idx: int = 0
@@ -149,6 +159,10 @@ class CryptoTradingEnv(gym.Env):
         self._entry_ret = 0.0
         self._bars_held = 0
 
+        # Refill frame buffer with zeros before pushing initial obs
+        for i in range(self._frame_stack):
+            self._frame_buffer[i] = np.zeros(OBS_DIM, dtype=np.float32)
+
         return self._obs(), {}
 
     def step(
@@ -183,7 +197,7 @@ class CryptoTradingEnv(gym.Env):
         done      = self._step_idx >= self._episode_length
         truncated = False
 
-        obs  = self._obs() if not done else np.zeros(OBS_DIM, dtype=np.float32)
+        obs  = self._obs() if not done else np.zeros(OBS_DIM * self._frame_stack, dtype=np.float32)
         info = {
             "step":      self._step_idx,
             "position":  self._position,
@@ -208,7 +222,9 @@ class CryptoTradingEnv(gym.Env):
         state  = np.array(
             [float(self._position), upnl, bars_n], dtype=np.float32
         )
-        return np.concatenate([feats, state])
+        raw_obs = np.concatenate([feats, state])
+        self._frame_buffer.append(raw_obs)
+        return np.concatenate(list(self._frame_buffer))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +237,7 @@ def make_env(
     episode_length: int = DEFAULT_EP_LEN,
     deterministic: bool = False,
     seed: Optional[int] = None,
+    frame_stack: int = 1,
 ) -> CryptoTradingEnv:
     """Convenience factory: load candles from DB, build features, return env."""
     from app.core.db import get_connection
@@ -258,4 +275,5 @@ def make_env(
         episode_length=episode_length,
         deterministic=deterministic,
         seed=seed,
+        frame_stack=frame_stack,
     )

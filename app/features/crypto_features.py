@@ -104,6 +104,17 @@ def build_crypto_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy().sort_values("open_time").reset_index(drop=True)
 
+    # ── Time features (open_time is UTC milliseconds) ─────────────────────
+    ts_sec = df["open_time"] / 1000
+    hour = (ts_sec // 3600 % 24).astype(float)
+    dow  = (ts_sec // 86400 % 7).astype(float)   # 0=Thu (unix epoch), wraps weekly
+    df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+    df["dow_sin"]  = np.sin(2 * np.pi * dow  / 7)
+    df["dow_cos"]  = np.cos(2 * np.pi * dow  / 7)
+    df["is_asia_session"] = ((hour >= 0) & (hour < 8)).astype(np.float32)
+    df["is_us_session"]   = ((hour >= 13) & (hour < 22)).astype(np.float32)
+
     close = df["close"].astype(float)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -220,4 +231,8 @@ def get_feature_columns() -> list:
         "log_vol_z", "log_trades_z", "avg_quote_per_trade_z",
         # Type ④: liquidity → log1p → robust z-scored
         "liquidity_proxy_z",
+        # Time features
+        "hour_sin", "hour_cos",
+        "dow_sin",  "dow_cos",
+        "is_asia_session", "is_us_session",
     ]
