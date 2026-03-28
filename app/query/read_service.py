@@ -649,7 +649,7 @@ def get_strategy_closed_trades(
     fills_by_order_id = {int(item["order_id"]): item for item in fills}
     strategy_filter = strategy_name.strip() if strategy_name else None
     filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
-    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
 
     for order in filled_orders:
@@ -657,7 +657,8 @@ def get_strategy_closed_trades(
         if strategy_filter and current_strategy_name != strategy_filter:
             continue
         symbol = str(order["symbol"])
-        key = (current_strategy_name, symbol)
+        timeframe = str(order.get("timeframe") or "1m")
+        key = (current_strategy_name, symbol, timeframe)
         position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
 
         qty = float(order["qty"])
@@ -680,6 +681,7 @@ def get_strategy_closed_trades(
             {
                 "strategy_name": current_strategy_name,
                 "symbol": symbol,
+                "timeframe": timeframe,
                 "qty": close_qty,
                 "entry_price": average_entry_price,
                 "exit_price": price,
@@ -743,7 +745,7 @@ def get_execution_report(
     ]
 
     filled_orders = list(reversed(filtered_orders))
-    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
     total_fees = 0.0
     for order in filled_orders:
@@ -752,7 +754,8 @@ def get_execution_report(
         if created_at < cutoff:
             continue
         current_strategy_name = str(order["strategy_name"])
-        key = (current_strategy_name, symbol)
+        timeframe = str(order.get("timeframe") or "1m")
+        key = (current_strategy_name, symbol, timeframe)
         position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
         qty = float(order["qty"])
         price = float(order["price"])
@@ -777,6 +780,7 @@ def get_execution_report(
                 if earlier["side"] == "BUY"
                 and earlier["symbol"] == symbol
                 and earlier["strategy_name"] == current_strategy_name
+                and str(earlier.get("timeframe") or "1m") == timeframe
             ),
             None,
         )
@@ -793,6 +797,7 @@ def get_execution_report(
             {
                 "strategy_name": current_strategy_name,
                 "symbol": symbol,
+                "timeframe": timeframe,
                 "qty": close_qty,
                 "entry_price": average_entry_price,
                 "exit_price": price,

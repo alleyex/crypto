@@ -3887,7 +3887,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return `
             <div class="ops-card">
               <div class="ops-card-header">
-                <div class="ops-card-title">${item.strategy_name} · ${item.symbol}</div>
+                <div class="ops-card-title">${item.strategy_name} · ${item.symbol}/${item.timeframe || "1m"}</div>
                 <div class="chip"><span class="${pnlClass}">${item.status}</span></div>
               </div>
               <div class="ops-card-grid">
