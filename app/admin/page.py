@@ -2265,6 +2265,24 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </div>
       </article>
 
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Order Book Collection</h2>
+            <p>Binance top-10 depth snapshots, collected every minute.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="ob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="ob-enable-btn" data-action="ob-enable" style="display:none">Enable Collection</button>
+            <button class="secondary" id="ob-pause-btn"  data-action="ob-pause"  style="display:none">Pause</button>
+            <button class="secondary" data-action="ob-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="ob-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
       </section>
       </div>
 
@@ -2327,8 +2345,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </article>
 
         <article class="panel data-card" style="grid-column: 1 / -1;">
-          <h2>Active Feature Set — V2 (19 features)</h2>
-          <p>Model input features used by PPO and LightGBM. All computed by <code>build_crypto_features()</code> in <code>app/features/crypto_features.py</code>. V2 adds trend, momentum, and K-bar pattern features — PPO walk-forward avg return improved from +40.97% → +80.16%.</p>
+          <h2>Active Feature Set — V2 (25 features)</h2>
+          <p>Model input features used by PPO. All computed by <code>build_crypto_features()</code> in <code>app/features/crypto_features.py</code>. V2 adds trend, momentum, K-bar pattern, and time features. OBS_DIM = 28 (25 features + position + upnl + bars_held).</p>
           <table class="data-table" style="margin-top:14px">
             <thead>
               <tr>
@@ -2346,7 +2364,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <tr><td><code>log_ret_10</code></td><td>Returns</td><td>clip ±0.60</td><td>10-bar log return</td><td class="num">−1.89</td></tr>
               <tr><td><code>log_ret_20</code></td><td>Returns</td><td>clip ±0.80</td><td>20-bar log return</td><td class="num" style="color:#4ade80">−2.60 ✓</td></tr>
               <tr><td><code>flow_imbalance</code></td><td>Order Flow</td><td>bounded [−1, 1]</td><td>Taker buy imbalance: 2×taker_buy/volume − 1</td><td class="num">−0.31</td></tr>
-              <tr><td><code>hl_spread</code></td><td>Volatility</td><td>clip [0, 0.5]</td><td>(high − low) / close</td><td class="num">+0.00</td></tr>
               <tr><td><code>dist_sma_60</code></td><td>Trend</td><td>clip ±0.20</td><td>(close − SMA60) / close</td><td class="num" style="color:#4ade80">−3.07 ✓</td></tr>
               <tr><td><code>rsi_14</code></td><td>Momentum</td><td>bounded [−1, 1]</td><td>RSI(14) normalised: RSI/50 − 1</td><td class="num">−1.38</td></tr>
               <tr><td><code>close_location</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>(close − low) / (high − low) — 棒內收盤位置</td><td class="num" style="color:#4ade80">+2.61 ✓</td></tr>
@@ -2354,14 +2371,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <tr><td><code>lower_wick_ratio</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>下影線 / (high − low) — 買盤支撐</td><td class="num" style="color:#4ade80">+2.68 ✓</td></tr>
               <tr><td><code>atr_14_norm_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>ATR(14) / close z-scored</td><td class="num">−1.01</td></tr>
               <tr><td><code>rv_20_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>20-bar realized volatility z-scored</td><td class="num">−0.62</td></tr>
-              <tr><td><code>hl_spread_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>hl_spread z-scored</td><td class="num" style="color:#4ade80">−2.13 ✓</td></tr>
+              <tr><td><code>hl_spread</code></td><td>Volatility</td><td>clip [0, 0.5]</td><td>(high − low) / close</td><td class="num">+0.00</td></tr>
+              <tr><td><code>hl_spread_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>(high − low) / close z-scored — regime-adjusted spread</td><td class="num" style="color:#4ade80">−2.13 ✓</td></tr>
               <tr><td><code>log_vol_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(volume+1) z-scored</td><td class="num" style="color:#4ade80">−2.04 ✓</td></tr>
-              <tr><td><code>log_trades_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(trades+1) z-scored</td><td class="num">−1.33</td></tr>
-              <tr><td><code>avg_quote_per_trade_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>quote_asset_volume / trades z-scored</td><td class="num">−1.02</td></tr>
-              <tr><td><code>liquidity_proxy_z</code></td><td>Liquidity</td><td>log1p → robust z-score w=100</td><td>volume / hl_spread z-scored (IQR-based)</td><td class="num">−1.04</td></tr>
+              <tr><td><code>log_trades_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(trades+1) z-scored — 交易頻率</td><td class="num">−1.33</td></tr>
+              <tr><td><code>avg_quote_per_trade_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>quote_vol / trades z-scored — 平均交易規模</td><td class="num">−1.02</td></tr>
+              <tr><td><code>liquidity_proxy_z</code></td><td>Liquidity</td><td>log1p → robust z-score w=100</td><td>quote_vol / hl_spread z-scored (IQR-based)</td><td class="num">−1.04</td></tr>
+              <tr><td><code>hour_sin</code></td><td>Time</td><td>bounded [−1, 1]</td><td>sin(2π × hour / 24) — 小時週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>hour_cos</code></td><td>Time</td><td>bounded [−1, 1]</td><td>cos(2π × hour / 24) — 小時週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>dow_sin</code></td><td>Time</td><td>bounded [−1, 1]</td><td>sin(2π × day_of_week / 7) — 星期週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>dow_cos</code></td><td>Time</td><td>bounded [−1, 1]</td><td>cos(2π × day_of_week / 7) — 星期週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>is_asia_session</code></td><td>Time</td><td>binary {0, 1}</td><td>hour ∈ [0, 8) UTC — 亞洲時段</td><td class="num">—</td></tr>
+              <tr><td><code>is_us_session</code></td><td>Time</td><td>binary {0, 1}</td><td>hour ∈ [13, 22) UTC — 美國時段</td><td class="num">—</td></tr>
             </tbody>
           </table>
-          <div class="inline-note" style="margin-top:10px">✓ = |t-stat| &gt; 2（統計顯著，95% 信心水準）。IC 為負 = 均值回歸；IC 為正 = 動能延續。已移除：<code>dist_sma_20</code>（r=+0.92 與 log_ret_10 重複）、<code>body_ratio</code>（t=+0.23 無訊號）、<code>taker_ratio</code>（r=1.0 與 flow_imbalance 完全重複）。</div>
+          <div class="inline-note" style="margin-top:10px">✓ = |t-stat| &gt; 2（統計顯著，95% 信心水準）。IC 為負 = 均值回歸；IC 為正 = 動能延續。已移除：<code>dist_sma_20</code>（r=+0.92 與 log_ret_10 重複）、<code>body_ratio</code>（t=+0.23 無訊號）、<code>taker_ratio</code>（r=1.0 與 flow_imbalance 完全重複）。2026-03-29 ablation test：移除 hl_spread / log_vol_z / lower_wick_ratio / is_asia_session / is_us_session 後效果變差（FAIL↑ vs MARGINAL），故全數還原。</div>
         </article>
 
       </section>
@@ -4973,6 +4997,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
       refreshMarketStatus();
       refreshFetchHistory();
+      refreshObStatus();
       refreshPPOJobs().catch((error) => {
         const msg = el("ppo-train-message");
         if (msg) {
@@ -5195,7 +5220,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           closedBoard.innerHTML = trades.length
             ? trades.map((trade) => `<div class="ops-card">
                 <div class="ops-card-header">
-                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}</div>
+                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}/${trade.timeframe || "1m"}</div>
                   <div class="chip"><span class="${Number(trade.realized_pnl || 0) >= 0 ? "ok" : "bad"}">${Number(trade.realized_pnl || 0).toFixed(6)}</span></div>
                 </div>
                 <div class="ops-card-grid">
@@ -5743,6 +5768,73 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           }
         } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
       }
+
+      // ── Order Book Collection ────────────────────────────────────────────
+      async function refreshObStatus() {
+        try {
+          const r = await api("/orderbook/status");
+          const badge = el("ob-status-badge");
+          const enableBtn = el("ob-enable-btn");
+          const pauseBtn  = el("ob-pause-btn");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
+          }
+          if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
+          if (pauseBtn)  pauseBtn.style.display  = r.enabled ? "inline-flex" : "none";
+
+          const board = el("ob-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No data collected yet. Enable collection to start.</span>`;
+            return;
+          }
+          const rows = r.symbols.map(s => {
+            const staleLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.stale_seconds}s ago</span>`
+              : `<span style="color:#4ade80">${s.stale_seconds}s ago</span>`;
+            return `<tr>
+              <td>${s.symbol}</td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${staleLabel}</td>
+              <td class="num">${s.latest}</td>
+            </tr>`;
+          }).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Snapshots</th>
+                  <th class="num">Coverage</th><th class="num">Last Seen</th>
+                  <th class="num">Latest (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+        } catch(e) {
+          const board = el("ob-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+        }
+      }
+
+      document.addEventListener("click", async (event) => {
+        const obAction = event.target.dataset?.action;
+        if (obAction === "ob-refresh") { await refreshObStatus(); return; }
+        if (obAction === "ob-enable") {
+          await api("/orderbook/enable", { method: "POST" });
+          await refreshObStatus();
+          return;
+        }
+        if (obAction === "ob-pause") {
+          await api("/orderbook/pause", { method: "POST" });
+          await refreshObStatus();
+          return;
+        }
+      });
 
       document.addEventListener("click", async (event) => {
         const action = event.target.dataset?.action;

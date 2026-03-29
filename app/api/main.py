@@ -3293,3 +3293,43 @@ def delete_training_job(job_id: int) -> Dict[str, Any]:
                 deleted_dirs.append(entry.name)
 
     return {"deleted": True, "job_id": job_id, "tb_dirs_removed": deleted_dirs}
+
+
+# ---------------------------------------------------------------------------
+# Order Book Collection
+# ---------------------------------------------------------------------------
+
+@app.get("/orderbook/status")
+def get_orderbook_status() -> Dict[str, Any]:
+    """Return order book collection status and per-symbol stats."""
+    from app.data.orderbook_service import (
+        get_orderbook_stats,
+        is_orderbook_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        stats = get_orderbook_stats(connection)
+    finally:
+        connection.close()
+    return {
+        "enabled": is_orderbook_collection_enabled(),
+        "symbols": stats,
+        "total_snapshots": sum(s["total"] for s in stats),
+    }
+
+
+@app.post("/orderbook/enable")
+def enable_orderbook() -> Dict[str, Any]:
+    """Enable order book collection."""
+    from app.data.orderbook_service import enable_orderbook_collection
+    enable_orderbook_collection()
+    return {"enabled": True}
+
+
+@app.post("/orderbook/pause")
+def pause_orderbook() -> Dict[str, Any]:
+    """Pause order book collection."""
+    from app.data.orderbook_service import disable_orderbook_collection
+    disable_orderbook_collection()
+    return {"enabled": False}

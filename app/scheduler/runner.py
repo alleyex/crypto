@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
+from app.pipeline.orderbook_job import run_orderbook_job
 from app.pipeline.risk_job import run_risk_job
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
@@ -528,6 +529,17 @@ def run_scheduler(
 
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
         active_symbol_names = _resolve_active_symbols(mode)
+
+        # Order book collection — runs every loop iteration, independent of strategy
+        try:
+            conn_ob = get_connection()
+            try:
+                run_orderbook_job(conn_ob, symbol_names=active_symbol_names)
+            finally:
+                conn_ob.close()
+        except Exception:
+            pass  # never let orderbook errors crash the scheduler
+
         if not active_strategy_names:
             log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"
             print(log_line)
