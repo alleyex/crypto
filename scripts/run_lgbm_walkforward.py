@@ -91,8 +91,9 @@ def run_walkforward(
 
     # Target: 1 if next bar closes higher, else 0
     df = df.copy()
-    df["target"] = (df["log_ret_1"].shift(-1) > 0).astype(int)
-    df = df.dropna(subset=feat_cols + ["target"]).reset_index(drop=True)
+    df["fwd_log_ret_1"] = df["log_ret_1"].shift(-1)
+    df = df.dropna(subset=feat_cols + ["fwd_log_ret_1"]).reset_index(drop=True)
+    df["target"] = (df["fwd_log_ret_1"] > 0).astype(int)
 
     total_needed = train_bars + test_bars * n_folds
     if len(df) < total_needed:
@@ -121,7 +122,7 @@ def run_walkforward(
         pred   = (proba >= 0.5).astype(int)
 
         # Directional returns: go long if pred=1, short if pred=0
-        actual_ret = df["log_ret_1"].iloc[train_end:test_end].values
+        actual_ret = df["fwd_log_ret_1"].iloc[train_end:test_end].values
         signal_ret = np.where(pred == 1, actual_ret, -actual_ret)
 
         acc     = _accuracy(y_test, pred)

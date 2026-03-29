@@ -1951,6 +1951,33 @@ def test_save_klines_does_not_duplicate_existing_candles() -> None:
         connection.close()
 
 
+def test_save_klines_skips_unclosed_latest_candle(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        monkeypatch.setattr(
+            "app.data.candles_service.datetime",
+            type(
+                "_FrozenDateTime",
+                (),
+                {
+                    "now": staticmethod(lambda tz=None: datetime.fromtimestamp(90, tz=timezone.utc)),
+                },
+            ),
+        )
+        closed = make_kline(0, 10.0)
+        open_kline = make_kline(60_000, 11.0)  # close_time=119999, still open at now_ms=90000
+
+        saved = save_klines(connection, [closed, open_kline])
+
+        rows = connection.execute("SELECT open_time, close FROM candles ORDER BY open_time ASC;").fetchall()
+        assert saved == 1
+        assert len(rows) == 1
+        assert rows[0][0] == 0
+    finally:
+        connection.close()
+
+
 def test_evaluate_signal_id_rejects_when_kill_switch_enabled(monkeypatch) -> None:
     monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: True)
     connection = make_connection()

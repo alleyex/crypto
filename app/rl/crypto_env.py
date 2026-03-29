@@ -171,18 +171,23 @@ class CryptoTradingEnv(gym.Env):
         idx = self._start_idx + self._step_idx
 
         # --- Execute action ---
+        old_position = self._position
         new_position = _ACTION_TO_POS[int(action)]
-        delta        = abs(new_position - self._position)
+        delta        = abs(new_position - old_position)
         fee          = delta * FEE_PER_SIDE
 
-        if new_position != self._position:
+        if new_position != old_position:
             self._position  = new_position
             self._entry_ret = 0.0
             self._bars_held = 0
 
         # --- Step return ---
+        # Reward uses old_position (held entering bar idx), not new_position.
+        # The action taken here sets the position for bar idx+1.
+        # This prevents the agent from exploiting log_ret_1[t] in the
+        # observation to retroactively profit from the same bar.
         log_ret = float(self._ret_arr[idx])
-        step_pnl = self._position * log_ret
+        step_pnl = old_position * log_ret
         reward   = step_pnl - fee
 
         # Update unrealised PnL and bars held

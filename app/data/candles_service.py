@@ -97,6 +97,7 @@ def save_klines(
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
 ) -> int:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     rows = [
         (
             symbol,
@@ -114,6 +115,7 @@ def save_klines(
             float(item[10]) if item[10] is not None else None,
         )
         for item in klines
+        if item is not None and len(item) >= 7 and int(item[6]) < now_ms
     ]
     connection.executemany(INSERT_CANDLE_SQL, rows)
     connection.commit()

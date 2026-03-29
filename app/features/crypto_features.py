@@ -1,4 +1,4 @@
-"""V2 Crypto Feature Engineering — Phase 4 + extended set.
+"""V3 Crypto Feature Engineering — Phase 4 + extended set + new indicators.
 
 Computes features from OHLCV candle data using pandas.
 
@@ -19,7 +19,7 @@ Required DataFrame columns:
 import numpy as np
 import pandas as pd
 
-FEATURE_SET = "v2"
+FEATURE_SET = "v3"
 MIN_VALID_ROWS = 120  # warm-up rows before features are reliable
 
 # Rolling windows
@@ -30,6 +30,12 @@ _RV_PERIOD = 20
 _RSI_PERIOD = 14
 _SMA_SHORT = 20
 _SMA_LONG = 60
+_BB_PERIOD = 20
+_ADX_PERIOD = 14
+_VWAP_PERIOD = 20
+_MACD_FAST = 12
+_MACD_SLOW = 26
+_MACD_SIGNAL = 9
 
 # Clipping constants
 _CLIP_Z = 4.0      # clip all z-scored features at ±4σ
@@ -203,15 +209,86 @@ def build_crypto_features(df: pd.DataFrame) -> pd.DataFrame:
     df["upper_wick_ratio"] = (upper_wick / candle_range).clip(0.0, 1.0)
     df["lower_wick_ratio"] = (lower_wick / candle_range).clip(0.0, 1.0)
 
+    # ── Bollinger Bands (Type ①: bounded) ────────────────────────────────
+    bb_sma = close.rolling(window=_BB_PERIOD, min_periods=_BB_PERIOD // 2).mean()
+    bb_std = close.rolling(window=_BB_PERIOD, min_periods=_BB_PERIOD // 2).std()
+    bb_upper = bb_sma + 2 * bb_std
+    bb_lower = bb_sma - 2 * bb_std
+    bb_width = (bb_upper - bb_lower).replace(0, np.nan)
+    df["bb_pct"] = ((close - bb_lower) / bb_width).clip(0.0, 1.0)
+    df["bb_width_norm"] = (bb_width / safe_close).clip(0.0, 0.20)
+
+    # ── VWAP distance (Type ①: bounded) ──────────────────────────────────
+    # Rolling VWAP over _VWAP_PERIOD bars using typical price × volume
+    typical = (high + low + close) / 3.0
+    cum_tp_vol = (typical * volume).rolling(window=_VWAP_PERIOD, min_periods=_VWAP_PERIOD // 2).sum()
+    cum_vol    = volume.rolling(window=_VWAP_PERIOD, min_periods=_VWAP_PERIOD // 2).sum()
+    vwap = cum_tp_vol / cum_vol.replace(0, np.nan)
+    df["dist_vwap_20"] = ((close - vwap) / safe_close).clip(-0.10, 0.10)
+
+    # ── ADX(14) normalised to [0, 1] (Type ①: bounded) ───────────────────
+    prev_high  = high.shift(1)
+    prev_low   = low.shift(1)
+    dm_plus  = (high - prev_high).clip(lower=0)
+    dm_minus = (prev_low - low).clip(lower=0)
+    # Zero out where the other direction is larger
+    dm_plus  = dm_plus.where(dm_plus > dm_minus, 0.0)
+    dm_minus = dm_minus.where(dm_minus > dm_plus, 0.0)
+    atr_adx = tr.ewm(span=_ADX_PERIOD, min_periods=_ADX_PERIOD, adjust=False).mean()
+    safe_atr = atr_adx.replace(0, np.nan)
+    di_plus  = 100 * dm_plus.ewm(span=_ADX_PERIOD, min_periods=_ADX_PERIOD, adjust=False).mean() / safe_atr
+    di_minus = 100 * dm_minus.ewm(span=_ADX_PERIOD, min_periods=_ADX_PERIOD, adjust=False).mean() / safe_atr
+    dx = (100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan))
+    adx = dx.ewm(span=_ADX_PERIOD, min_periods=_ADX_PERIOD, adjust=False).mean()
+    df["adx_14"] = (adx / 100.0).clip(0.0, 1.0)  # normalise [0,100]→[0,1]
+
+    # ── Cumulative taker flow imbalance (Type ①: bounded) ─────────────────
+    taker_sell_base = (volume - taker_base).clip(lower=0)
+    net_flow = taker_base - taker_sell_base  # positive = buy pressure
+    safe_roll_vol_5  = volume.rolling(window=5,  min_periods=3).sum().replace(0, np.nan)
+    safe_roll_vol_20 = volume.rolling(window=20, min_periods=10).sum().replace(0, np.nan)
+    df["flow_imbalance_5"]  = (net_flow.rolling(window=5,  min_periods=3).sum()  / safe_roll_vol_5).clip(-1.0, 1.0)
+    df["flow_imbalance_20"] = (net_flow.rolling(window=20, min_periods=10).sum() / safe_roll_vol_20).clip(-1.0, 1.0)
+
+    # ── Consecutive bar streak (Type ①: bounded) ──────────────────────────
+    direction = np.sign(close - df["open"].astype(float))  # +1 / 0 / -1
+    streak = pd.array([0.0] * len(df), dtype=float)
+    streak_vals = [0.0]
+    for i in range(1, len(direction)):
+        d = float(direction.iloc[i])
+        prev = streak_vals[-1]
+        if d > 0:
+            streak_vals.append(max(prev, 0) + 1)
+        elif d < 0:
+            streak_vals.append(min(prev, 0) - 1)
+        else:
+            streak_vals.append(0)
+    df["streak"] = (pd.Series(streak_vals, index=df.index) / 10.0).clip(-1.0, 1.0)
+
+    # ── MACD histogram normalised by ATR (Type ③: z-scored) ──────────────
+    ema_fast   = close.ewm(span=_MACD_FAST,   min_periods=_MACD_FAST,   adjust=False).mean()
+    ema_slow   = close.ewm(span=_MACD_SLOW,   min_periods=_MACD_SLOW,   adjust=False).mean()
+    macd_line  = ema_fast - ema_slow
+    macd_sig   = macd_line.ewm(span=_MACD_SIGNAL, min_periods=_MACD_SIGNAL, adjust=False).mean()
+    macd_hist  = (macd_line - macd_sig) / safe_close.replace(0, np.nan)
+    df["macd_hist_norm"] = macd_hist.clip(-0.02, 0.02)
+
     return df
 
 
 def get_feature_columns() -> list:
-    """Return the ordered list of model-input feature columns (V2).
+    """Return the ordered list of model-input feature columns (V3).
 
     Removed:
       - dist_sma_20: r=+0.92 with log_ret_10 (redundant)
       - body_ratio:  IC t=+0.23 (no predictive power)
+
+    Ablation test (2026-03-29): removing hl_spread / log_vol_z / lower_wick_ratio /
+    is_asia_session / is_us_session degraded performance (FAIL→MARGINAL),
+    so all 25 V2 features are retained.
+
+    V3 additions (2026-03-30): bb_pct, bb_width_norm, dist_vwap_20, adx_14,
+    flow_imbalance_5, flow_imbalance_20, streak, macd_hist_norm
     """
     return [
         # Type ①: returns (bounded)
@@ -235,4 +312,16 @@ def get_feature_columns() -> list:
         "hour_sin", "hour_cos",
         "dow_sin",  "dow_cos",
         "is_asia_session", "is_us_session",
+        # V3: Bollinger Bands
+        "bb_pct", "bb_width_norm",
+        # V3: VWAP distance
+        "dist_vwap_20",
+        # V3: ADX trend strength
+        "adx_14",
+        # V3: cumulative taker flow
+        "flow_imbalance_5", "flow_imbalance_20",
+        # V3: consecutive bar streak
+        "streak",
+        # V3: MACD histogram
+        "macd_hist_norm",
     ]
