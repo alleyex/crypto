@@ -5962,8 +5962,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <td class="num">${row.source || "unknown"}</td>
               <td class="num">${row.sample_count ?? 0}</td>
               <td class="num">${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
-              <td class="num">${row.first_event_at || "—"}</td>
-              <td class="num">${row.last_event_at || "—"}</td>
               <td class="num">${row.best_bid != null ? row.best_bid.toFixed(4) : "—"} / ${row.best_ask != null ? row.best_ask.toFixed(4) : "—"}</td>
               <td class="num">${row.ob_imbalance != null ? row.ob_imbalance.toFixed(4) : "—"} / ${row.ob_imbalance_mean != null ? row.ob_imbalance_mean.toFixed(4) : "—"} / ${row.ob_imbalance_std != null ? row.ob_imbalance_std.toFixed(4) : "—"}</td>
               <td class="num">${row.spread_bps != null ? row.spread_bps.toFixed(3) : "—"} / ${row.spread_bps_mean != null ? row.spread_bps_mean.toFixed(3) : "—"} / ${row.spread_bps_max != null ? row.spread_bps_max.toFixed(3) : "—"}</td>
@@ -5981,8 +5979,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   <th class="num">Source</th>
                   <th class="num">Samples</th>
                   <th class="num">Coverage</th>
-                  <th class="num">First Event</th>
-                  <th class="num">Last Event</th>
                   <th class="num">Best Bid / Ask</th>
                   <th class="num">Imbalance L / M / Std</th>
                   <th class="num">Spread L / M / Max</th>
