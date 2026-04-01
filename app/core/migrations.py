@@ -943,6 +943,24 @@ def _create_futures_candles_table(connection: DBConnection) -> None:
     )
 
 
+def _widen_futures_open_interest_numeric_columns(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, "futures_open_interest_metrics"):
+        return
+    existing = get_table_columns(connection, "futures_open_interest_metrics")
+    if "oi_change_1m" in existing:
+        connection.execute(
+            "ALTER TABLE futures_open_interest_metrics "
+            "ALTER COLUMN oi_change_1m TYPE NUMERIC(24,8) USING oi_change_1m::NUMERIC;"
+        )
+    if "oi_change_pct_1m" in existing:
+        connection.execute(
+            "ALTER TABLE futures_open_interest_metrics "
+            "ALTER COLUMN oi_change_pct_1m TYPE NUMERIC(20,10) USING oi_change_pct_1m::NUMERIC;"
+        )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -1059,6 +1077,7 @@ MIGRATIONS: list[Migration] = [
     ("048_create_futures_open_interest_metrics", _create_futures_open_interest_metrics),
     ("049_create_futures_liquidation_minutes", _create_futures_liquidation_minutes),
     ("050_create_futures_candles_table", _create_futures_candles_table),
+    ("051_widen_futures_open_interest_numeric_columns", _widen_futures_open_interest_numeric_columns),
 ]
 
 
