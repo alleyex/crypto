@@ -6,8 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
+ARG REQUIREMENTS_FILE=requirements.txt
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-runtime.txt .
+RUN pip install --no-cache-dir -r "${REQUIREMENTS_FILE}"
 
 COPY app ./app
 COPY scripts ./scripts

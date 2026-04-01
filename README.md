@@ -147,6 +147,11 @@ python scripts/clear_stop_flag.py
 docker compose up --build                             # api + scheduler (SQLite)
 docker compose --profile split-workers up --build     # split into 4 worker services
 docker compose --profile postgres up --build          # with PostgreSQL backend
+
+# Docker runtime services default to the lightweight requirements-runtime.txt image.
+# If you need PPO inference/training or other full ML dependencies in containers,
+# rebuild with:
+CRYPTO_DOCKER_REQUIREMENTS_FILE=requirements.txt docker compose up --build
 ```
 
 Split worker environment variables:

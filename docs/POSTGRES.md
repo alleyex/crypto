@@ -59,6 +59,15 @@ docker compose --profile postgres up --build
 export CRYPTO_DB_BACKEND=postgres
 export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
 docker compose --profile postgres --profile futures-collectors up --build -d
+
+By default, Docker runtime services use the lightweight
+`requirements-runtime.txt` image to avoid pulling PPO/training dependencies
+such as Stable-Baselines3 and Torch during routine deploys. If you need
+full ML dependencies inside containers, override the build arg:
+
+```bash
+CRYPTO_DOCKER_REQUIREMENTS_FILE=requirements.txt docker compose --profile postgres up --build
+```
 ```
 
 This profile set brings up:
