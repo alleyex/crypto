@@ -81,9 +81,10 @@ def get_status(connection: DBConnection) -> List[Dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT symbol, timeframe,
-               COUNT(*)       AS count,
-               MIN(open_time) AS earliest_ms,
-               MAX(open_time) AS latest_ms
+               COUNT(*)        AS count,
+               MIN(open_time)  AS earliest_ms,
+               MAX(open_time)  AS latest_open_ms,
+               MAX(close_time) AS latest_close_ms
         FROM futures_candles
         GROUP BY symbol, timeframe
         ORDER BY symbol, timeframe;
@@ -93,16 +94,16 @@ def get_status(connection: DBConnection) -> List[Dict[str, Any]]:
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     result = []
     for row in rows:
-        symbol, timeframe, count, earliest_ms, latest_ms = (
-            row[0], row[1], int(row[2]), int(row[3]), int(row[4])
+        symbol, timeframe, count, earliest_ms, latest_open_ms, latest_close_ms = (
+            row[0], row[1], int(row[2]), int(row[3]), int(row[4]), int(row[5])
         )
         interval_ms = TIMEFRAME_INTERVAL_MS.get(timeframe, 60_000)
         expected_span_ms = (count - 1) * interval_ms
-        actual_span_ms = latest_ms - earliest_ms
+        actual_span_ms = latest_open_ms - earliest_ms
         gap_count = max(0, round((actual_span_ms - expected_span_ms) / interval_ms))
-        stale_seconds = round((now_ms - latest_ms) / 1000)
+        stale_seconds = max(0, round((now_ms - latest_close_ms) / 1000))
         threshold_seconds = candle_staleness_threshold_seconds(timeframe)
-        latest_iso = datetime.fromtimestamp(latest_ms / 1000, tz=timezone.utc).strftime(
+        latest_iso = datetime.fromtimestamp(latest_close_ms / 1000, tz=timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         earliest_iso = datetime.fromtimestamp(earliest_ms / 1000, tz=timezone.utc).strftime(
