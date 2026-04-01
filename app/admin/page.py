@@ -4815,7 +4815,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const board = el("fetch-history-board");
         if (!board) return;
         try {
-          const entries = await api("/market-data/fetch/history?limit=20");
+          const entries = await api("/market-data/fetch/history?limit=5");
           if (!entries || !entries.length) {
             board.innerHTML = '<span style="color:var(--muted);font-size:13px">No fetch history yet.</span>';
             return;
