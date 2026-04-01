@@ -2,6 +2,7 @@ import json
 import pytest
 import sqlite3
 import urllib.error
+import numpy as np
 from io import StringIO
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
@@ -110,6 +111,7 @@ from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
 from app.strategy.ppo_strategy import _build_observation
+from app.strategy import ppo_strategy
 from app.strategy.registry import generate_registered_signal
 from app.strategy.registry import get_strategy
 from app.strategy.registry import list_registered_strategies
@@ -229,6 +231,63 @@ def test_ppo_build_observation_handles_decimal_candle_rows() -> None:
 
     assert obs is not None
     assert obs.dtype == "float32"
+
+
+def test_ppo_generate_signal_supports_two_action_long_flat_model(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, 100 + index) for index in range(170)],
+        )
+
+        class _FakeDistribution:
+            def __init__(self):
+                self.distribution = SimpleNamespace(
+                    probs=SimpleNamespace(
+                        squeeze=lambda: SimpleNamespace(
+                            cpu=lambda: SimpleNamespace(
+                                numpy=lambda: np.array([0.2, 0.8], dtype=float)
+                            )
+                        )
+                    )
+                )
+
+        class _FakePolicy:
+            @staticmethod
+            def obs_to_tensor(obs):
+                return (obs, None)
+
+            @staticmethod
+            def get_distribution(_obs_tensor):
+                return _FakeDistribution()
+
+        class _FakeModel:
+            policy = _FakePolicy()
+
+            @staticmethod
+            def predict(_obs, deterministic=True):
+                return 1, None
+
+        monkeypatch.setattr(ppo_strategy, "_load_model", lambda *_args, **_kwargs: _FakeModel())
+        monkeypatch.setattr(
+            ppo_strategy,
+            "_load_state",
+            lambda *_args, **_kwargs: {"position": 0, "entry_price": None, "bars_held": 0},
+        )
+        monkeypatch.setattr(ppo_strategy, "_save_state", lambda *_args, **_kwargs: None)
+
+        result = ppo_strategy.generate_signal(connection, symbol="BTCUSDT", timeframe="1m")
+
+        assert result is not None
+        assert result["signal_type"] == "BUY"
+        assert result["position"] == 1
+        assert result["prob_buy"] == 0.8
+        assert result["prob_sell"] == 0.0
+    finally:
+        connection.close()
 
 
 def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> None:

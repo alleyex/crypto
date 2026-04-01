@@ -7,10 +7,14 @@ a BUY / SELL / HOLD signal compatible with the existing strategy pipeline.
 Position state (bars_held, entry_price) is persisted to a small JSON file
 in runtime/ because the DB only tracks qty, not entry bar or unrealised PnL.
 
-Signal types emitted:
-  BUY   → go long   (action=1)
-  SELL  → go short  (action=2)
-  HOLD  → stay flat (action=0, or no change from current position)
+The current PPO environment is long/flat only:
+  action=0 -> flat
+  action=1 -> long
+
+Signals are derived from the desired position versus the current DB position:
+  flat -> long  => BUY
+  long -> flat  => SELL
+  no change     => HOLD
 """
 
 from __future__ import annotations
@@ -42,9 +46,6 @@ CANDLE_LOOKBACK = MIN_VALID_ROWS + 50   # 170 bars
 
 _FEAT_COLS = get_feature_columns()
 
-# Action → signal_type mapping (before position-aware adjustment below)
-_ACTION_SIGNAL = {0: "HOLD", 1: "BUY", 2: "SELL"}
-
 # Signals table insert SQL (matches existing schema in ma_cross.py)
 _INSERT_SIGNAL_SQL = """
 INSERT INTO signals (
@@ -52,6 +53,9 @@ INSERT INTO signals (
     short_ma, long_ma
 ) VALUES (?, ?, ?, ?, ?, ?);
 """
+
+_OPEN_LONG_THRESHOLD = 0.55
+_CLOSE_LONG_THRESHOLD = 0.45
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +119,7 @@ def _build_observation(
     state: dict,
     episode_length: int = 1440,
 ) -> Optional[np.ndarray]:
-    """Return 15-dim observation array, or None if insufficient data."""
+    """Return the current PPO observation, or None if insufficient data."""
     rows = connection.execute(
         """
         SELECT open_time, open, high, low, close, volume,
@@ -228,45 +232,43 @@ def generate_signal(
     if obs is None:
         return None  # not enough candles
 
-    # PPO inference with confidence threshold
-    BUY_THRESHOLD  = 0.55  # opening a position — be cautious
-    SELL_THRESHOLD = 0.45  # closing a position — be more responsive
-
     import torch
     obs_tensor = model.policy.obs_to_tensor(obs)[0]
     with torch.no_grad():
         distribution = model.policy.get_distribution(obs_tensor)
         probs = distribution.distribution.probs.squeeze().cpu().numpy()
 
-    # probs index: 0=HOLD, 1=BUY, 2=SELL
-    prob_hold = round(float(probs[0]), 4)
-    prob_buy  = round(float(probs[1]), 4)
-    prob_sell = round(float(probs[2]), 4)
-
     action, _ = model.predict(obs, deterministic=True)
     action = int(action)
-    top_prob = float(probs[action])
-
-    # If confidence is too low, override to HOLD
-    if _ACTION_SIGNAL[action] == "BUY" and top_prob < BUY_THRESHOLD:
-        action = 0
-    elif _ACTION_SIGNAL[action] == "SELL" and top_prob < SELL_THRESHOLD:
-        action = 0
-
-    signal_type = _ACTION_SIGNAL[action]
-    new_position = _ACTION_TO_POS[action]
-
-    # Position-aware signal adjustment for paper broker (no short support):
-    #   BUY  when already long  → HOLD  (broker rejects duplicate long)
-    #   SELL when already long  → SELL  (closes the long position) ✅
-    #   SELL when flat          → HOLD  (can't open short on paper broker)
+    target_position = _ACTION_TO_POS[action]
     current_position = state.get("position", 0)
-    if signal_type == "BUY" and current_position == 1:
-        signal_type = "HOLD"
+
+    prob_flat = float(probs[0]) if len(probs) > 0 else 0.0
+    prob_long = float(probs[1]) if len(probs) > 1 else 0.0
+
+    signal_type = "HOLD"
+    top_prob = prob_flat if target_position == 0 else prob_long
+
+    if current_position == 0 and target_position == 1:
+        if top_prob >= _OPEN_LONG_THRESHOLD:
+            signal_type = "BUY"
+            new_position = 1
+        else:
+            new_position = 0
+    elif current_position == 1 and target_position == 0:
+        if top_prob >= _CLOSE_LONG_THRESHOLD:
+            signal_type = "SELL"
+            new_position = 0
+        else:
+            new_position = 1
+    else:
         new_position = current_position
-    elif signal_type == "SELL" and current_position == 0:
-        signal_type = "HOLD"
-        new_position = 0
+
+    # Expose probabilities in legacy signal fields for existing UI/reporting.
+    # "buy" means opening/maintaining long; "sell" means flattening the long.
+    prob_hold = round(float(prob_flat if current_position == 0 else prob_long), 4)
+    prob_buy = round(float(prob_long), 4)
+    prob_sell = round(float(prob_flat if current_position == 1 else 0.0), 4)
 
     # Update state
     current_close_row = connection.execute(
