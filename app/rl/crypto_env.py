@@ -276,6 +276,8 @@ def make_env(
         "taker_buy_base_volume", "taker_buy_quote_volume",
     ]
     df_raw = pd.DataFrame(rows, columns=cols)
+    numeric_cols = [col for col in cols if col != "open_time"]
+    df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
     df     = build_crypto_features(df_raw).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
 
     return CryptoTradingEnv(

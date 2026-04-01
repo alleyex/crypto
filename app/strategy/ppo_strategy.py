@@ -139,6 +139,8 @@ def _build_observation(
     ]
     # Rows came in DESC order; reverse for chronological
     df = pd.DataFrame(reversed(rows), columns=cols)
+    numeric_cols = [col for col in cols if col != "open_time"]
+    df[numeric_cols] = df[numeric_cols].astype(float)
     df = build_crypto_features(df)
 
     # Take the last row (most recent bar)

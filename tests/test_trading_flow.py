@@ -3,6 +3,7 @@ import pytest
 import sqlite3
 import urllib.error
 from io import StringIO
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -108,6 +109,7 @@ from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
+from app.strategy.ppo_strategy import _build_observation
 from app.strategy.registry import generate_registered_signal
 from app.strategy.registry import get_strategy
 from app.strategy.registry import list_registered_strategies
@@ -182,6 +184,51 @@ def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
         assert signals[0]["strategy_name"] == "ma_cross"
     finally:
         connection.close()
+
+
+def test_ppo_build_observation_handles_decimal_candle_rows() -> None:
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class _Connection:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def execute(self, *_args, **_kwargs):
+            return _Cursor(self._rows)
+
+    rows = []
+    base_open_time = 60_000
+    for index in range(170):
+        close = Decimal("100") + Decimal(index) / Decimal("10")
+        rows.append(
+            (
+                base_open_time * (index + 1),
+                close - Decimal("0.5"),
+                close + Decimal("1.0"),
+                close - Decimal("1.0"),
+                close,
+                Decimal("100"),
+                Decimal("1000"),
+                Decimal("10"),
+                Decimal("50"),
+                Decimal("500"),
+            )
+        )
+
+    obs = _build_observation(
+        _Connection(list(reversed(rows))),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        state={"position": 0, "entry_price": None, "bars_held": 0},
+    )
+
+    assert obs is not None
+    assert obs.dtype == "float32"
 
 
 def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> None:
