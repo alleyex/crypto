@@ -586,9 +586,31 @@ def render_admin_page() -> str:
       }
 
       .toggle-pill.selected {
-        background: var(--accent);
-        border-color: var(--accent);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, #fff 18%), var(--accent-2));
+        border-color: color-mix(in srgb, var(--accent) 78%, #fff 22%);
         color: #fff;
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
+          inset 0 1px 0 rgba(255,255,255,0.18);
+        transform: translateY(-1px);
+      }
+
+      .toggle-pill.selected::before {
+        content: "✓";
+        font-size: 11px;
+        margin-right: 6px;
+        opacity: 0.95;
+      }
+
+      .selection-summary {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .selection-summary strong {
+        color: var(--fg);
+        font-weight: 700;
       }
 
       .ctrl-section {
@@ -2222,10 +2244,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div class="fetch-field">
             <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use configured futures symbols</span></div>
             <div id="market-fetch-symbol-checkboxes" class="toggle-pill-group"></div>
+            <div id="market-fetch-symbol-summary" class="selection-summary"></div>
           </div>
           <div class="fetch-field">
             <div class="fetch-field-label">Timeframes <span class="fetch-field-hint">leave empty to use active timeframes</span></div>
             <div id="market-fetch-timeframe-pills" class="toggle-pill-group"></div>
+            <div id="market-fetch-timeframe-summary" class="selection-summary"></div>
           </div>
           <div class="fetch-field">
             <div class="fetch-field-label">Start Date <span class="fetch-field-hint">leave empty to fetch latest candles only</span></div>
@@ -4577,8 +4601,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
               .join("");
             marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-              pill.addEventListener("click", () => pill.classList.toggle("selected"));
+              pill.addEventListener("click", () => {
+                pill.classList.toggle("selected");
+                updateMarketFetchSelectionSummary();
+              });
             });
+            updateMarketFetchSelectionSummary();
           } catch (_) {}
         }
         const marketFetchTimeframePills = el("market-fetch-timeframe-pills");
@@ -4596,8 +4624,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               .map((tf) => `<button type="button" class="toggle-pill${selectedTf.has(tf) ? " selected" : ""}" data-tf="${tf}">${tf}</button>`)
               .join("");
             marketFetchTimeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
-              pill.addEventListener("click", () => pill.classList.toggle("selected"));
+              pill.addEventListener("click", () => {
+                pill.classList.toggle("selected");
+                updateMarketFetchSelectionSummary();
+              });
             });
+            updateMarketFetchSelectionSummary();
           } catch (_) {}
         }
         const fsPills = el("market-fs-symbol-pills");
@@ -5904,6 +5936,25 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             };
           }
         } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+      }
+
+      function updateMarketFetchSelectionSummary() {
+        const selectedSymbols = Array.from(
+          el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.symbol);
+        const selectedTimeframes = Array.from(
+          el("market-fetch-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.tf);
+
+        const symbolSummary = el("market-fetch-symbol-summary");
+        if (symbolSummary) {
+          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.join(", ") : "none"}`;
+        }
+
+        const timeframeSummary = el("market-fetch-timeframe-summary");
+        if (timeframeSummary) {
+          timeframeSummary.innerHTML = `<strong>Selected timeframes:</strong> ${selectedTimeframes.length ? selectedTimeframes.join(", ") : "none"}`;
+        }
       }
 
       // ── Order Book Collection ────────────────────────────────────────────
