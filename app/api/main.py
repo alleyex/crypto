@@ -622,7 +622,7 @@ def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
             "components": [],
         }
 
-    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker", "futures_orderbook_collector"}
+    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker", "futures_orderbook_collector", "futures_aggtrade_collector"}
     enriched_heartbeats: list[dict[str, Any]] = []
     stale_workers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
@@ -3432,3 +3432,43 @@ def pause_futures_orderbook() -> Dict[str, Any]:
     from app.data.futures_orderbook_service import disable_futures_orderbook_collection
     disable_futures_orderbook_collection()
     return {"enabled": False}
+
+
+@app.get("/aggtrades/futures/status")
+def get_futures_aggtrade_status() -> Dict[str, Any]:
+    """Return futures aggTrade collection status and per-symbol stats."""
+    from app.data.futures_aggtrade_service import (
+        configured_futures_aggtrade_symbols,
+        get_futures_aggtrade_stats,
+        is_futures_aggtrade_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_aggtrade_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        collector_runtime = dict((heartbeat_payload.get("collector") or {}))
+        stats = get_futures_aggtrade_stats(
+            connection,
+            runtime=(collector_runtime.get("symbol_runtime") or {}),
+        )
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_aggtrade_collection_enabled(),
+        "configured_symbols": configured_futures_aggtrade_symbols(),
+        "symbols": stats,
+        "total_minutes": sum(s["total"] for s in stats),
+        "collector": collector_runtime,
+        "last_heartbeat_at": last_heartbeat_at,
+    }

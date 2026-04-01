@@ -12,6 +12,7 @@ SERVICE_NAMES = [
     "crypto-api.service",
     "crypto-scheduler.service",
     "crypto-futures-orderbook.service",
+    "crypto-futures-aggtrade.service",
 ]
 
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Crypto Futures aggTrade Collector
+After=network-online.target crypto-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/crypto
+EnvironmentFile=/root/crypto/.env
+ExecStartPre=/usr/bin/rm -f /root/crypto/runtime/futures_aggtrade.pid
+ExecStart=/root/crypto/.venv/bin/python /root/crypto/scripts/run_futures_aggtrade_collector.py --interval 60
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
