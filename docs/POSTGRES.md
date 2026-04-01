@@ -92,6 +92,24 @@ Recommended production cutover order:
 4. Point all services at PostgreSQL via `CRYPTO_DB_BACKEND=postgres` and `CRYPTO_DATABASE_URL=...`
 5. Start services and re-check `/health`
 
+To automate those steps on a Linux host with the project's `systemd` services, use:
+
+```bash
+python scripts/run_postgres_cutover.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --set-postgres-env \
+  --restart-services
+```
+
+The cutover helper will:
+
+1. Stop the configured SQLite-writing services
+2. Run the freeze-and-migrate workflow with `--truncate`
+3. Optionally rewrite `.env` to PostgreSQL settings
+4. Optionally restart the services
+
+Use `--dry-run` first on production to review the exact service and migration commands.
+
 ## Runtime Validation Record (March 18, 2026)
 
 Confirmed working:
