@@ -747,6 +747,14 @@ def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
             connection.execute(f"ALTER TABLE futures_order_book_snapshots ADD COLUMN {column} {sql_type};")
 
 
+def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    existing = get_table_columns(connection, "futures_order_book_snapshots")
+    if "active_seconds" not in existing:
+        connection.execute("ALTER TABLE futures_order_book_snapshots ADD COLUMN active_seconds INTEGER DEFAULT 0;")
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -856,6 +864,7 @@ MIGRATIONS: list[Migration] = [
     ("041_create_order_book_snapshots", _create_order_book_snapshots),
     ("042_create_futures_order_book_snapshots", _create_futures_order_book_snapshots),
     ("043_add_futures_order_book_aggregate_columns", _add_futures_order_book_aggregate_columns),
+    ("044_add_futures_order_book_active_seconds", _add_futures_order_book_active_seconds),
 ]
 
 
