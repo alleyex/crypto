@@ -1130,6 +1130,23 @@ def render_admin_page() -> str:
         text-align: right;
       }
 
+      .symbol-link-button {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: none;
+      }
+
+      .symbol-link-button:hover {
+        transform: none;
+        box-shadow: none;
+        color: var(--accent);
+      }
+
       .mini-trade-grid {
         display: grid;
         gap: 10px;
@@ -2311,6 +2328,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div id="fob-stats-board" style="margin-top:14px">
             <span style="color:var(--muted);font-size:13px">Loading…</span>
           </div>
+          <div id="fob-detail-board" style="margin-top:14px">
+            <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>
+          </div>
         </div>
       </article>
 
@@ -2954,6 +2974,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let closedTradesStrategyFilter = "all";
       let queueSummaryState = null;
       let queueFilterMode = "all";
+      let futuresObSelectedSymbol = null;
       const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
@@ -5870,6 +5891,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           if (!board) return;
           if (!r.symbols || r.symbols.length === 0) {
             board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures snapshots collected yet.</span>`;
+            const detail = el("fob-detail-board");
+            if (detail) detail.innerHTML = `<span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>`;
             return;
           }
           const rows = r.symbols.map(s => {
@@ -5879,10 +5902,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
                 : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
             const snapshotLabel = s.is_stale
-              ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
-              : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
+                ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
+                : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
             return `<tr>
-              <td>${s.symbol}</td>
+              <td><button class="symbol-link-button" data-action="fob-recent" data-symbol="${s.symbol}">${s.symbol}</button></td>
               <td class="num">${s.total.toLocaleString()}</td>
               <td class="num">${s.coverage_pct}%</td>
               <td class="num">${s.latest_source || "unknown"}</td>
@@ -5910,11 +5933,60 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             </div>`;
           const meta = el("fob-refresh-meta");
           if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (futuresObSelectedSymbol) {
+            await refreshFuturesObRecent(futuresObSelectedSymbol);
+          }
         } catch(e) {
           const board = el("fob-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("fob-refresh-meta");
           if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesObRecent(symbol) {
+        futuresObSelectedSymbol = symbol;
+        const board = el("fob-detail-board");
+        if (!board) return;
+        board.innerHTML = `<span style="color:var(--muted);font-size:13px">Loading recent snapshots for ${symbol}…</span>`;
+        try {
+          const payload = await api(`/orderbook/futures/recent?symbol=${encodeURIComponent(symbol)}&limit=5`);
+          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          if (!rows.length) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No recent snapshots found for ${symbol}.</span>`;
+            return;
+          }
+          const detailRows = rows.map((row) => `
+            <tr>
+              <td>${row.timestamp}</td>
+              <td class="num">${row.source || "unknown"}</td>
+              <td class="num">${row.sample_count ?? 0}</td>
+              <td class="num">${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
+              <td class="num">${(row.ob_imbalance_mean ?? row.ob_imbalance ?? 0).toFixed(4)}</td>
+              <td class="num">${row.spread_bps_mean != null ? row.spread_bps_mean.toFixed(3) : "—"}</td>
+              <td class="num">${row.mid_price_mean != null ? row.mid_price_mean.toFixed(4) : "—"}</td>
+            </tr>
+          `).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Latest 5 snapshots for <strong style="color:var(--text)">${symbol}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Timestamp (UTC)</th>
+                  <th class="num">Source</th>
+                  <th class="num">Samples</th>
+                  <th class="num">Coverage</th>
+                  <th class="num">Imbalance</th>
+                  <th class="num">Spread (bps)</th>
+                  <th class="num">Mid Price</th>
+                </tr></thead>
+                <tbody>${detailRows}</tbody>
+              </table>
+            </div>`;
+        } catch (e) {
+          board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
         }
       }
 
@@ -5947,6 +6019,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (obAction === "fob-enable") {
           await api("/orderbook/futures/enable", { method: "POST" });
           await refreshFuturesObStatus();
+          return;
+        }
+        if (obAction === "fob-recent") {
+          const symbol = event.target.dataset?.symbol;
+          if (symbol) await refreshFuturesObRecent(symbol);
           return;
         }
       });

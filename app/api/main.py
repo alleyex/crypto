@@ -3396,6 +3396,28 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
     }
 
 
+@app.get("/orderbook/futures/recent")
+def get_recent_futures_orderbook(symbol: str, limit: int = 5) -> Dict[str, Any]:
+    """Return recent futures order book snapshots for a symbol."""
+    from app.data.futures_orderbook_service import get_recent_futures_orderbook_snapshots
+
+    requested_symbol = str(symbol or "").strip().upper()
+    if not requested_symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        rows = get_recent_futures_orderbook_snapshots(connection, requested_symbol, limit=max(1, min(int(limit), 20)))
+    finally:
+        connection.close()
+
+    return {
+        "symbol": requested_symbol,
+        "rows": rows,
+    }
+
+
 @app.post("/orderbook/futures/enable")
 def enable_futures_orderbook() -> Dict[str, Any]:
     """Enable futures order book collection."""

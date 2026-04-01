@@ -614,3 +614,51 @@ def get_futures_orderbook_stats(
             }
         )
     return result
+
+
+def get_recent_futures_orderbook_snapshots(
+    connection: DBConnection,
+    symbol: str,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT symbol,
+               timestamp_ms,
+               source,
+               sample_count,
+               coverage_ratio,
+               ob_imbalance,
+               ob_imbalance_mean,
+               spread_bps,
+               spread_bps_mean,
+               mid_price,
+               mid_price_mean,
+               mid_price_ret_1m
+        FROM futures_order_book_snapshots
+        WHERE symbol = ?
+        ORDER BY timestamp_ms DESC
+        LIMIT ?
+        """,
+        (str(symbol).upper(), int(limit)),
+    ).fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "symbol": str(row[0]),
+                "timestamp": datetime.fromtimestamp(int(row[1]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "source": str(row[2] or "unknown"),
+                "sample_count": int(row[3] or 0),
+                "coverage_ratio": float(row[4] or 0.0),
+                "ob_imbalance": float(row[5] or 0.0),
+                "ob_imbalance_mean": float(row[6] or 0.0),
+                "spread_bps": float(row[7]) if row[7] is not None else None,
+                "spread_bps_mean": float(row[8]) if row[8] is not None else None,
+                "mid_price": float(row[9]) if row[9] is not None else None,
+                "mid_price_mean": float(row[10]) if row[10] is not None else None,
+                "mid_price_ret_1m": float(row[11]) if row[11] is not None else None,
+            }
+        )
+    return result
