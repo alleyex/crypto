@@ -5027,6 +5027,79 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[1]["strategy_name"] == "momentum_3bar"
 
 
+def test_get_strategy_activity_summary_handles_mixed_timestamp_types(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.query.read_service import get_strategy_activity_summary
+
+    class DummyConnection:
+        def execute(self, query, params=()):
+            class DummyCursor:
+                def fetchone(self_inner):
+                    return None
+
+            return DummyCursor()
+
+    monkeypatch.setattr("app.query.read_service.list_registered_strategies", lambda: ["ppo"])
+    monkeypatch.setattr(
+        "app.query.read_service.get_signals",
+        lambda connection, limit=100: [
+            {
+                "id": 1,
+                "symbol": "BTCUSDT",
+                "timeframe": "5m",
+                "strategy_name": "ppo",
+                "signal_type": "BUY",
+                "created_at": "2026-04-01 12:00:00",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_risk_events",
+        lambda connection, limit=100: [
+            {
+                "id": 1,
+                "strategy_name": "ppo",
+                "decision": "APPROVED",
+                "created_at": datetime(2026, 4, 1, 12, 1, tzinfo=timezone.utc),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_all_orders",
+        lambda connection: [
+            {
+                "id": 10,
+                "symbol": "BTCUSDT",
+                "timeframe": "5m",
+                "strategy_name": "ppo",
+                "side": "BUY",
+                "qty": 0.001,
+                "price": 70000,
+                "status": "FILLED",
+                "created_at": "2026-04-01 12:02:00",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_all_fills",
+        lambda connection: [
+            {
+                "order_id": 10,
+                "created_at": datetime(2026, 4, 1, 12, 3, tzinfo=timezone.utc),
+                "commission": 0.0,
+                "commission_asset": "USDT",
+            }
+        ],
+    )
+    monkeypatch.setattr("app.query.read_service.get_strategy_closed_trades", lambda connection, limit, per_table_limit: [])
+
+    payload = get_strategy_activity_summary(DummyConnection())
+
+    assert payload[0]["strategy_name"] == "ppo"
+    assert payload[0]["latest_activity_at"] == "2026-04-01T12:03:00+00:00"
+
+
 def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> None:
     client = TestClient(app)
     captured: dict[str, object] = {}
@@ -8866,6 +8939,37 @@ def test_metrics_service_returns_zeros_on_empty_db() -> None:
         assert result["execution"]["fills"] == 0
         assert result["pnl"]["today"] is None
         assert result["queue"]["completed"] == 0
+    finally:
+        connection.close()
+
+
+def test_metrics_service_queue_summary_handles_backend_neutral_timestamps() -> None:
+    from app.metrics.metrics_service import build_metrics
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO job_queue (job_type, payload_json, status, created_at, started_at, completed_at)
+            VALUES (?, ?, 'completed', ?, ?, ?);
+            """,
+            (
+                "pipeline",
+                "{}",
+                "2026-04-01 10:00:00",
+                "2026-04-01 10:00:05",
+                "2026-04-01 10:00:08",
+            ),
+        )
+        connection.commit()
+
+        result = build_metrics(connection, period_hours=24)
+
+        assert result["queue"]["completed"] == 1
+        assert result["queue"]["failed"] == 0
+        assert result["queue"]["avg_job_duration_seconds"] == 3.0
     finally:
         connection.close()
 

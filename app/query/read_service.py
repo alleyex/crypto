@@ -507,18 +507,20 @@ def get_strategy_activity_summary(
         order_ids = {item["id"] for item in strategy_orders}
         latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
         latest_closed_trade = latest_closed_trades.get(strategy_name)
-        latest_activity_at = max(
-            (
-                timestamp
-                for timestamp in (
-                    latest_fill["created_at"] if latest_fill is not None else None,
-                    latest_order["created_at"] if latest_order is not None else None,
-                    latest_risk["created_at"] if latest_risk is not None else None,
-                    latest_signal["created_at"] if latest_signal is not None else None,
-                )
-                if timestamp is not None
-            ),
-            default=None,
+        latest_activity_candidates = [
+            timestamp
+            for timestamp in (
+                latest_fill["created_at"] if latest_fill is not None else None,
+                latest_order["created_at"] if latest_order is not None else None,
+                latest_risk["created_at"] if latest_risk is not None else None,
+                latest_signal["created_at"] if latest_signal is not None else None,
+            )
+            if timestamp is not None
+        ]
+        latest_activity_at = (
+            max(parse_db_timestamp(timestamp) for timestamp in latest_activity_candidates).isoformat()
+            if latest_activity_candidates
+            else None
         )
         filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))

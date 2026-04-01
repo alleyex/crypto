@@ -10,14 +10,20 @@ Queries the local DB to produce a snapshot useful for monitoring:
 
 All windows are configurable; the default period is 24 hours.
 """
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from app.core.db import DBConnection, table_exists
+from app.core.db import DBConnection, parse_db_timestamp, table_exists
+
+
+def _cutoff_timestamp(period_hours: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=period_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
     if not table_exists(connection, "risk_events"):
         return {"total": 0, "approved": 0, "rejected": 0, "reject_rate": None, "top_rejection_reasons": []}
+    cutoff = _cutoff_timestamp(period_hours)
 
     row = connection.execute(
         """
@@ -26,9 +32,9 @@ def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]
             SUM(CASE WHEN decision = 'APPROVED' THEN 1 ELSE 0 END) AS approved,
             SUM(CASE WHEN decision = 'REJECTED' THEN 1 ELSE 0 END) AS rejected
         FROM risk_events
-        WHERE created_at >= datetime('now', ? || ' hours');
+        WHERE created_at >= ?;
         """,
-        (f"-{period_hours}",),
+        (cutoff,),
     ).fetchone()
     total = int(row[0] or 0)
     approved = int(row[1] or 0)
@@ -40,12 +46,12 @@ def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]
         SELECT reason, COUNT(*) AS cnt
         FROM risk_events
         WHERE decision = 'REJECTED'
-          AND created_at >= datetime('now', ? || ' hours')
+          AND created_at >= ?
         GROUP BY reason
         ORDER BY cnt DESC
         LIMIT 5;
         """,
-        (f"-{period_hours}",),
+        (cutoff,),
     ).fetchall()
     top_reasons = [{"reason": r[0], "count": int(r[1])} for r in reason_rows]
 
@@ -61,15 +67,16 @@ def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]
 def _signal_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
     if not table_exists(connection, "signals"):
         return {"total": 0, "by_type": {}}
+    cutoff = _cutoff_timestamp(period_hours)
 
     rows = connection.execute(
         """
         SELECT signal_type, COUNT(*) AS cnt
         FROM signals
-        WHERE created_at >= datetime('now', ? || ' hours')
+        WHERE created_at >= ?
         GROUP BY signal_type;
         """,
-        (f"-{period_hours}",),
+        (cutoff,),
     ).fetchall()
     by_type = {r[0]: int(r[1]) for r in rows}
     return {"total": sum(by_type.values()), "by_type": by_type}
@@ -78,14 +85,15 @@ def _signal_summary(connection: DBConnection, period_hours: int) -> Dict[str, An
 def _execution_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
     if not table_exists(connection, "fills"):
         return {"fills": 0, "fill_volume": None, "orders_total": 0}
+    cutoff = _cutoff_timestamp(period_hours)
 
     fill_row = connection.execute(
         """
         SELECT COUNT(*), SUM(qty * price)
         FROM fills
-        WHERE created_at >= datetime('now', ? || ' hours');
+        WHERE created_at >= ?;
         """,
-        (f"-{period_hours}",),
+        (cutoff,),
     ).fetchone()
     fills = int(fill_row[0] or 0)
     fill_volume = round(float(fill_row[1]), 4) if fill_row[1] is not None else None
@@ -126,29 +134,34 @@ def _pnl_summary(connection: DBConnection) -> Dict[str, Any]:
 def _queue_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
     if not table_exists(connection, "job_queue"):
         return {"avg_job_duration_seconds": None, "completed": 0, "failed": 0}
+    cutoff = _cutoff_timestamp(period_hours)
 
-    dur_row = connection.execute(
+    duration_rows = connection.execute(
         """
-        SELECT AVG((julianday(completed_at) - julianday(started_at)) * 86400)
+        SELECT started_at, completed_at
         FROM job_queue
         WHERE status = 'completed'
           AND started_at IS NOT NULL
           AND completed_at IS NOT NULL
-          AND completed_at >= datetime('now', ? || ' hours');
+          AND completed_at >= ?;
         """,
-        (f"-{period_hours}",),
-    ).fetchone()
-    avg_duration = round(float(dur_row[0]), 3) if dur_row[0] is not None else None
+        (cutoff,),
+    ).fetchall()
+    durations = [
+        (parse_db_timestamp(completed_at) - parse_db_timestamp(started_at)).total_seconds()
+        for started_at, completed_at in duration_rows
+    ]
+    avg_duration = round(sum(durations) / len(durations), 3) if durations else None
 
     count_rows = connection.execute(
         """
         SELECT status, COUNT(*)
         FROM job_queue
-        WHERE completed_at >= datetime('now', ? || ' hours')
+        WHERE completed_at >= ?
           AND status IN ('completed', 'failed')
         GROUP BY status;
         """,
-        (f"-{period_hours}",),
+        (cutoff,),
     ).fetchall()
     counts = {r[0]: int(r[1]) for r in count_rows}
 
