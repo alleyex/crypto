@@ -5879,6 +5879,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No futures candle data found.</span>';
             return;
           }
+          const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
 
           // Card view
           board.innerHTML = rows.map((r) => {
@@ -5896,7 +5897,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div class="status-symbol-left">
                   <span class="status-dot" style="background:${dotColor}"></span>
                   <div>
-                    <span class="status-symbol-name">${r.symbol}</span>
+                    <span class="status-symbol-name">${symbolLabel(r.symbol)}</span>
                     <span class="status-badge">${r.timeframe}</span>
                   </div>
                 </div>
@@ -5945,7 +5946,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   <span style="display:block;font-size:10px;color:${dotColor}">${staleMin < 60 ? staleMin + "m" : Math.round(staleMin/60) + "h"} ago</span>
                 </td>`;
               }).join("");
-              return `<tr><td style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${sym}</td>${cells}</tr>`;
+              return `<tr><td style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${symbolLabel(sym)}</td>${cells}</tr>`;
             }).join("");
             matrix.innerHTML = `<table style="border-collapse:collapse;width:100%"><thead>${header}</thead><tbody>${bodyRows}</tbody></table>`;
           }
