@@ -6150,7 +6150,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const meta = el("fob-refresh-meta");
           if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
           if (futuresObSelectedSymbol) {
-            await refreshFuturesObRecent(futuresObSelectedSymbol);
+            refreshFuturesObRecent(futuresObSelectedSymbol).catch((error) => {
+              const detail = el("fob-detail-board");
+              if (detail) detail.innerHTML = `<span style="color:#f87171;font-size:13px">${error}</span>`;
+            });
           }
         } catch(e) {
           const board = el("fob-stats-board");
