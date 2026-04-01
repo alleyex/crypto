@@ -105,7 +105,9 @@ The staging API defaults to port `18000`.
 **Production Docker runtime:**
 
 Use the checked-in production override so rebuilds stay pinned to PostgreSQL
-and `paper` execution:
+and `paper` execution. The production override also forces `api` and
+`scheduler` to build with the full `requirements.txt` image so `ppo`
+inference can run inside production Docker:
 
 ```bash
 python3 scripts/run_production_compose.py --build

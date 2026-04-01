@@ -1,5 +1,8 @@
 services:
   api:
+    build:
+      args:
+        REQUIREMENTS_FILE: requirements.txt
     environment:
       CRYPTO_DB_BACKEND: postgres
       CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
@@ -8,6 +11,9 @@ services:
       CRYPTO_BINANCE_API_SECRET: ""
 
   scheduler:
+    build:
+      args:
+        REQUIREMENTS_FILE: requirements.txt
     environment:
       CRYPTO_DB_BACKEND: postgres
       CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto

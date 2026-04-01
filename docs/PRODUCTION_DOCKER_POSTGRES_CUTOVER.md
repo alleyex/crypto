@@ -96,6 +96,10 @@ It pins production Docker services to:
 - `CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto`
 - `CRYPTO_EXECUTION_BACKEND=paper`
 
+It also forces `api` and `scheduler` to build with `requirements.txt`
+instead of `requirements-runtime.txt`, so production can run `ppo`
+inference when needed.
+
 ## Cutover Sequence
 
 ### 1. Stop the existing `systemd` production services
