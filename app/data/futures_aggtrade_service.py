@@ -505,3 +505,66 @@ def get_futures_aggtrade_stats(
             }
         )
     return result
+
+
+def get_recent_futures_aggtrade_minutes(
+    connection: DBConnection,
+    symbol: str,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT symbol,
+               timestamp_ms,
+               trade_count,
+               taker_buy_count,
+               taker_sell_count,
+               qty_total,
+               qty_taker_buy,
+               qty_taker_sell,
+               quote_total,
+               quote_taker_buy,
+               quote_taker_sell,
+               price_open,
+               price_high,
+               price_low,
+               price_close,
+               vwap,
+               avg_trade_size,
+               active_seconds,
+               coverage_ratio,
+               source
+        FROM futures_aggtrade_minutes
+        WHERE symbol = ?
+        ORDER BY timestamp_ms DESC
+        LIMIT ?
+        """,
+        (str(symbol).upper(), int(limit)),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "symbol": str(row[0]),
+                "timestamp": datetime.fromtimestamp(int(row[1]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "trade_count": int(row[2] or 0),
+                "taker_buy_count": int(row[3] or 0),
+                "taker_sell_count": int(row[4] or 0),
+                "qty_total": float(row[5] or 0.0),
+                "qty_taker_buy": float(row[6] or 0.0),
+                "qty_taker_sell": float(row[7] or 0.0),
+                "quote_total": float(row[8] or 0.0),
+                "quote_taker_buy": float(row[9] or 0.0),
+                "quote_taker_sell": float(row[10] or 0.0),
+                "price_open": float(row[11]) if row[11] is not None else None,
+                "price_high": float(row[12]) if row[12] is not None else None,
+                "price_low": float(row[13]) if row[13] is not None else None,
+                "price_close": float(row[14]) if row[14] is not None else None,
+                "vwap": float(row[15]) if row[15] is not None else None,
+                "avg_trade_size": float(row[16]) if row[16] is not None else None,
+                "active_seconds": int(row[17] or 0),
+                "coverage_ratio": float(row[18] or 0.0),
+                "source": str(row[19] or "unknown"),
+            }
+        )
+    return result

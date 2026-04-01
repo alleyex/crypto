@@ -2334,6 +2334,26 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </div>
       </article>
 
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures aggTrades Collection</h2>
+            <p>Binance USDT perpetual aggTrade minute aggregates for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fag-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fag-refresh-btn" data-action="fag-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fag-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fag-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+        <div id="fag-detail-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 minute aggregates.</span>
+        </div>
+      </article>
+
       </section>
       </div>
 
@@ -2975,6 +2995,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let queueSummaryState = null;
       let queueFilterMode = "all";
       let futuresObSelectedSymbol = null;
+      let futuresAggSelectedSymbol = null;
       const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
@@ -5051,6 +5072,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       refreshFetchHistory();
       refreshObStatus();
       refreshFuturesObStatus();
+      refreshFuturesAggStatus();
       refreshPPOJobs().catch((error) => {
         const msg = el("ppo-train-message");
         if (msg) {
@@ -5990,6 +6012,116 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
       }
 
+      async function refreshFuturesAggStatus() {
+        try {
+          const r = await api("/aggtrades/futures/status");
+          const badge = el("fag-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          const board = el("fag-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures aggTrade minutes collected yet.</span>`;
+            const detail = el("fag-detail-board");
+            if (detail) detail.innerHTML = `<span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 minute aggregates.</span>`;
+            return;
+          }
+          const rows = r.symbols.map((s) => {
+            const eventAgeLabel = s.event_age_seconds == null
+              ? `<span style="color:var(--muted)">n/a</span>`
+              : (s.event_age_seconds > 180
+                ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
+                : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
+            const snapshotLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
+              : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
+            return `<tr>
+              <td><button class="symbol-link-button" data-action="fag-recent" data-symbol="${s.symbol}">${s.symbol}</button></td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${s.latest_source || "unknown"}</td>
+              <td class="num">${s.current_minute_trade_count ?? 0}</td>
+              <td class="num">${s.current_minute_active_seconds ?? 0}s</td>
+              <td class="num">${eventAgeLabel}</td>
+              <td class="num">${snapshotLabel}</td>
+            </tr>`;
+          }).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Total minutes: <strong style="color:var(--text)">${(r.total_minutes || 0).toLocaleString()}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Minutes</th>
+                  <th class="num">Coverage</th><th class="num">Source</th>
+                  <th class="num">Trades</th><th class="num">Active</th>
+                  <th class="num">Last Event</th><th class="num">Last Minute (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+          const meta = el("fag-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (futuresAggSelectedSymbol) {
+            await refreshFuturesAggRecent(futuresAggSelectedSymbol);
+          }
+        } catch (e) {
+          const board = el("fag-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fag-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesAggRecent(symbol) {
+        futuresAggSelectedSymbol = symbol;
+        const board = el("fag-detail-board");
+        if (!board) return;
+        board.innerHTML = `<span style="color:var(--muted);font-size:13px">Loading recent aggTrade minutes for ${symbol}…</span>`;
+        try {
+          const payload = await api(`/aggtrades/futures/recent?symbol=${encodeURIComponent(symbol)}&limit=5`);
+          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          if (!rows.length) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No recent aggTrade minutes found for ${symbol}.</span>`;
+            return;
+          }
+          const detailRows = rows.map((row) => `
+            <tr>
+              <td>${row.timestamp}</td>
+              <td class="num">${row.trade_count ?? 0}</td>
+              <td class="num">${row.active_seconds ?? 0}s / ${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
+              <td class="num">${row.taker_buy_count ?? 0} / ${row.taker_sell_count ?? 0}</td>
+              <td class="num">${row.qty_total != null ? row.qty_total.toFixed(4) : "—"} / ${row.quote_total != null ? row.quote_total.toFixed(2) : "—"}</td>
+              <td class="num">${row.price_open != null ? row.price_open.toFixed(4) : "—"} / ${row.price_high != null ? row.price_high.toFixed(4) : "—"} / ${row.price_low != null ? row.price_low.toFixed(4) : "—"} / ${row.price_close != null ? row.price_close.toFixed(4) : "—"}</td>
+              <td class="num">${row.vwap != null ? row.vwap.toFixed(4) : "—"} / ${row.avg_trade_size != null ? row.avg_trade_size.toFixed(4) : "—"}</td>
+            </tr>
+          `).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Latest 5 aggTrade minutes for <strong style="color:var(--text)">${symbol}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Timestamp (UTC)</th>
+                  <th class="num">Trades</th>
+                  <th class="num">Active</th>
+                  <th class="num">Buy / Sell Count</th>
+                  <th class="num">Qty / Quote</th>
+                  <th class="num">O / H / L / C</th>
+                  <th class="num">VWAP / Avg Size</th>
+                </tr></thead>
+                <tbody>${detailRows}</tbody>
+              </table>
+            </div>`;
+        } catch (e) {
+          board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+        }
+      }
+
       async function withRefreshButton(buttonId, runRefresh) {
         const button = el(buttonId);
         const originalText = button?.textContent || "Refresh";
@@ -6024,6 +6156,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (obAction === "fob-recent") {
           const symbol = event.target.dataset?.symbol;
           if (symbol) await refreshFuturesObRecent(symbol);
+          return;
+        }
+        if (obAction === "fag-refresh") { await withRefreshButton("fag-refresh-btn", refreshFuturesAggStatus); return; }
+        if (obAction === "fag-recent") {
+          const symbol = event.target.dataset?.symbol;
+          if (symbol) await refreshFuturesAggRecent(symbol);
           return;
         }
       });

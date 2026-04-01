@@ -3472,3 +3472,25 @@ def get_futures_aggtrade_status() -> Dict[str, Any]:
         "collector": collector_runtime,
         "last_heartbeat_at": last_heartbeat_at,
     }
+
+
+@app.get("/aggtrades/futures/recent")
+def get_recent_futures_aggtrades(symbol: str, limit: int = 5) -> Dict[str, Any]:
+    """Return recent futures aggTrade minute aggregates for a symbol."""
+    from app.data.futures_aggtrade_service import get_recent_futures_aggtrade_minutes
+
+    requested_symbol = str(symbol or "").strip().upper()
+    if not requested_symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        rows = get_recent_futures_aggtrade_minutes(connection, requested_symbol, limit=max(1, min(int(limit), 20)))
+    finally:
+        connection.close()
+
+    return {
+        "symbol": requested_symbol,
+        "rows": rows,
+    }
