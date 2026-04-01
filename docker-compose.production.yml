@@ -1,0 +1,46 @@
+services:
+  api:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_EXECUTION_BACKEND: paper
+      CRYPTO_BINANCE_API_KEY: ""
+      CRYPTO_BINANCE_API_SECRET: ""
+
+  scheduler:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_EXECUTION_BACKEND: paper
+      CRYPTO_BINANCE_API_KEY: ""
+      CRYPTO_BINANCE_API_SECRET: ""
+
+  futures-candles:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+
+  futures-orderbook:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+
+  futures-aggtrade:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+
+  futures-premium:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+
+  futures-open-interest:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+
+  futures-liquidation:
+    environment:
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto

@@ -102,6 +102,20 @@ docker compose \
 
 The staging API defaults to port `18000`.
 
+**Production Docker runtime:**
+
+Use the checked-in production override so rebuilds stay pinned to PostgreSQL
+and `paper` execution:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
+  --profile postgres \
+  --profile futures-collectors \
+  up --build -d
+```
+
 **Automated Compose validation:**
 
 ```bash

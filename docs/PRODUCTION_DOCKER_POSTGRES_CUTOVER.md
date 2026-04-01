@@ -86,7 +86,11 @@ cp /root/crypto/storage/market_data.db /root/crypto-backups/market_data.pre-dock
 For the first cut, keep production execution on `paper` unless there is a
 specific reason to enable live orders immediately.
 
-That means the production Docker runtime should start with:
+Use the checked-in production override:
+
+- [/Users/alleyex/Projects/crypto/docker-compose.production.yml](/Users/alleyex/Projects/crypto/docker-compose.production.yml)
+
+It pins production Docker services to:
 
 - `CRYPTO_DB_BACKEND=postgres`
 - `CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto`
@@ -132,22 +136,15 @@ Do not continue if the final count verification reports mismatches.
 
 ### 3. Prepare production Docker runtime environment
 
-Export the runtime settings for this shell:
+No shell export is required for the normal `paper` cutover if you use the
+production override file.
 
-```bash
-export CRYPTO_DB_BACKEND=postgres
-export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
-export CRYPTO_API_PUBLISHED_PORT=8000
-export CRYPTO_EXECUTION_BACKEND=paper
-```
+If you intentionally want live trading on the first cut, update
+`docker-compose.production.yml` or pass explicit overrides for:
 
-If you intentionally want live trading on the first cut, also export:
-
-```bash
-export CRYPTO_EXECUTION_BACKEND=binance
-export CRYPTO_BINANCE_API_KEY='...'
-export CRYPTO_BINANCE_API_SECRET='...'
-```
+- `CRYPTO_EXECUTION_BACKEND=binance`
+- `CRYPTO_BINANCE_API_KEY`
+- `CRYPTO_BINANCE_API_SECRET`
 
 ### 4. Bring up production Docker services
 
@@ -156,6 +153,8 @@ For the first production cut, start the same collector set that staging uses:
 ```bash
 cd /root/crypto
 docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
   --profile postgres \
   --profile futures-collectors \
   up -d postgres api futures-candles futures-orderbook futures-aggtrade futures-premium futures-open-interest futures-liquidation
@@ -166,6 +165,8 @@ If you also want the Docker scheduler active immediately:
 ```bash
 cd /root/crypto
 docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
   --profile postgres \
   --profile futures-collectors \
   up -d scheduler
@@ -204,7 +205,7 @@ If production Docker fails verification:
 
 ```bash
 cd /root/crypto
-docker compose down
+docker compose -f docker-compose.yml -f docker-compose.production.yml down
 ```
 
 2. Restore the old runtime by starting the `systemd` services again
@@ -233,3 +234,6 @@ curl -sS http://127.0.0.1:8000/health | jq '.database_info, .execution_backend'
   immediate live trading.
 - If the host remains on a 2 GB droplet, avoid rebuilding images on the box
   during the actual cutover window.
+- Use `docker compose -f docker-compose.yml -f docker-compose.production.yml ...`
+  for future production rebuilds so services do not drift back to `sqlite` or
+  `binance` due to host `.env` defaults.
