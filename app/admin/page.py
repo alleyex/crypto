@@ -4594,11 +4594,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           try {
             const futuresConfig = await api("/market-data/futures/config");
             const futuresSymbols = futuresConfig?.symbol_names || [];
+            const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "1000PEPE" : symbol;
             const prevSelected = new Set(
               Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
             );
             marketFetchPills.innerHTML = futuresSymbols
-              .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
+              .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}" title="${symbol}">${symbolLabel(symbol)}</button>`)
               .join("");
             marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
               pill.addEventListener("click", () => {
@@ -5939,6 +5940,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       function updateMarketFetchSelectionSummary() {
+        const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "1000PEPE" : symbol;
         const selectedSymbols = Array.from(
           el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
         ).map((p) => p.dataset.symbol);
@@ -5948,7 +5950,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         const symbolSummary = el("market-fetch-symbol-summary");
         if (symbolSummary) {
-          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.join(", ") : "none"}`;
+          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.map(symbolLabel).join(", ") : "none"}`;
         }
 
         const timeframeSummary = el("market-fetch-timeframe-summary");
