@@ -852,8 +852,12 @@ def favicon() -> Response:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin() -> str:
-    return render_admin_page()
+def admin() -> HTMLResponse:
+    response = HTMLResponse(render_admin_page())
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/alerts/status")
