@@ -2281,6 +2281,23 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <div id="ob-stats-board" style="margin-top:14px">
           <span style="color:var(--muted);font-size:13px">Loading…</span>
         </div>
+        <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <div>
+              <h3 style="margin:0 0 4px 0">Futures Order Book Collection</h3>
+              <p style="margin:0;color:var(--muted)">Binance USDT perpetual top-10 depth snapshots for the configured futures symbols.</p>
+            </div>
+            <div class="button-row" style="gap:8px">
+              <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+              <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
+              <button class="secondary" id="fob-pause-btn"  data-action="fob-pause"  style="display:none">Pause</button>
+              <button class="secondary" data-action="fob-refresh">Refresh</button>
+            </div>
+          </div>
+          <div id="fob-stats-board" style="margin-top:14px">
+            <span style="color:var(--muted);font-size:13px">Loading…</span>
+          </div>
+        </div>
       </article>
 
       </section>
@@ -4998,6 +5015,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       refreshMarketStatus();
       refreshFetchHistory();
       refreshObStatus();
+      refreshFuturesObStatus();
       refreshPPOJobs().catch((error) => {
         const msg = el("ppo-train-message");
         if (msg) {
@@ -5821,6 +5839,65 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
       }
 
+      async function refreshFuturesObStatus() {
+        try {
+          const r = await api("/orderbook/futures/status");
+          const badge = el("fob-status-badge");
+          const enableBtn = el("fob-enable-btn");
+          const pauseBtn  = el("fob-pause-btn");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
+          }
+          if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
+          if (pauseBtn)  pauseBtn.style.display  = r.enabled ? "inline-flex" : "none";
+
+          const board = el("fob-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length
+              ? r.configured_symbols.join(", ")
+              : "none";
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures snapshots collected yet. Configured symbols: ${configured}</span>`;
+            return;
+          }
+          const rows = r.symbols.map(s => {
+            const staleLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.stale_seconds}s ago</span>`
+              : `<span style="color:#4ade80">${s.stale_seconds}s ago</span>`;
+            return `<tr>
+              <td>${s.symbol}</td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${s.latest_source || "unknown"}</td>
+              <td class="num">${staleLabel}</td>
+              <td class="num">${s.latest}</td>
+            </tr>`;
+          }).join("");
+          const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length
+            ? r.configured_symbols.join(", ")
+            : "none";
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Configured symbols: <strong style="color:var(--text)">${configured}</strong><br>
+              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Snapshots</th>
+                  <th class="num">Coverage</th><th class="num">Source</th>
+                  <th class="num">Last Seen</th><th class="num">Latest (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+        } catch(e) {
+          const board = el("fob-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+        }
+      }
+
       document.addEventListener("click", async (event) => {
         const obAction = event.target.dataset?.action;
         if (obAction === "ob-refresh") { await refreshObStatus(); return; }
@@ -5832,6 +5909,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (obAction === "ob-pause") {
           await api("/orderbook/pause", { method: "POST" });
           await refreshObStatus();
+          return;
+        }
+        if (obAction === "fob-refresh") { await refreshFuturesObStatus(); return; }
+        if (obAction === "fob-enable") {
+          await api("/orderbook/futures/enable", { method: "POST" });
+          await refreshFuturesObStatus();
+          return;
+        }
+        if (obAction === "fob-pause") {
+          await api("/orderbook/futures/pause", { method: "POST" });
+          await refreshFuturesObStatus();
           return;
         }
       });
