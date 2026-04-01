@@ -15,6 +15,7 @@ SERVICE_NAMES = [
     "crypto-futures-aggtrade.service",
     "crypto-futures-premium.service",
     "crypto-futures-open-interest.service",
+    "crypto-futures-liquidation.service",
 ]
 
 
