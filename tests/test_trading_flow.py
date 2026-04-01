@@ -8355,6 +8355,48 @@ def test_build_soak_validation_report_marks_stale_activity_as_degraded(monkeypat
     assert any("signals activity is stale" in issue for issue in report["issues"])
 
 
+def test_build_soak_validation_report_normalizes_datetime_heartbeats(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "heartbeat-soak.db"
+    log_path = tmp_path / "scheduler.log"
+    log_path.write_text(
+        "[2026-03-18T16:08:53] run=1 signal=BUY risk=APPROVED execution=FILLED BUY\n",
+        encoding="utf-8",
+    )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        seed_candles(connection, [10, 11, 12, 13, 14])
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.validation.soak_report.read_scheduler_log",
+        lambda lines=200: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_report.get_heartbeats",
+        lambda connection: [
+            {
+                "component": "scheduler",
+                "status": "ok",
+                "message": "Scheduler loop completed.",
+                "payload_json": "{}",
+                "last_seen_at": datetime(2026, 3, 18, 16, 8, 53, tzinfo=timezone.utc),
+            }
+        ],
+    )
+
+    report = build_soak_validation_report()
+    snapshot = json.dumps(report, sort_keys=True)
+
+    assert report["heartbeats"][0]["last_seen_at"] == "2026-03-18T16:08:53+00:00"
+    assert "2026-03-18T16:08:53+00:00" in snapshot
+
+
 def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path) -> None:
     history_file = tmp_path / "soak_history.jsonl"
     monkeypatch.setattr(
