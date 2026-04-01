@@ -36,10 +36,20 @@ def test_collect_futures_orderbook_snapshots_uses_rest_fallback(monkeypatch) -> 
             "bids": [[100.0, 2.0]],
             "asks": [[100.1, 1.0]],
             "ob_imbalance": 0.333333,
+            "ob_imbalance_mean": 0.333333,
+            "ob_imbalance_std": 0.0,
+            "ob_imbalance_min": 0.333333,
+            "ob_imbalance_max": 0.333333,
             "spread_pct": 0.001,
+            "spread_pct_mean": 0.001,
+            "spread_pct_max": 0.001,
             "mid_price": 100.05,
+            "mid_price_mean": 100.05,
+            "mid_price_min": 100.05,
+            "mid_price_max": 100.05,
             "source": "rest",
-            "sample_count": 0,
+            "sample_count": 1,
+            "first_event_ms": now_ms,
             "last_event_ms": now_ms,
         },
     )
@@ -48,14 +58,15 @@ def test_collect_futures_orderbook_snapshots_uses_rest_fallback(monkeypatch) -> 
 
     row = conn.execute(
         """
-        SELECT symbol, source, sample_count
+        SELECT symbol, source, sample_count, ob_imbalance_mean, spread_pct_mean, spread_bps_mean,
+               mid_price_mean, mid_price_ret_1m, coverage_ratio
         FROM futures_order_book_snapshots
         WHERE symbol = 'BTCUSDT'
         """
     ).fetchone()
     assert result["saved"] == 1
     assert result["source_counts"]["rest"] == 1
-    assert row == ("BTCUSDT", "rest", 0)
+    assert row == ("BTCUSDT", "rest", 1, 0.333333, 0.001, 10.0, 100.05, None, 0.0)
 
 
 def test_collect_futures_orderbook_snapshots_prefers_fresh_ws_cache(monkeypatch) -> None:
@@ -70,10 +81,20 @@ def test_collect_futures_orderbook_snapshots_prefers_fresh_ws_cache(monkeypatch)
         "bids": [[2000.0, 4.0]],
         "asks": [[2000.2, 3.0]],
         "ob_imbalance": 0.142857,
+        "ob_imbalance_mean": 0.25,
+        "ob_imbalance_std": 0.11,
+        "ob_imbalance_min": 0.142857,
+        "ob_imbalance_max": 0.4,
         "spread_pct": 0.0001,
+        "spread_pct_mean": 0.00012,
+        "spread_pct_max": 0.0002,
         "mid_price": 2000.1,
+        "mid_price_mean": 2000.3,
+        "mid_price_min": 1999.9,
+        "mid_price_max": 2000.6,
         "source": "ws",
         "sample_count": 7,
+        "first_event_ms": now_ms - 5000,
         "last_event_ms": now_ms,
     }
 
@@ -98,11 +119,92 @@ def test_collect_futures_orderbook_snapshots_prefers_fresh_ws_cache(monkeypatch)
 
     row = conn.execute(
         """
-        SELECT symbol, source, sample_count, last_event_ms
+        SELECT symbol, source, sample_count, first_event_ms, last_event_ms,
+               ob_imbalance_mean, spread_pct_mean, spread_bps_mean, mid_price_mean, coverage_ratio
         FROM futures_order_book_snapshots
         WHERE symbol = 'ETHUSDT'
         """
     ).fetchone()
     assert result["saved"] == 1
     assert result["source_counts"]["ws"] == 1
-    assert row == ("ETHUSDT", "ws", 7, now_ms)
+    assert row == ("ETHUSDT", "ws", 7, now_ms - 5000, now_ms, 0.25, 0.00012, 1.2, 2000.3, 0.083333)
+
+
+def test_snapshot_from_bucket_computes_minute_aggregates() -> None:
+    bucket = svc._new_bucket(
+        "BTCUSDT",
+        1_800_000,
+        [[100.0, 2.0]],
+        [[100.1, 1.0]],
+        0.3,
+        0.001,
+        100.05,
+        1_801_000,
+    )
+    svc._update_bucket(bucket, [[100.0, 2.0]], [[100.2, 1.0]], -0.1, 0.002, 100.10, 1_802_000)
+    snapshot = svc._snapshot_from_bucket(bucket, source="ws")
+
+    assert snapshot["sample_count"] == 2
+    assert snapshot["ob_imbalance"] == -0.1
+    assert snapshot["ob_imbalance_mean"] == 0.1
+    assert snapshot["ob_imbalance_min"] == -0.1
+    assert snapshot["ob_imbalance_max"] == 0.3
+    assert snapshot["spread_pct_mean"] == 0.0015
+    assert snapshot["spread_pct_max"] == 0.002
+    assert snapshot["spread_bps"] == 20.0
+    assert snapshot["spread_bps_mean"] == 15.0
+    assert snapshot["spread_bps_max"] == 20.0
+    assert snapshot["mid_price_mean"] == 100.07
+    assert snapshot["mid_price_min"] == 100.05
+    assert snapshot["mid_price_max"] == 100.1
+    assert snapshot["coverage_ratio"] == 0.016667
+
+
+def test_save_futures_orderbook_snapshot_computes_mid_price_ret_1m() -> None:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+
+    first = {
+        "symbol": "BTCUSDT",
+        "timestamp_ms": 60_000,
+        "bids": [[100.0, 1.0]],
+        "asks": [[100.1, 1.0]],
+        "ob_imbalance": 0.0,
+        "ob_imbalance_mean": 0.0,
+        "ob_imbalance_std": 0.0,
+        "ob_imbalance_min": 0.0,
+        "ob_imbalance_max": 0.0,
+        "spread_pct": 0.001,
+        "spread_pct_mean": 0.001,
+        "spread_pct_max": 0.001,
+        "spread_bps": 10.0,
+        "spread_bps_mean": 10.0,
+        "spread_bps_max": 10.0,
+        "mid_price": 100.0,
+        "mid_price_mean": 100.0,
+        "mid_price_min": 100.0,
+        "mid_price_max": 100.0,
+        "source": "rest",
+        "sample_count": 1,
+        "coverage_ratio": 0.0,
+        "first_event_ms": 60_000,
+        "last_event_ms": 60_000,
+    }
+    second = dict(first)
+    second["timestamp_ms"] = 120_000
+    second["mid_price"] = 101.0
+    second["mid_price_mean"] = 101.0
+    second["mid_price_min"] = 101.0
+    second["mid_price_max"] = 101.0
+
+    svc.save_futures_orderbook_snapshot(conn, first)
+    svc.save_futures_orderbook_snapshot(conn, second)
+
+    row = conn.execute(
+        """
+        SELECT mid_price_ret_1m
+        FROM futures_order_book_snapshots
+        WHERE symbol='BTCUSDT' AND timestamp_ms=120000
+        """
+    ).fetchone()
+    assert row == (0.01,)

@@ -688,10 +688,25 @@ def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
             bids_json     TEXT,
             asks_json     TEXT,
             ob_imbalance  NUMERIC(10,6),
+            ob_imbalance_mean NUMERIC(10,6),
+            ob_imbalance_std  NUMERIC(10,6),
+            ob_imbalance_min  NUMERIC(10,6),
+            ob_imbalance_max  NUMERIC(10,6),
             spread_pct    NUMERIC(10,8),
+            spread_pct_mean NUMERIC(10,8),
+            spread_pct_max  NUMERIC(10,8),
+            spread_bps    NUMERIC(10,4),
+            spread_bps_mean NUMERIC(10,4),
+            spread_bps_max  NUMERIC(10,4),
             mid_price     NUMERIC(20,8),
+            mid_price_mean NUMERIC(20,8),
+            mid_price_min  NUMERIC(20,8),
+            mid_price_max  NUMERIC(20,8),
+            mid_price_ret_1m NUMERIC(12,8),
             source        TEXT NOT NULL DEFAULT 'rest',
             sample_count  INTEGER NOT NULL DEFAULT 0,
+            coverage_ratio NUMERIC(10,6),
+            first_event_ms {epoch_t},
             last_event_ms {epoch_t},
             created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(symbol, timestamp_ms)
@@ -702,6 +717,32 @@ def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_futures_ob_snapshots_symbol_ts"
         " ON futures_order_book_snapshots(symbol, timestamp_ms);"
     )
+
+
+def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    existing = get_table_columns(connection, "futures_order_book_snapshots")
+    additions = [
+        ("ob_imbalance_mean", "NUMERIC(10,6)"),
+        ("ob_imbalance_std", "NUMERIC(10,6)"),
+        ("ob_imbalance_min", "NUMERIC(10,6)"),
+        ("ob_imbalance_max", "NUMERIC(10,6)"),
+        ("spread_pct_mean", "NUMERIC(10,8)"),
+        ("spread_pct_max", "NUMERIC(10,8)"),
+        ("spread_bps", "NUMERIC(10,4)"),
+        ("spread_bps_mean", "NUMERIC(10,4)"),
+        ("spread_bps_max", "NUMERIC(10,4)"),
+        ("mid_price_mean", "NUMERIC(20,8)"),
+        ("mid_price_min", "NUMERIC(20,8)"),
+        ("mid_price_max", "NUMERIC(20,8)"),
+        ("mid_price_ret_1m", "NUMERIC(12,8)"),
+        ("coverage_ratio", "NUMERIC(10,6)"),
+        ("first_event_ms", _epoch_millis_column_sql(get_backend_name(connection))),
+    ]
+    for column, sql_type in additions:
+        if column not in existing:
+            connection.execute(f"ALTER TABLE futures_order_book_snapshots ADD COLUMN {column} {sql_type};")
 
 
 def _add_training_jobs_progress(connection: DBConnection) -> None:
@@ -812,6 +853,7 @@ MIGRATIONS: list[Migration] = [
     ("040_add_training_jobs_progress", _add_training_jobs_progress),
     ("041_create_order_book_snapshots", _create_order_book_snapshots),
     ("042_create_futures_order_book_snapshots", _create_futures_order_book_snapshots),
+    ("043_add_futures_order_book_aggregate_columns", _add_futures_order_book_aggregate_columns),
 ]
 
 
