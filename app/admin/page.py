@@ -2260,8 +2260,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <button class="date-preset-btn" data-days="7">7d</button>
                 <button class="date-preset-btn" data-days="30">30d</button>
                 <button class="date-preset-btn" data-days="90">90d</button>
-                <button class="date-preset-btn" data-days="365">1y</button>
-                <button class="date-preset-btn" data-days="730">2y</button>
               </div>
             </div>
           </div>
