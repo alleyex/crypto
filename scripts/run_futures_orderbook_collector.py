@@ -61,6 +61,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.core.db import get_connection
 from app.core.env import load_dotenv_file
 from app.core.migrations import run_migrations
+from app.data.futures_orderbook_service import configured_futures_orderbook_symbols
+from app.data.futures_orderbook_service import reset_futures_orderbook_runtime
 from app.pipeline.futures_orderbook_job import run_futures_orderbook_job
 from app.system.heartbeat import record_heartbeat
 
@@ -74,6 +76,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _should_restart_collector(result: dict, expected_symbols: list[str]) -> bool:
+    collector = dict(result.get("collector") or {})
+    source_counts = dict(result.get("source_counts") or {})
+    symbol_runtime = dict(collector.get("symbol_runtime") or {})
+    ws_available = bool(collector.get("ws_available", True))
+    if not ws_available:
+        return True
+    if source_counts.get("ws", 0) > 0:
+        return False
+    covered = [symbol for symbol in expected_symbols if symbol in symbol_runtime]
+    return len(covered) == 0
+
+
 def main() -> None:
     _acquire_singleton()
     try:
@@ -85,6 +100,7 @@ def main() -> None:
             connection.close()
 
         run_count = 0
+        stale_ws_loops = 0
         while True:
             if _stop_requested():
                 stopped_at = datetime.now().isoformat(timespec="seconds")
@@ -113,6 +129,17 @@ def main() -> None:
                     result = run_futures_orderbook_job(connection)
                 finally:
                     connection.close()
+                expected_symbols = configured_futures_orderbook_symbols()
+                if _should_restart_collector(result, expected_symbols):
+                    stale_ws_loops += 1
+                else:
+                    stale_ws_loops = 0
+                if stale_ws_loops >= 2:
+                    reset_futures_orderbook_runtime(expected_symbols)
+                    stale_ws_loops = 0
+                    restart_line = f"[{started_at}] watchdog=restarted reason=stale_ws_runtime"
+                    print(restart_line, flush=True)
+                    _write_log(restart_line)
                 line = (
                     f"[{started_at}] run={run_count} step=futures_orderbook "
                     f"status={result.get('status')} saved={result.get('saved', 0)} "

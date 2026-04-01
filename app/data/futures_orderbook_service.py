@@ -375,6 +375,14 @@ class _FuturesOrderBookCollector:
 _COLLECTOR = _FuturesOrderBookCollector()
 
 
+def reset_futures_orderbook_runtime(symbols: Optional[list[str]] = None) -> dict[str, Any]:
+    global _COLLECTOR
+    _COLLECTOR = _FuturesOrderBookCollector()
+    if symbols:
+        _COLLECTOR.ensure_started(list(symbols))
+    return _COLLECTOR.runtime_status()
+
+
 def fetch_futures_orderbook_snapshot(symbol: str) -> Dict[str, Any]:
     params = {"symbol": symbol, "limit": _DEPTH_LIMIT}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
