@@ -5862,16 +5862,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           }
           const rows = r.symbols.map(s => {
-            const staleLabel = s.is_stale
-              ? `<span style="color:#f87171">${s.stale_seconds}s ago</span>`
-              : `<span style="color:#4ade80">${s.stale_seconds}s ago</span>`;
+            const eventAgeLabel = s.event_age_seconds == null
+              ? `<span style="color:var(--muted)">n/a</span>`
+              : (s.event_age_seconds > 180
+                ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
+                : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
             return `<tr>
               <td>${s.symbol}</td>
               <td class="num">${s.total.toLocaleString()}</td>
               <td class="num">${s.coverage_pct}%</td>
               <td class="num">${s.latest_source || "unknown"}</td>
-              <td class="num">${staleLabel}</td>
-              <td class="num">${s.latest}</td>
+              <td class="num">${s.current_minute_sample_count ?? 0}</td>
+              <td class="num">${eventAgeLabel}</td>
+              <td class="num">${s.last_snapshot_at || s.latest}</td>
             </tr>`;
           }).join("");
           const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length
@@ -5887,7 +5890,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <thead><tr>
                   <th>Symbol</th><th class="num">Snapshots</th>
                   <th class="num">Coverage</th><th class="num">Source</th>
-                  <th class="num">Last Seen</th><th class="num">Latest (UTC)</th>
+                  <th class="num">Samples</th><th class="num">Last Event</th>
+                  <th class="num">Last Snapshot (UTC)</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
               </table>

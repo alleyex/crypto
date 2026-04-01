@@ -352,11 +352,23 @@ class _FuturesOrderBookCollector:
 
     def runtime_status(self) -> dict[str, Any]:
         with self._lock:
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            symbol_runtime: dict[str, dict[str, Any]] = {}
+            for symbol, snapshot in self._snapshots.items():
+                last_event_ms = int(snapshot.get("last_event_ms", 0) or 0)
+                symbol_runtime[symbol] = {
+                    "current_minute": int(snapshot.get("timestamp_ms", 0) or 0),
+                    "sample_count": int(snapshot.get("sample_count", 0) or 0),
+                    "first_event_ms": int(snapshot.get("first_event_ms", 0) or 0),
+                    "last_event_ms": last_event_ms,
+                    "event_age_seconds": max(0, round((now_ms - last_event_ms) / 1000)) if last_event_ms else None,
+                }
             return {
                 "symbols": list(self._symbols),
                 "ws_available": self._ws_available,
                 "last_error": self._last_error,
                 "cached_symbols": sorted(self._snapshots.keys()),
+                "symbol_runtime": symbol_runtime,
             }
 
 
@@ -540,6 +552,7 @@ def collect_futures_orderbook_snapshots(
 
 
 def get_futures_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]]:
+    runtime = _COLLECTOR.runtime_status().get("symbol_runtime", {})
     rows = connection.execute(
         """
         SELECT symbol,
@@ -561,10 +574,13 @@ def get_futures_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]
         total = int(total)
         earliest_ms = int(earliest_ms)
         latest_ms = int(latest_ms)
+        symbol_runtime = runtime.get(symbol, {})
         span_ms = latest_ms - earliest_ms
         expected = max(1, round(span_ms / 60_000) + 1)
         coverage_pct = round(total / expected * 100, 1)
         stale_seconds = round((now_ms - latest_ms) / 1000)
+        last_event_ms = symbol_runtime.get("last_event_ms")
+        event_age_seconds = symbol_runtime.get("event_age_seconds")
         result.append(
             {
                 "symbol": symbol,
@@ -574,6 +590,14 @@ def get_futures_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]
                 "stale_seconds": stale_seconds,
                 "is_stale": stale_seconds > 180,
                 "latest_source": str(latest_source or "unknown"),
+                "last_snapshot_at": datetime.fromtimestamp(latest_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "last_event_at": (
+                    datetime.fromtimestamp(int(last_event_ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if last_event_ms
+                    else None
+                ),
+                "event_age_seconds": event_age_seconds,
+                "current_minute_sample_count": int(symbol_runtime.get("sample_count", 0) or 0),
             }
         )
     return result

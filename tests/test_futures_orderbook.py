@@ -208,3 +208,66 @@ def test_save_futures_orderbook_snapshot_computes_mid_price_ret_1m() -> None:
         """
     ).fetchone()
     assert row == (0.01,)
+
+
+def test_get_futures_orderbook_stats_exposes_runtime_fields(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+
+    svc.save_futures_orderbook_snapshot(
+        conn,
+        {
+            "symbol": "BTCUSDT",
+            "timestamp_ms": 120_000,
+            "bids": [[100.0, 1.0]],
+            "asks": [[100.1, 1.0]],
+            "ob_imbalance": 0.2,
+            "ob_imbalance_mean": 0.15,
+            "ob_imbalance_std": 0.05,
+            "ob_imbalance_min": 0.1,
+            "ob_imbalance_max": 0.2,
+            "spread_pct": 0.001,
+            "spread_pct_mean": 0.001,
+            "spread_pct_max": 0.001,
+            "spread_bps": 10.0,
+            "spread_bps_mean": 10.0,
+            "spread_bps_max": 10.0,
+            "mid_price": 100.0,
+            "mid_price_mean": 100.0,
+            "mid_price_min": 100.0,
+            "mid_price_max": 100.0,
+            "source": "ws",
+            "sample_count": 3,
+            "coverage_ratio": 0.5,
+            "first_event_ms": 100_000,
+            "last_event_ms": 110_000,
+        },
+    )
+
+    class CollectorStub:
+        def runtime_status(self):
+            return {
+                "symbol_runtime": {
+                    "BTCUSDT": {
+                        "current_minute": 120_000,
+                        "sample_count": 7,
+                        "first_event_ms": 121_000,
+                        "last_event_ms": 125_000,
+                        "event_age_seconds": 12,
+                    }
+                }
+            }
+
+    monkeypatch.setattr(svc, "_COLLECTOR", CollectorStub())
+
+    stats = svc.get_futures_orderbook_stats(conn)
+    assert len(stats) == 1
+    row = stats[0]
+    assert row["symbol"] == "BTCUSDT"
+    assert row["total"] == 1
+    assert row["coverage_pct"] == 100.0
+    assert row["latest_source"] == "ws"
+    assert row["last_snapshot_at"] == "1970-01-01 00:02:00"
+    assert row["last_event_at"] == "1970-01-01 00:02:05"
+    assert row["event_age_seconds"] == 12
+    assert row["current_minute_sample_count"] == 7
