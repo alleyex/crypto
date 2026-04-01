@@ -131,7 +131,8 @@ def _build_snapshot_from_depth(
         "mid_price_ret_1m": None,
         "source": source,
         "sample_count": int(sample_count),
-        "coverage_ratio": 0.0,
+        "active_seconds": 1 if sample_count > 0 else 0,
+        "coverage_ratio": round((1 / 60.0), 6) if sample_count > 0 else 0.0,
         "first_event_ms": int(first_event_ms or timestamp_ms),
         "last_event_ms": int(last_event_ms or timestamp_ms),
     }
@@ -167,6 +168,7 @@ def _new_bucket(
         "mid_price_min": mid_price,
         "mid_price_max": mid_price,
         "sample_count": 1,
+        "active_second_marks": {event_ms // 1000},
         "first_event_ms": event_ms,
         "last_event_ms": event_ms,
     }
@@ -203,6 +205,7 @@ def _update_bucket(
         bucket["mid_price_min"] = mid_price if current_min is None else min(float(current_min), mid_price)
         bucket["mid_price_max"] = mid_price if current_max is None else max(float(current_max), mid_price)
     bucket["sample_count"] += 1
+    bucket.setdefault("active_second_marks", set()).add(event_ms // 1000)
     bucket["last_event_ms"] = event_ms
 
 
@@ -219,11 +222,12 @@ def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, A
     spread_bps_last = float(spread_last) * 10_000.0 if spread_last is not None else None
     spread_bps_mean = spread_mean * 10_000.0 if spread_mean is not None else None
     spread_bps_max = float(bucket["spread_pct_max"]) * 10_000.0 if bucket["spread_pct_max"] is not None else None
+    active_seconds = len(bucket.get("active_second_marks", set()))
     coverage_ratio = 0.0
     first_event_ms = int(bucket["first_event_ms"])
     last_event_ms = int(bucket["last_event_ms"])
-    if last_event_ms >= first_event_ms:
-        coverage_ratio = min(1.0, max(0.0, (last_event_ms - first_event_ms) / 60_000.0))
+    if active_seconds > 0:
+        coverage_ratio = min(1.0, max(0.0, active_seconds / 60.0))
     return {
         "symbol": bucket["symbol"],
         "timestamp_ms": int(bucket["timestamp_ms"]),
@@ -247,6 +251,7 @@ def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, A
         "mid_price_ret_1m": None,
         "source": source,
         "sample_count": n,
+        "active_seconds": active_seconds,
         "coverage_ratio": round(coverage_ratio, 6),
         "first_event_ms": first_event_ms,
         "last_event_ms": last_event_ms,
@@ -419,8 +424,8 @@ INSERT INTO futures_order_book_snapshots
      spread_pct, spread_pct_mean, spread_pct_max,
      spread_bps, spread_bps_mean, spread_bps_max,
      mid_price, mid_price_mean, mid_price_min, mid_price_max, mid_price_ret_1m,
-     source, sample_count, coverage_ratio, first_event_ms, last_event_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     source, sample_count, active_seconds, coverage_ratio, first_event_ms, last_event_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     bids_json = excluded.bids_json,
     asks_json = excluded.asks_json,
@@ -442,6 +447,7 @@ ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     mid_price_ret_1m = excluded.mid_price_ret_1m,
     source = excluded.source,
     sample_count = excluded.sample_count,
+    active_seconds = excluded.active_seconds,
     coverage_ratio = excluded.coverage_ratio,
     first_event_ms = excluded.first_event_ms,
     last_event_ms = excluded.last_event_ms;
@@ -478,15 +484,28 @@ def save_futures_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str
     if snapshot.get("spread_bps_max") is None and snapshot.get("spread_pct_max") is not None:
         snapshot["spread_bps_max"] = round(float(snapshot["spread_pct_max"]) * 10_000.0, 4)
     if snapshot.get("coverage_ratio") is None:
+        active_seconds = snapshot.get("active_seconds")
+        if active_seconds is not None:
+            snapshot["coverage_ratio"] = round(min(1.0, max(0.0, int(active_seconds) / 60.0)), 6)
+        else:
+            first_event_ms = snapshot.get("first_event_ms")
+            last_event_ms = snapshot.get("last_event_ms")
+            if first_event_ms is not None and last_event_ms is not None and int(last_event_ms) >= int(first_event_ms):
+                snapshot["coverage_ratio"] = round(
+                    min(1.0, max(0.0, (int(last_event_ms) - int(first_event_ms)) / 60_000.0)),
+                    6,
+                )
+            else:
+                snapshot["coverage_ratio"] = 0.0
+    if snapshot.get("active_seconds") is None:
         first_event_ms = snapshot.get("first_event_ms")
         last_event_ms = snapshot.get("last_event_ms")
-        if first_event_ms is not None and last_event_ms is not None and int(last_event_ms) >= int(first_event_ms):
-            snapshot["coverage_ratio"] = round(
-                min(1.0, max(0.0, (int(last_event_ms) - int(first_event_ms)) / 60_000.0)),
-                6,
-            )
+        if snapshot.get("coverage_ratio") is not None:
+            snapshot["active_seconds"] = max(0, min(60, int(round(float(snapshot["coverage_ratio"]) * 60))))
+        elif first_event_ms is not None and last_event_ms is not None and int(last_event_ms) >= int(first_event_ms):
+            snapshot["active_seconds"] = max(0, min(60, int(round((int(last_event_ms) - int(first_event_ms)) / 1000.0))))
         else:
-            snapshot["coverage_ratio"] = 0.0
+            snapshot["active_seconds"] = 0
     snapshot["mid_price_ret_1m"] = _compute_mid_price_ret_1m(
         connection,
         str(snapshot["symbol"]),
@@ -518,6 +537,7 @@ def save_futures_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str
             snapshot.get("mid_price_ret_1m"),
             snapshot.get("source", "rest"),
             int(snapshot.get("sample_count", 0)),
+            int(snapshot.get("active_seconds", 0)),
             snapshot.get("coverage_ratio"),
             snapshot.get("first_event_ms"),
             snapshot.get("last_event_ms"),
@@ -627,6 +647,7 @@ def get_recent_futures_orderbook_snapshots(
                timestamp_ms,
                source,
                sample_count,
+               active_seconds,
                coverage_ratio,
                ob_imbalance,
                ob_imbalance_mean,
@@ -651,8 +672,8 @@ def get_recent_futures_orderbook_snapshots(
 
     result: list[dict[str, Any]] = []
     for row in rows:
-        bids = json.loads(row[16]) if row[16] else []
-        asks = json.loads(row[17]) if row[17] else []
+        bids = json.loads(row[17]) if row[17] else []
+        asks = json.loads(row[18]) if row[18] else []
         best_bid = float(bids[0][0]) if bids else None
         best_ask = float(asks[0][0]) if asks else None
         result.append(
@@ -661,23 +682,24 @@ def get_recent_futures_orderbook_snapshots(
                 "timestamp": datetime.fromtimestamp(int(row[1]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 "source": str(row[2] or "unknown"),
                 "sample_count": int(row[3] or 0),
-                "coverage_ratio": float(row[4] or 0.0),
-                "ob_imbalance": float(row[5] or 0.0),
-                "ob_imbalance_mean": float(row[6] or 0.0),
-                "ob_imbalance_std": float(row[7] or 0.0),
-                "spread_bps": float(row[8]) if row[8] is not None else None,
-                "spread_bps_mean": float(row[9]) if row[9] is not None else None,
-                "spread_bps_max": float(row[10]) if row[10] is not None else None,
-                "mid_price": float(row[11]) if row[11] is not None else None,
-                "mid_price_mean": float(row[12]) if row[12] is not None else None,
-                "mid_price_ret_1m": float(row[13]) if row[13] is not None else None,
+                "active_seconds": int(row[4] or 0),
+                "coverage_ratio": float(row[5] or 0.0),
+                "ob_imbalance": float(row[6] or 0.0),
+                "ob_imbalance_mean": float(row[7] or 0.0),
+                "ob_imbalance_std": float(row[8] or 0.0),
+                "spread_bps": float(row[9]) if row[9] is not None else None,
+                "spread_bps_mean": float(row[10]) if row[10] is not None else None,
+                "spread_bps_max": float(row[11]) if row[11] is not None else None,
+                "mid_price": float(row[12]) if row[12] is not None else None,
+                "mid_price_mean": float(row[13]) if row[13] is not None else None,
+                "mid_price_ret_1m": float(row[14]) if row[14] is not None else None,
                 "first_event_at": (
-                    datetime.fromtimestamp(int(row[14]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-                    if row[14] is not None else None
-                ),
-                "last_event_at": (
                     datetime.fromtimestamp(int(row[15]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                     if row[15] is not None else None
+                ),
+                "last_event_at": (
+                    datetime.fromtimestamp(int(row[16]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if row[16] is not None else None
                 ),
                 "best_bid": best_bid,
                 "best_ask": best_ask,

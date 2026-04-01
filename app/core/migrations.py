@@ -705,6 +705,7 @@ def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
             mid_price_ret_1m NUMERIC(12,8),
             source        TEXT NOT NULL DEFAULT 'rest',
             sample_count  INTEGER NOT NULL DEFAULT 0,
+            active_seconds INTEGER NOT NULL DEFAULT 0,
             coverage_ratio NUMERIC(10,6),
             first_event_ms {epoch_t},
             last_event_ms {epoch_t},
@@ -737,6 +738,7 @@ def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
         ("mid_price_min", "NUMERIC(20,8)"),
         ("mid_price_max", "NUMERIC(20,8)"),
         ("mid_price_ret_1m", "NUMERIC(12,8)"),
+        ("active_seconds", "INTEGER"),
         ("coverage_ratio", "NUMERIC(10,6)"),
         ("first_event_ms", _epoch_millis_column_sql(get_backend_name(connection))),
     ]
