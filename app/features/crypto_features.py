@@ -14,6 +14,9 @@ Required DataFrame columns:
   open_time, open, high, low, close, volume,
   quote_asset_volume, number_of_trades,
   taker_buy_base_volume, taker_buy_quote_volume
+
+Optional order book columns via ``orderbook_df``:
+  timestamp_ms, ob_imbalance, spread_pct, mid_price
 """
 
 import numpy as np
@@ -97,6 +100,7 @@ def _true_range(df: pd.DataFrame) -> pd.Series:
 def build_crypto_features(
     df: pd.DataFrame,
     funding_df: "pd.DataFrame | None" = None,
+    orderbook_df: "pd.DataFrame | None" = None,
 ) -> pd.DataFrame:
     """Compute feature set for a candle DataFrame.
 
@@ -110,6 +114,12 @@ def build_crypto_features(
           funding_time_ms (int), funding_rate (float), mark_price (float).
         When provided, funding rate features are computed and merged.
         Each funding rate applies forward until the next settlement (every 8h).
+    orderbook_df:
+        Optional order book DataFrame with columns:
+          timestamp_ms (int), ob_imbalance (float),
+          spread_pct (float), mid_price (float).
+        When provided, snapshots are merged as-of using the most recent
+        snapshot at or before each candle open_time.
 
     Returns
     -------
@@ -409,6 +419,37 @@ def build_crypto_features(
         hours_to_next = (8.0 - (hour_utc % 8.0)) % 8.0
         df["funding_cos"] = np.cos(2 * np.pi * hours_to_next / 8.0)
         df["funding_sin"] = np.sin(2 * np.pi * hours_to_next / 8.0)
+
+    # ── Order book features (optional) ───────────────────────────────────
+    if orderbook_df is not None and len(orderbook_df) > 0:
+        ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
+        ob = orderbook_df[ob_cols].copy().sort_values("timestamp_ms").reset_index(drop=True)
+        ob["timestamp_ms"] = ob["timestamp_ms"].astype(np.int64)
+        ob["ob_imbalance"] = ob["ob_imbalance"].astype(float)
+        ob["spread_pct"] = ob["spread_pct"].astype(float)
+        ob["mid_price"] = ob["mid_price"].astype(float)
+
+        candle_ms = df["open_time"].values.astype(np.int64)
+        ob_ms = ob["timestamp_ms"].values.astype(np.int64)
+        idx = np.searchsorted(ob_ms, candle_ms, side="right") - 1
+
+        valid = idx >= 0
+        imbalance = np.full(len(df), np.nan, dtype=float)
+        spread_pct = np.full(len(df), np.nan, dtype=float)
+        mid_price = np.full(len(df), np.nan, dtype=float)
+
+        imbalance[valid] = ob["ob_imbalance"].values[idx[valid]]
+        spread_pct[valid] = ob["spread_pct"].values[idx[valid]]
+        mid_price[valid] = ob["mid_price"].values[idx[valid]]
+
+        df["ob_imbalance"] = pd.Series(imbalance, index=df.index).clip(-1.0, 1.0)
+        df["spread_bps"] = pd.Series(spread_pct, index=df.index).mul(10_000.0).clip(0.0, 50.0)
+        df["mid_dev_from_close"] = (
+            (pd.Series(mid_price, index=df.index) - close) / safe_close
+        ).clip(-0.01, 0.01)
+        df["ob_imbalance_5_mean"] = (
+            df["ob_imbalance"].rolling(window=5, min_periods=1).mean().clip(-1.0, 1.0)
+        )
 
     return df
 

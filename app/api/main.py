@@ -3336,3 +3336,41 @@ def pause_orderbook() -> Dict[str, Any]:
     from app.data.orderbook_service import disable_orderbook_collection
     disable_orderbook_collection()
     return {"enabled": False}
+
+
+@app.get("/orderbook/futures/status")
+def get_futures_orderbook_status() -> Dict[str, Any]:
+    """Return futures order book collection status and per-symbol stats."""
+    from app.data.futures_orderbook_service import (
+        configured_futures_orderbook_symbols,
+        get_futures_orderbook_stats,
+        is_futures_orderbook_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        stats = get_futures_orderbook_stats(connection)
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_orderbook_collection_enabled(),
+        "configured_symbols": configured_futures_orderbook_symbols(),
+        "symbols": stats,
+        "total_snapshots": sum(s["total"] for s in stats),
+    }
+
+
+@app.post("/orderbook/futures/enable")
+def enable_futures_orderbook() -> Dict[str, Any]:
+    """Enable futures order book collection."""
+    from app.data.futures_orderbook_service import enable_futures_orderbook_collection
+    enable_futures_orderbook_collection()
+    return {"enabled": True}
+
+
+@app.post("/orderbook/futures/pause")
+def pause_futures_orderbook() -> Dict[str, Any]:
+    """Pause futures order book collection."""
+    from app.data.futures_orderbook_service import disable_futures_orderbook_collection
+    disable_futures_orderbook_collection()
+    return {"enabled": False}

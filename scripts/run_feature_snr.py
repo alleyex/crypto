@@ -62,6 +62,12 @@ LAYERS: dict[str, list[str]] = {
         "dist_day_open",
         "bb_squeeze",
     ],
+    "L9_orderbook": [
+        "ob_imbalance",
+        "spread_bps",
+        "mid_dev_from_close",
+        "ob_imbalance_5_mean",
+    ],
 }
 
 
@@ -129,19 +135,35 @@ def main() -> None:
 
     print(f"Loading {args.symbol}/{args.timeframe} candles...")
     conn = get_connection()
-    rows = conn.execute(
-        """SELECT open_time, open, high, low, close, volume,
-                  quote_asset_volume, number_of_trades,
-                  taker_buy_base_volume, taker_buy_quote_volume
-           FROM candles WHERE symbol=? AND timeframe=? ORDER BY open_time ASC""",
-        (args.symbol, args.timeframe),
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            """SELECT open_time, open, high, low, close, volume,
+                      quote_asset_volume, number_of_trades,
+                      taker_buy_base_volume, taker_buy_quote_volume
+               FROM candles WHERE symbol=? AND timeframe=? ORDER BY open_time ASC""",
+            (args.symbol, args.timeframe),
+        ).fetchall()
+        ob_rows = conn.execute(
+            """
+            SELECT timestamp_ms, ob_imbalance, spread_pct, mid_price
+            FROM order_book_snapshots
+            WHERE symbol=?
+            ORDER BY timestamp_ms ASC
+            """,
+            (args.symbol,),
+        ).fetchall()
+    finally:
+        conn.close()
 
     cols = ["open_time", "open", "high", "low", "close", "volume",
             "quote_asset_volume", "number_of_trades",
             "taker_buy_base_volume", "taker_buy_quote_volume"]
-    df = build_crypto_features(pd.DataFrame(rows, columns=cols)).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
+    ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
+    orderbook_df = pd.DataFrame(ob_rows, columns=ob_cols) if ob_rows else None
+    df = build_crypto_features(
+        pd.DataFrame(rows, columns=cols),
+        orderbook_df=orderbook_df,
+    ).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
     print(f"Rows after warm-up: {len(df)}\n")
 
     # Incremental: each layer adds to cumulative feature set

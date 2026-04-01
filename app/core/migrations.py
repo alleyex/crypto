@@ -675,6 +675,35 @@ def _create_order_book_snapshots(connection: DBConnection) -> None:
     )
 
 
+def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
+    """Create futures_order_book_snapshots table for perp order book collection."""
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_order_book_snapshots (
+            {_auto_id_column_sql(backend)},
+            symbol        TEXT NOT NULL,
+            timestamp_ms  {epoch_t} NOT NULL,
+            bids_json     TEXT,
+            asks_json     TEXT,
+            ob_imbalance  NUMERIC(10,6),
+            spread_pct    NUMERIC(10,8),
+            mid_price     NUMERIC(20,8),
+            source        TEXT NOT NULL DEFAULT 'rest',
+            sample_count  INTEGER NOT NULL DEFAULT 0,
+            last_event_ms {epoch_t},
+            created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_ob_snapshots_symbol_ts"
+        " ON futures_order_book_snapshots(symbol, timestamp_ms);"
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -782,6 +811,7 @@ MIGRATIONS: list[Migration] = [
     ("039_add_fills_commission", _add_fills_commission),
     ("040_add_training_jobs_progress", _add_training_jobs_progress),
     ("041_create_order_book_snapshots", _create_order_book_snapshots),
+    ("042_create_futures_order_book_snapshots", _create_futures_order_book_snapshots),
 ]
 
 
