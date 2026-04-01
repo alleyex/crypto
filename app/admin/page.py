@@ -853,13 +853,39 @@ def render_admin_page() -> str:
       }
 
       .status-badge {
-        display: inline-block;
-        padding: 1px 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 132px;
+        min-height: 42px;
+        text-align: center;
+        padding: 6px 12px;
         border-radius: 4px;
         background: var(--line);
         color: var(--muted);
-        font-size: 11px;
-        font-weight: 500;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .status-badge.badge-live {
+        color: #f87171;
+        animation: badge-blink 1.1s ease-in-out infinite;
+      }
+
+      .status-badge.badge-paused {
+        color: var(--muted);
+      }
+
+      @keyframes badge-blink {
+        0%, 100% {
+          opacity: 1;
+          text-shadow: 0 0 0 rgba(248, 113, 113, 0);
+        }
+        50% {
+          opacity: 0.35;
+          text-shadow: 0 0 14px rgba(248, 113, 113, 0.55);
+        }
       }
 
       .status-symbol-stats {
@@ -5795,7 +5821,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const enableBtn = el("ob-enable-btn");
           if (badge) {
             badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
-            badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
           }
           if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
 
@@ -5848,7 +5874,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const enableBtn = el("fob-enable-btn");
           if (badge) {
             badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
-            badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
           }
           if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
 
