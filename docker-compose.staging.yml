@@ -1,7 +1,5 @@
 services:
   api:
-    ports:
-      - "${CRYPTO_STAGING_API_PORT:-18000}:8000"
     environment:
       CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}

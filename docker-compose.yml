@@ -28,7 +28,7 @@ services:
         required: false
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${CRYPTO_API_PUBLISHED_PORT:-8000}:8000"
     environment:
       CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
       CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
