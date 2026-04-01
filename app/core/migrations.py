@@ -755,6 +755,19 @@ def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE futures_order_book_snapshots ADD COLUMN active_seconds INTEGER DEFAULT 0;")
 
 
+def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    connection.execute(
+        """
+        UPDATE futures_order_book_snapshots
+        SET active_seconds = MIN(60, MAX(0, ROUND(COALESCE(coverage_ratio, 0) * 60)))
+        WHERE COALESCE(active_seconds, 0) = 0
+          AND COALESCE(coverage_ratio, 0) > 0
+        """
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -865,6 +878,7 @@ MIGRATIONS: list[Migration] = [
     ("042_create_futures_order_book_snapshots", _create_futures_order_book_snapshots),
     ("043_add_futures_order_book_aggregate_columns", _add_futures_order_book_aggregate_columns),
     ("044_add_futures_order_book_active_seconds", _add_futures_order_book_active_seconds),
+    ("045_backfill_futures_order_book_active_seconds", _backfill_futures_order_book_active_seconds),
 ]
 
 
