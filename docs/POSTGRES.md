@@ -53,6 +53,29 @@ export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
 docker compose --profile postgres up --build
 ```
 
+**Full runtime with futures collectors:**
+
+```bash
+export CRYPTO_DB_BACKEND=postgres
+export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
+docker compose --profile postgres --profile futures-collectors up --build -d
+```
+
+This profile set brings up:
+
+- `api`
+- `scheduler`
+- `postgres`
+- `futures-orderbook`
+- `futures-aggtrade`
+- `futures-premium`
+- `futures-open-interest`
+- `futures-liquidation`
+
+Current Docker gap to keep in mind:
+
+- futures candles do not yet have an always-on collector service equivalent to the five futures microstructure collectors above
+
 **Automated Compose validation:**
 
 ```bash

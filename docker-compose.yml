@@ -24,6 +24,7 @@ services:
       postgres:
         condition: service_healthy
         required: false
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -60,6 +61,7 @@ services:
     command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
     depends_on:
       - api
+    restart: unless-stopped
     environment:
       CRYPTO_ORDER_QTY: ${CRYPTO_ORDER_QTY:-0.001}
       CRYPTO_MAX_POSITION_QTY: ${CRYPTO_MAX_POSITION_QTY:-0.002}
@@ -93,6 +95,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
+    restart: unless-stopped
     # Drains market_data jobs enqueued by the scheduler (queue_dispatch mode).
     command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_DATA_INTERVAL:-60} --mode market-data-only --queue-drain"
     environment:
@@ -119,6 +122,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
+    restart: unless-stopped
     # Drains strategy jobs enqueued by the scheduler (queue_dispatch mode).
     command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --queue-drain --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
     environment:
@@ -146,6 +150,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
+    restart: unless-stopped
     # Drains risk jobs enqueued by the scheduler (queue_dispatch mode).
     command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_RISK_INTERVAL:-60} --mode risk-only --queue-drain"
     environment:
@@ -172,6 +177,7 @@ services:
     profiles: ["split-workers"]
     build:
       context: .
+    restart: unless-stopped
     # Drains execution jobs enqueued by the scheduler (queue_dispatch mode).
     command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_EXECUTION_INTERVAL:-60} --mode execution-only --queue-drain"
     environment:
@@ -193,6 +199,131 @@ services:
       CRYPTO_BINANCE_API_SECRET: ${CRYPTO_BINANCE_API_SECRET:-}
       CRYPTO_BINANCE_TESTNET: ${CRYPTO_BINANCE_TESTNET:-true}
       CRYPTO_EXECUTION_BACKEND: ${CRYPTO_EXECUTION_BACKEND:-paper}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  futures-orderbook:
+    profiles: ["futures-collectors"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_futures_orderbook_collector.py --interval ${CRYPTO_FUTURES_ORDERBOOK_INTERVAL:-60}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
+      CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FUTURES_ORDERBOOK_SYMBOLS: ${CRYPTO_FUTURES_ORDERBOOK_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  futures-aggtrade:
+    profiles: ["futures-collectors"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_futures_aggtrade_collector.py --interval ${CRYPTO_FUTURES_AGGTRADE_INTERVAL:-60}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
+      CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FUTURES_AGGTRADE_SYMBOLS: ${CRYPTO_FUTURES_AGGTRADE_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  futures-premium:
+    profiles: ["futures-collectors"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_futures_premium_collector.py --interval ${CRYPTO_FUTURES_PREMIUM_INTERVAL:-60}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
+      CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FUTURES_PREMIUM_SYMBOLS: ${CRYPTO_FUTURES_PREMIUM_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  futures-open-interest:
+    profiles: ["futures-collectors"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_futures_open_interest_collector.py --interval ${CRYPTO_FUTURES_OPEN_INTEREST_INTERVAL:-60}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
+      CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FUTURES_OPEN_INTEREST_SYMBOLS: ${CRYPTO_FUTURES_OPEN_INTEREST_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+
+  futures-liquidation:
+    profiles: ["futures-collectors"]
+    build:
+      context: .
+    command: sh -c "python scripts/run_futures_liquidation_collector.py --interval ${CRYPTO_FUTURES_LIQUIDATION_INTERVAL:-60}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
+      CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
+      CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
+      CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
+      CRYPTO_FUTURES_LIQUIDATION_SYMBOLS: ${CRYPTO_FUTURES_LIQUIDATION_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_TIMEOUT_SECONDS: ${TELEGRAM_TIMEOUT_SECONDS:-5}
