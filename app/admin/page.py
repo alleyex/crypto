@@ -5814,6 +5814,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       async function refreshMarketStatus() {
         try {
           const rows = await api("/candles/futures/status");
+          window.__futuresCandleStatusRows = rows || [];
           const board = el("market-status-board");
           if (!board) return;
           if (!rows || rows.length === 0) {
@@ -6441,6 +6442,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const timeframes = selectedTf.length > 0 ? selectedTf : null;
           const msg = el("market-fetch-message");
           const result = el("market-fetch-result");
+          const statusRows = Array.isArray(window.__futuresCandleStatusRows) ? window.__futuresCandleStatusRows : [];
           if (!symbols && !timeframes) {
             if (msg) {
               msg.textContent = "Select at least one symbol or timeframe before clearing data.";
@@ -6449,10 +6451,32 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             }
             return;
           }
+          const matches = statusRows.filter((row) => {
+            const symbolOk = !symbols || symbols.includes(row.symbol);
+            const timeframeOk = !timeframes || timeframes.includes(row.timeframe);
+            return symbolOk && timeframeOk;
+          });
+          if (matches.length === 0) {
+            const availableBits = (symbols || [])
+              .map((symbol) => {
+                const tfs = statusRows
+                  .filter((row) => row.symbol === symbol)
+                  .map((row) => row.timeframe);
+                const unique = [...new Set(tfs)];
+                return unique.length ? `${symbol}: ${unique.join(", ")}` : `${symbol}: none`;
+              })
+              .join(" | ");
+            if (msg) {
+              msg.textContent = `No futures candle rows match the current selection.${availableBits ? ` Available timeframes: ${availableBits}` : ""}`;
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+            return;
+          }
           const scopeBits = [];
           if (symbols?.length) scopeBits.push(`symbols: ${symbols.join(", ")}`);
           if (timeframes?.length) scopeBits.push(`timeframes: ${timeframes.join(", ")}`);
-          const confirmed = window.confirm(`Clear futures candle data for ${scopeBits.join(" | ")}?`);
+          const confirmed = window.confirm(`Clear ${matches.length} futures candle row groups for ${scopeBits.join(" | ")}?`);
           if (!confirmed) return;
           try {
             const r = await api("/market-data/futures/clear", {
