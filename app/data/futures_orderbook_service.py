@@ -551,8 +551,11 @@ def collect_futures_orderbook_snapshots(
     }
 
 
-def get_futures_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]]:
-    runtime = _COLLECTOR.runtime_status().get("symbol_runtime", {})
+def get_futures_orderbook_stats(
+    connection: DBConnection,
+    runtime: Optional[dict[str, dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    runtime = runtime if runtime is not None else _COLLECTOR.runtime_status().get("symbol_runtime", {})
     rows = connection.execute(
         """
         SELECT symbol,

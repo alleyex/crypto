@@ -3349,7 +3349,23 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
     connection = get_connection()
     try:
         run_migrations(connection)
-        stats = get_futures_orderbook_stats(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_orderbook_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        collector_runtime = dict((heartbeat_payload.get("collector") or {}))
+        stats = get_futures_orderbook_stats(
+            connection,
+            runtime=(collector_runtime.get("symbol_runtime") or {}),
+        )
     finally:
         connection.close()
     return {
@@ -3357,6 +3373,8 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
         "configured_symbols": configured_futures_orderbook_symbols(),
         "symbols": stats,
         "total_snapshots": sum(s["total"] for s in stats),
+        "collector": collector_runtime,
+        "last_heartbeat_at": last_heartbeat_at,
     }
 
 

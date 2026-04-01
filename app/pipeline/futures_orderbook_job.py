@@ -36,6 +36,7 @@ def run_futures_orderbook_job(
             "errors": errors,
             "source_counts": source_counts,
             "symbols": symbols,
+            "collector": result.get("collector") or {},
         },
     )
 

@@ -6,6 +6,7 @@ from datetime import timezone
 
 from app.core.migrations import run_migrations
 from app.data import futures_orderbook_service as svc
+from app.pipeline.futures_orderbook_job import run_futures_orderbook_job
 
 
 def test_collect_futures_orderbook_snapshots_uses_rest_fallback(monkeypatch) -> None:
@@ -271,3 +272,43 @@ def test_get_futures_orderbook_stats_exposes_runtime_fields(monkeypatch) -> None
     assert row["last_event_at"] == "1970-01-01 00:02:05"
     assert row["event_age_seconds"] == 12
     assert row["current_minute_sample_count"] == 7
+
+
+def test_run_futures_orderbook_job_persists_collector_runtime(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    run_migrations(conn)
+
+    monkeypatch.setattr("app.pipeline.futures_orderbook_job.is_futures_orderbook_collection_enabled", lambda: True)
+    monkeypatch.setattr("app.pipeline.futures_orderbook_job.configured_futures_orderbook_symbols", lambda: ["BTCUSDT"])
+    monkeypatch.setattr(
+        "app.pipeline.futures_orderbook_job.collect_futures_orderbook_snapshots",
+        lambda connection, symbols: {
+            "saved": 1,
+            "errors": [],
+            "source_counts": {"ws": 1},
+            "collector": {
+                "symbol_runtime": {
+                    "BTCUSDT": {
+                        "sample_count": 9,
+                        "last_event_ms": 123456789,
+                        "event_age_seconds": 4,
+                    }
+                }
+            },
+        },
+    )
+
+    result = run_futures_orderbook_job(conn)
+    assert result["status"] == "ok"
+
+    row = conn.execute(
+        """
+        SELECT status, message, payload_json
+        FROM runtime_heartbeats
+        WHERE component = 'futures_orderbook_collector'
+        """
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    assert "1/1" in row[1]
+    assert "\"symbol_runtime\"" in row[2]
