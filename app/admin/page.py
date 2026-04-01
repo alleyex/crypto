@@ -5959,7 +5959,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const detailRows = rows.map((row) => `
             <tr>
               <td>${row.timestamp}</td>
-              <td class="num">${row.source || "unknown"}</td>
               <td class="num">${row.sample_count ?? 0}</td>
               <td class="num">${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
               <td class="num">${row.best_bid != null ? row.best_bid.toFixed(4) : "—"} / ${row.best_ask != null ? row.best_ask.toFixed(4) : "—"}</td>
@@ -5976,7 +5975,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <table class="data-table">
                 <thead><tr>
                   <th>Timestamp (UTC)</th>
-                  <th class="num">Source</th>
                   <th class="num">Samples</th>
                   <th class="num">Coverage</th>
                   <th class="num">Best Bid / Ask</th>
