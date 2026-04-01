@@ -59,6 +59,7 @@ docker compose --profile postgres up --build
 export CRYPTO_DB_BACKEND=postgres
 export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
 docker compose --profile postgres --profile futures-collectors up --build -d
+```
 
 By default, Docker runtime services use the lightweight
 `requirements-runtime.txt` image to avoid pulling PPO/training dependencies
@@ -67,7 +68,6 @@ full ML dependencies inside containers, override the build arg:
 
 ```bash
 CRYPTO_DOCKER_REQUIREMENTS_FILE=requirements.txt docker compose --profile postgres up --build
-```
 ```
 
 This profile set brings up:
@@ -81,6 +81,26 @@ This profile set brings up:
 - `futures-premium`
 - `futures-open-interest`
 - `futures-liquidation`
+
+**Docker staging on an alternate port:**
+
+Use the checked-in override file to run a PostgreSQL-backed staging API and
+collector set without conflicting with the existing systemd production
+services:
+
+```bash
+mkdir -p staging/storage staging/logs staging/runtime
+export CRYPTO_DB_BACKEND=postgres
+export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.staging.yml \
+  --profile postgres \
+  --profile futures-collectors \
+  up --build -d api futures-candles futures-orderbook futures-aggtrade futures-premium futures-open-interest futures-liquidation
+```
+
+The staging API defaults to port `18000`.
 
 **Automated Compose validation:**
 
