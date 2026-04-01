@@ -869,23 +869,11 @@ def render_admin_page() -> str:
       }
 
       .status-badge.badge-live {
-        color: #f87171;
-        animation: badge-blink 1.1s ease-in-out infinite;
+        color: #4ade80;
       }
 
       .status-badge.badge-paused {
         color: var(--muted);
-      }
-
-      @keyframes badge-blink {
-        0%, 100% {
-          opacity: 1;
-          text-shadow: 0 0 0 rgba(248, 113, 113, 0);
-        }
-        50% {
-          opacity: 0.35;
-          text-shadow: 0 0 14px rgba(248, 113, 113, 0.55);
-        }
       }
 
       .status-symbol-stats {
