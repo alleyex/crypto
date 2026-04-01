@@ -18,6 +18,7 @@ from app.core.settings import SQLITE_PATH
 DEFAULT_SERVICES = [
     "crypto-api.service",
     "crypto-scheduler.service",
+    "crypto-futures-candles.service",
     "crypto-futures-orderbook.service",
     "crypto-futures-aggtrade.service",
     "crypto-futures-premium.service",
