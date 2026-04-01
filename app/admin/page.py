@@ -5892,7 +5892,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           board.innerHTML = `
             <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
               Configured symbols: <strong style="color:var(--text)">${configured}</strong><br>
-              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong>
+              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong><br>
+              Watchdog restarts (24h): <strong style="color:var(--text)">${(r.watchdog_restart_count_24h||0).toLocaleString()}</strong>
+              <span style="margin-left:8px">Last restart: <strong style="color:var(--text)">${r.last_watchdog_restart_at || "never"}</strong></span>
             </div>
             <div class="data-table-wrap">
               <table class="data-table">

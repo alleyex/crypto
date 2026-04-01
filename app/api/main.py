@@ -3366,6 +3366,18 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
             connection,
             runtime=(collector_runtime.get("symbol_runtime") or {}),
         )
+        watchdog_row = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS restart_count_24h,
+                MAX(created_at) AS last_restart_at
+            FROM audit_events
+            WHERE event_type = 'futures_orderbook_watchdog_restart'
+              AND created_at >= datetime('now', '-1 day')
+            """
+        ).fetchone()
+        watchdog_restart_count_24h = int(watchdog_row[0] or 0) if watchdog_row is not None else 0
+        last_watchdog_restart_at = watchdog_row[1] if watchdog_row is not None else None
     finally:
         connection.close()
     return {
@@ -3375,6 +3387,8 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
         "total_snapshots": sum(s["total"] for s in stats),
         "collector": collector_runtime,
         "last_heartbeat_at": last_heartbeat_at,
+        "watchdog_restart_count_24h": watchdog_restart_count_24h,
+        "last_watchdog_restart_at": last_watchdog_restart_at,
     }
 
 
