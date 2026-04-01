@@ -860,6 +860,7 @@ def render_admin_page() -> str:
         padding: 12px 14px;
         border-radius: 8px;
         background: var(--panel-2);
+        color: var(--text);
         margin-bottom: 6px;
         cursor: pointer;
         transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
@@ -890,9 +891,11 @@ def render_admin_page() -> str:
       }
 
       .status-symbol-name {
+        color: var(--text);
         font-weight: 600;
         font-size: 14px;
         margin-right: 6px;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.22);
       }
 
       .status-badge {
@@ -905,7 +908,7 @@ def render_admin_page() -> str:
         padding: 6px 12px;
         border-radius: 4px;
         background: var(--line);
-        color: var(--muted);
+        color: #d7e3ef;
         font-size: 12px;
         font-weight: 700;
         line-height: 1.2;
@@ -934,11 +937,12 @@ def render_admin_page() -> str:
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: var(--muted);
+        color: #b6c5d5;
         margin-bottom: 2px;
       }
 
       .status-stat-value {
+        color: var(--text);
         font-size: 13px;
         font-weight: 600;
       }
