@@ -159,6 +159,11 @@ The cutover helper will:
 
 Use `--dry-run` first on production to review the exact service and migration commands.
 
+For the actual migration from the current `systemd + SQLite` production layout
+to `Docker + PostgreSQL`, use the dedicated runbook:
+
+- [Production Docker + PostgreSQL Cutover](/Users/alleyex/Projects/crypto/docs/PRODUCTION_DOCKER_POSTGRES_CUTOVER.md)
+
 ## Runtime Validation Record (March 18, 2026)
 
 Confirmed working:
