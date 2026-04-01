@@ -1,11 +1,11 @@
 services:
   api:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
-      CRYPTO_EXECUTION_BACKEND: ${CRYPTO_EXECUTION_BACKEND:-paper}
-      CRYPTO_BINANCE_API_KEY: ${CRYPTO_BINANCE_API_KEY:-}
-      CRYPTO_BINANCE_API_SECRET: ${CRYPTO_BINANCE_API_SECRET:-}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_EXECUTION_BACKEND: paper
+      CRYPTO_BINANCE_API_KEY: ""
+      CRYPTO_BINANCE_API_SECRET: ""
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -13,8 +13,8 @@ services:
 
   futures-candles:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -22,8 +22,8 @@ services:
 
   futures-orderbook:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -31,8 +31,8 @@ services:
 
   futures-aggtrade:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -40,8 +40,8 @@ services:
 
   futures-premium:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -49,8 +49,8 @@ services:
 
   futures-open-interest:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
@@ -58,8 +58,8 @@ services:
 
   futures-liquidation:
     environment:
-      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
-      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-postgresql://crypto:crypto@postgres:5432/crypto}
+      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
     volumes:
       - ${CRYPTO_STAGING_STORAGE_DIR:-./staging/storage}:/app/storage
       - ${CRYPTO_STAGING_LOG_DIR:-./staging/logs}:/app/logs
