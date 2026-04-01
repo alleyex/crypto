@@ -59,6 +59,39 @@ docker compose --profile postgres up --build
 python scripts/run_postgres_compose_validation.py
 ```
 
+## SQLite To PostgreSQL Migration
+
+Use the direct migration script when the SQLite source is already frozen:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --truncate
+```
+
+Use the freeze-and-migrate script when SQLite may still be receiving writes:
+
+```bash
+python scripts/freeze_sqlite_and_migrate_to_postgres.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --truncate
+```
+
+The freeze flow:
+
+1. Creates a consistent SQLite snapshot using the SQLite backup API
+2. Runs PostgreSQL migrations on the target
+3. Imports rows from the frozen snapshot into PostgreSQL
+4. Verifies row counts between the snapshot and PostgreSQL
+
+Recommended production cutover order:
+
+1. Stop API, scheduler, and all collector services that write SQLite
+2. Create a final frozen snapshot and migrate it into PostgreSQL
+3. Review the printed count verification and confirm there are no mismatches
+4. Point all services at PostgreSQL via `CRYPTO_DB_BACKEND=postgres` and `CRYPTO_DATABASE_URL=...`
+5. Start services and re-check `/health`
+
 ## Runtime Validation Record (March 18, 2026)
 
 Confirmed working:

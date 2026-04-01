@@ -160,6 +160,72 @@ def _truncate_tables(connection: Any, tables: list[str]) -> None:
     connection.commit()
 
 
+def get_table_counts_sqlite(sqlite_path: Path, tables: list[str] | None = None) -> dict[str, int]:
+    connection = sqlite3.connect(str(sqlite_path))
+    try:
+        source_tables = _sqlite_tables(connection)
+        requested_tables = tables or TABLE_ORDER
+        active_tables = [table for table in requested_tables if table in source_tables]
+        counts: dict[str, int] = {}
+        for table in active_tables:
+            row = connection.execute(f"SELECT COUNT(*) FROM {table};").fetchone()
+            counts[table] = int(row[0]) if row else 0
+        return counts
+    finally:
+        connection.close()
+
+
+def get_table_counts_postgres(database_url: str, tables: list[str] | None = None) -> dict[str, int]:
+    psycopg = _load_psycopg()
+    connection = psycopg.connect(database_url)
+    try:
+        target_tables = _postgres_tables(connection)
+        requested_tables = tables or TABLE_ORDER
+        active_tables = [table for table in requested_tables if table in target_tables]
+        counts: dict[str, int] = {}
+        with connection.cursor() as cursor:
+            for table in active_tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {table};")
+                row = cursor.fetchone()
+                counts[table] = int(row[0]) if row else 0
+        return counts
+    finally:
+        connection.close()
+
+
+def migrate_sqlite_to_postgres(
+    *,
+    sqlite_path: Path,
+    database_url: str,
+    batch_size: int = 1000,
+    truncate: bool = False,
+    tables: list[str] | None = None,
+) -> list[tuple[str, int]]:
+    psycopg = _load_psycopg()
+    sqlite_connection = sqlite3.connect(str(sqlite_path))
+    postgres_connection = psycopg.connect(database_url)
+
+    try:
+        run_migrations(postgres_connection)
+
+        source_tables = _sqlite_tables(sqlite_connection)
+        target_tables = _postgres_tables(postgres_connection)
+        requested_tables = tables or TABLE_ORDER
+        active_tables = [table for table in requested_tables if table in source_tables and table in target_tables]
+
+        if truncate:
+            _truncate_tables(postgres_connection, list(reversed(active_tables)))
+
+        summary: list[tuple[str, int]] = []
+        for table in active_tables:
+            copied = _copy_table(sqlite_connection, postgres_connection, table, batch_size)
+            summary.append((table, copied))
+        return summary
+    finally:
+        sqlite_connection.close()
+        postgres_connection.close()
+
+
 def main() -> None:
     args = parse_args()
     if not args.database_url.strip():
@@ -169,36 +235,22 @@ def main() -> None:
     if not sqlite_path.exists():
         raise RuntimeError(f"SQLite database not found: {sqlite_path}")
 
-    psycopg = _load_psycopg()
-    sqlite_connection = sqlite3.connect(str(sqlite_path))
-    postgres_connection = psycopg.connect(args.database_url)
-
-    try:
-        run_migrations(postgres_connection)
-
-        source_tables = _sqlite_tables(sqlite_connection)
-        target_tables = _postgres_tables(postgres_connection)
-        requested_tables = (
-            [item.strip() for item in args.tables.split(",") if item.strip()]
-            if args.tables.strip()
-            else TABLE_ORDER
-        )
-        tables = [table for table in requested_tables if table in source_tables and table in target_tables]
-
-        if args.truncate:
-            _truncate_tables(postgres_connection, list(reversed(tables)))
-
-        summary: list[tuple[str, int]] = []
-        for table in tables:
-            copied = _copy_table(sqlite_connection, postgres_connection, table, args.batch_size)
-            summary.append((table, copied))
-            print(f"{table}: {copied} rows processed")
-
-        total = sum(count for _, count in summary)
-        print(f"done: {len(summary)} tables, {total} rows processed")
-    finally:
-        sqlite_connection.close()
-        postgres_connection.close()
+    requested_tables = (
+        [item.strip() for item in args.tables.split(",") if item.strip()]
+        if args.tables.strip()
+        else TABLE_ORDER
+    )
+    summary = migrate_sqlite_to_postgres(
+        sqlite_path=sqlite_path,
+        database_url=args.database_url,
+        batch_size=args.batch_size,
+        truncate=args.truncate,
+        tables=requested_tables,
+    )
+    for table, copied in summary:
+        print(f"{table}: {copied} rows processed")
+    total = sum(count for _, count in summary)
+    print(f"done: {len(summary)} tables, {total} rows processed")
 
 
 if __name__ == "__main__":
