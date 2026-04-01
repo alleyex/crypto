@@ -3468,6 +3468,47 @@ def test_broker_protection_check_ignores_duplicate_only_rejected_risk_streak(mon
         connection.close()
 
 
+def test_broker_protection_check_ignores_no_position_sell_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "SELL",
+                    "REJECTED",
+                    "No position available to sell.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "No position available to sell."}},
+        )
+
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "No position available to sell."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
+    finally:
+        connection.close()
+
+
 def test_maybe_send_broker_alert_deduplicates_same_protected_state(monkeypatch, tmp_path) -> None:
     state_file = tmp_path / "broker_alert_state.json"
     sent_messages: list[str] = []

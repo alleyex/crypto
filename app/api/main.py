@@ -296,6 +296,7 @@ def _broker_protection_check(
             "Cooldown active" in reason
             or reason == "Signal is HOLD."
             or reason == "Duplicate signal type."
+            or reason == "No position available to sell."
         )
 
     latest_run = pipeline_check.get("latest_run", {}) if isinstance(pipeline_check, dict) else {}
