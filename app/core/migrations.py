@@ -497,7 +497,13 @@ def _ensure_postgres_identity_pk(
         f"ALTER TABLE {table_name} ALTER COLUMN id SET DEFAULT nextval('{sequence_name}');"
     )
     connection.execute(
-        f"SELECT setval('{sequence_name}', COALESCE((SELECT MAX(id) FROM {table_name}), 0), true);"
+        f"""
+        SELECT setval(
+            '{sequence_name}',
+            GREATEST(COALESCE((SELECT MAX(id) FROM {table_name}), 0), 1),
+            COALESCE((SELECT MAX(id) FROM {table_name}), 0) > 0
+        );
+        """
     )
 
 
