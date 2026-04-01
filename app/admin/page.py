@@ -2274,8 +2274,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div class="button-row" style="gap:8px">
             <span id="ob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
             <button class="secondary" id="ob-enable-btn" data-action="ob-enable" style="display:none">Enable Collection</button>
-            <button class="secondary" id="ob-pause-btn"  data-action="ob-pause"  style="display:none">Pause</button>
-            <button class="secondary" id="ob-refresh-btn" data-action="ob-refresh">Refresh Status</button>
+            <button class="secondary" id="ob-refresh-btn" data-action="ob-refresh">Refresh</button>
           </div>
         </div>
         <div id="ob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
@@ -2291,8 +2290,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="button-row" style="gap:8px">
               <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
               <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
-              <button class="secondary" id="fob-pause-btn"  data-action="fob-pause"  style="display:none">Pause</button>
-              <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh Status</button>
+              <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh</button>
             </div>
           </div>
           <div id="fob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
@@ -5795,13 +5793,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const r = await api("/orderbook/status");
           const badge = el("ob-status-badge");
           const enableBtn = el("ob-enable-btn");
-          const pauseBtn  = el("ob-pause-btn");
           if (badge) {
             badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
             badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
           }
           if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
-          if (pauseBtn)  pauseBtn.style.display  = r.enabled ? "inline-flex" : "none";
 
           const board = el("ob-stats-board");
           if (!board) return;
@@ -5850,13 +5846,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const r = await api("/orderbook/futures/status");
           const badge = el("fob-status-badge");
           const enableBtn = el("fob-enable-btn");
-          const pauseBtn  = el("fob-pause-btn");
           if (badge) {
             badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
             badge.className = "status-badge " + (r.enabled ? "badge-ok" : "badge-warn");
           }
           if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
-          if (pauseBtn)  pauseBtn.style.display  = r.enabled ? "inline-flex" : "none";
 
           const board = el("fob-stats-board");
           if (!board) return;
@@ -5919,7 +5913,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       async function withRefreshButton(buttonId, runRefresh) {
         const button = el(buttonId);
-        const originalText = button?.textContent || "Refresh Status";
+        const originalText = button?.textContent || "Refresh";
         if (button) {
           button.disabled = true;
           button.textContent = "Refreshing...";
