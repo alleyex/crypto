@@ -29,7 +29,7 @@ Schema (created by migration 027):
 import json
 from typing import Any, Dict, List, Optional
 
-from app.core.db import DBConnection, fetch_all_as_dicts
+from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid
 
 _INSERT_SQL = """
 INSERT INTO training_jobs (symbol, timeframe, feature_set, status, params_json)
@@ -57,7 +57,8 @@ def create_job(
     params: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Insert a new training job and return its id."""
-    cursor = connection.execute(
+    job_id = insert_and_get_rowid(
+        connection,
         _INSERT_SQL,
         (
             symbol,
@@ -67,7 +68,7 @@ def create_job(
         ),
     )
     connection.commit()
-    return cursor.lastrowid  # type: ignore[return-value]
+    return int(job_id)
 
 
 def update_job(
