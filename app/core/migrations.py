@@ -810,6 +810,34 @@ def _create_futures_aggtrade_minutes(connection: DBConnection) -> None:
     )
 
 
+def _create_futures_premium_metrics(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_premium_metrics (
+            {_auto_id_column_sql(backend)},
+            symbol               TEXT NOT NULL,
+            timestamp_ms         {epoch_t} NOT NULL,
+            mark_price           NUMERIC(20,8),
+            index_price          NUMERIC(20,8),
+            estimated_settle_price NUMERIC(20,8),
+            last_funding_rate    NUMERIC(16,10),
+            next_funding_time_ms {epoch_t},
+            mark_index_basis_pct NUMERIC(16,10),
+            mark_index_spread_bps NUMERIC(16,6),
+            source               TEXT NOT NULL DEFAULT 'rest',
+            created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_premium_metrics_symbol_ts"
+        " ON futures_premium_metrics(symbol, timestamp_ms);"
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -922,6 +950,7 @@ MIGRATIONS: list[Migration] = [
     ("044_add_futures_order_book_active_seconds", _add_futures_order_book_active_seconds),
     ("045_backfill_futures_order_book_active_seconds", _backfill_futures_order_book_active_seconds),
     ("046_create_futures_aggtrade_minutes", _create_futures_aggtrade_minutes),
+    ("047_create_futures_premium_metrics", _create_futures_premium_metrics),
 ]
 
 
