@@ -108,12 +108,7 @@ Use the checked-in production override so rebuilds stay pinned to PostgreSQL
 and `paper` execution:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.production.yml \
-  --profile postgres \
-  --profile futures-collectors \
-  up --build -d
+python3 scripts/run_production_compose.py --build
 ```
 
 **Automated Compose validation:**

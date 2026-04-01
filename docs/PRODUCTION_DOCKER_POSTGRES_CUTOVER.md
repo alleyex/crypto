@@ -152,24 +152,21 @@ For the first production cut, start the same collector set that staging uses:
 
 ```bash
 cd /root/crypto
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.production.yml \
-  --profile postgres \
-  --profile futures-collectors \
-  up -d postgres api futures-candles futures-orderbook futures-aggtrade futures-premium futures-open-interest futures-liquidation
+python3 scripts/run_production_compose.py --services postgres,api,futures-candles,futures-orderbook,futures-aggtrade,futures-premium,futures-open-interest,futures-liquidation
 ```
 
 If you also want the Docker scheduler active immediately:
 
 ```bash
 cd /root/crypto
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.production.yml \
-  --profile postgres \
-  --profile futures-collectors \
-  up -d scheduler
+python3 scripts/run_production_compose.py --services scheduler
+```
+
+To rebuild images during a deploy:
+
+```bash
+cd /root/crypto
+python3 scripts/run_production_compose.py --build
 ```
 
 ### 5. Verify production Docker health
@@ -234,6 +231,6 @@ curl -sS http://127.0.0.1:8000/health | jq '.database_info, .execution_backend'
   immediate live trading.
 - If the host remains on a 2 GB droplet, avoid rebuilding images on the box
   during the actual cutover window.
-- Use `docker compose -f docker-compose.yml -f docker-compose.production.yml ...`
-  for future production rebuilds so services do not drift back to `sqlite` or
-  `binance` due to host `.env` defaults.
+- Use [scripts/run_production_compose.py](/Users/alleyex/Projects/crypto/scripts/run_production_compose.py)
+  for future production restarts and rebuilds so services do not drift back to
+  `sqlite` or `binance` due to host `.env` defaults.
