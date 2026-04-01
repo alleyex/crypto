@@ -91,28 +91,50 @@ export TELEGRAM_CHAT_ID=
 export CRYPTO_USE_FAKE_KLINES=        # set to 1 to bypass live Binance fetches
 ```
 
-## Scheduler
+## Services
 
-**launchd (macOS, recommended for production):**
+**systemd (Linux production):**
+
+The production deployment now runs three supervised services:
+
+- `crypto-api.service`
+- `crypto-scheduler.service`
+- `crypto-futures-orderbook.service`
+
+Install / refresh them from the repo:
 
 ```bash
-python scripts/install_launch_agent.py     # install and start
-python scripts/read_launch_agent_status.py # check status
-python scripts/uninstall_launch_agent.py   # remove
+sudo /root/crypto/.venv/bin/python /root/crypto/scripts/install_systemd_services.py
+systemctl status crypto-api.service crypto-scheduler.service crypto-futures-orderbook.service
+```
+
+Service templates live in:
+
+- `deploy/systemd/crypto-api.service`
+- `deploy/systemd/crypto-scheduler.service`
+- `deploy/systemd/crypto-futures-orderbook.service`
+
+**launchd (macOS local/dev only):**
+
+```bash
+python scripts/install_launch_agent.py
+python scripts/read_launch_agent_status.py
+python scripts/uninstall_launch_agent.py
 ```
 
 LaunchAgent label: `com.alleyex.crypto.scheduler`
 
-**Direct run:**
+**Direct run (manual/debug):**
 
 ```bash
 python scripts/run_scheduler.py                              # continuous loop
 python scripts/run_scheduler.py --interval 60 --iterations 1 # one cycle
 python scripts/run_scheduler.py --mode market-data-only
 python scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
+python scripts/run_futures_orderbook_collector.py --interval 60
 ```
 
-**Stop / clear:**
+**Stop / clear scheduler flag:**
 
 ```bash
 python scripts/set_stop_flag.py
@@ -125,6 +147,11 @@ python scripts/clear_stop_flag.py
 docker compose up --build                             # api + scheduler (SQLite)
 docker compose --profile split-workers up --build     # split into 4 worker services
 docker compose --profile postgres up --build          # with PostgreSQL backend
+
+# Docker runtime services default to the lightweight requirements-runtime.txt image.
+# If you need PPO inference/training or other full ML dependencies in containers,
+# rebuild with:
+CRYPTO_DOCKER_REQUIREMENTS_FILE=requirements.txt docker compose up --build
 ```
 
 Split worker environment variables:

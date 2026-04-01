@@ -53,11 +53,127 @@ export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
 docker compose --profile postgres up --build
 ```
 
+**Full runtime with futures collectors:**
+
+```bash
+export CRYPTO_DB_BACKEND=postgres
+export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
+docker compose --profile postgres --profile futures-collectors up --build -d
+```
+
+By default, Docker runtime services use the lightweight
+`requirements-runtime.txt` image to avoid pulling PPO/training dependencies
+such as Stable-Baselines3 and Torch during routine deploys. If you need
+full ML dependencies inside containers, override the build arg:
+
+```bash
+CRYPTO_DOCKER_REQUIREMENTS_FILE=requirements.txt docker compose --profile postgres up --build
+```
+
+This profile set brings up:
+
+- `api`
+- `scheduler`
+- `postgres`
+- `futures-candles`
+- `futures-orderbook`
+- `futures-aggtrade`
+- `futures-premium`
+- `futures-open-interest`
+- `futures-liquidation`
+
+**Docker staging on an alternate port:**
+
+Use the checked-in override file to run a PostgreSQL-backed staging API and
+collector set without conflicting with the existing systemd production
+services:
+
+```bash
+mkdir -p staging/storage staging/logs staging/runtime
+export CRYPTO_DB_BACKEND=postgres
+export CRYPTO_DATABASE_URL=postgresql://crypto:crypto@postgres:5432/crypto
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.staging.yml \
+  --profile postgres \
+  --profile futures-collectors \
+  up --build -d api futures-candles futures-orderbook futures-aggtrade futures-premium futures-open-interest futures-liquidation
+```
+
+The staging API defaults to port `18000`.
+
+**Production Docker runtime:**
+
+Use the checked-in production override so rebuilds stay pinned to PostgreSQL
+and `paper` execution. The production override also forces `api` and
+`scheduler` to build with the full `requirements.txt` image so `ppo`
+inference can run inside production Docker:
+
+```bash
+python3 scripts/run_production_compose.py --build
+```
+
 **Automated Compose validation:**
 
 ```bash
 python scripts/run_postgres_compose_validation.py
 ```
+
+## SQLite To PostgreSQL Migration
+
+Use the direct migration script when the SQLite source is already frozen:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --truncate
+```
+
+Use the freeze-and-migrate script when SQLite may still be receiving writes:
+
+```bash
+python scripts/freeze_sqlite_and_migrate_to_postgres.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --truncate
+```
+
+The freeze flow:
+
+1. Creates a consistent SQLite snapshot using the SQLite backup API
+2. Runs PostgreSQL migrations on the target
+3. Imports rows from the frozen snapshot into PostgreSQL
+4. Verifies row counts between the snapshot and PostgreSQL
+
+Recommended production cutover order:
+
+1. Stop API, scheduler, and all collector services that write SQLite
+2. Create a final frozen snapshot and migrate it into PostgreSQL
+3. Review the printed count verification and confirm there are no mismatches
+4. Point all services at PostgreSQL via `CRYPTO_DB_BACKEND=postgres` and `CRYPTO_DATABASE_URL=...`
+5. Start services and re-check `/health`
+
+To automate those steps on a Linux host with the project's `systemd` services, use:
+
+```bash
+python scripts/run_postgres_cutover.py \
+  --database-url postgresql://crypto:crypto@127.0.0.1:5432/crypto \
+  --set-postgres-env \
+  --restart-services
+```
+
+The cutover helper will:
+
+1. Stop the configured SQLite-writing services
+2. Run the freeze-and-migrate workflow with `--truncate`
+3. Optionally rewrite `.env` to PostgreSQL settings
+4. Optionally restart the services
+
+Use `--dry-run` first on production to review the exact service and migration commands.
+
+For the actual migration from the current `systemd + SQLite` production layout
+to `Docker + PostgreSQL`, use the dedicated runbook:
+
+- [Production Docker + PostgreSQL Cutover](/Users/alleyex/Projects/crypto/docs/PRODUCTION_DOCKER_POSTGRES_CUTOVER.md)
 
 ## Runtime Validation Record (March 18, 2026)
 

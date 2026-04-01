@@ -8,15 +8,15 @@ Observation space  (Box float32, shape=(N_FEAT + 3,)):
   [N_FEAT+1]    unrealised log-return since entry, clipped ±0.10
   [N_FEAT+2]    bars held in current position / episode_length  [0, 1]
 
-Action space  (Discrete 3):
+Action space  (Discrete 2):
   0  →  flat   (close open position)
   1  →  long
-  2  →  short
 
 Reward:
-  step_pnl = position * log_ret_1_t
-  fee      = |Δposition| * FEE_PER_SIDE   (charged once on change)
-  reward   = step_pnl − fee
+  step_pnl      = position * log_ret_1_t
+  fee           = |Δposition| * FEE_PER_SIDE   (charged once on change)
+  holding_bonus = holding_bonus_rate  if position == 1 (long only) else 0
+  reward        = step_pnl − fee + holding_bonus
 
 Episode:
   Runs for `episode_length` steps.
@@ -27,6 +27,7 @@ Episode:
 from __future__ import annotations
 
 import math
+from collections import deque
 import numpy as np
 import pandas as pd
 import gymnasium as gym
@@ -46,8 +47,8 @@ _FEAT_COLS = get_feature_columns()
 N_FEAT     = len(_FEAT_COLS)
 OBS_DIM    = N_FEAT + 3   # features + position + upnl + bars_held_norm
 
-# Map discrete action → signed position
-_ACTION_TO_POS = {0: 0, 1: 1, 2: -1}
+# Map discrete action → signed position (long/flat only, no short)
+_ACTION_TO_POS = {0: 0, 1: 1}
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,8 @@ class CryptoTradingEnv(gym.Env):
         episode_length: int = DEFAULT_EP_LEN,
         deterministic: bool = False,
         seed: Optional[int] = None,
+        frame_stack: int = 1,
+        holding_bonus_rate: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -90,8 +93,10 @@ class CryptoTradingEnv(gym.Env):
         self._df            = df.reset_index(drop=True)
         self._episode_length = episode_length
         self._deterministic = deterministic
+        self._frame_stack   = frame_stack
 
         # Pre-extract numpy arrays for speed
+        self._holding_bonus_rate = float(holding_bonus_rate)
         self._feat_arr  = df[_FEAT_COLS].to_numpy(dtype=np.float32)
         self._ret_arr   = df["log_ret_1"].to_numpy(dtype=np.float32)
 
@@ -108,12 +113,19 @@ class CryptoTradingEnv(gym.Env):
             )
 
         # Gymnasium spaces
+        obs_dim_total = OBS_DIM * frame_stack
         self.observation_space = spaces.Box(
-            low  = np.full(OBS_DIM, -10.0, dtype=np.float32),
-            high = np.full(OBS_DIM,  10.0, dtype=np.float32),
+            low  = np.full(obs_dim_total, -10.0, dtype=np.float32),
+            high = np.full(obs_dim_total,  10.0, dtype=np.float32),
             dtype=np.float32,
         )
-        self.action_space = spaces.Discrete(3)
+        self.action_space = spaces.Discrete(2)
+
+        # Frame buffer (pre-filled with zeros)
+        self._frame_buffer: deque = deque(
+            [np.zeros(OBS_DIM, dtype=np.float32)] * frame_stack,
+            maxlen=frame_stack,
+        )
 
         # Episode state (initialised in reset)
         self._start_idx: int = 0
@@ -149,6 +161,10 @@ class CryptoTradingEnv(gym.Env):
         self._entry_ret = 0.0
         self._bars_held = 0
 
+        # Refill frame buffer with zeros before pushing initial obs
+        for i in range(self._frame_stack):
+            self._frame_buffer[i] = np.zeros(OBS_DIM, dtype=np.float32)
+
         return self._obs(), {}
 
     def step(
@@ -157,19 +173,25 @@ class CryptoTradingEnv(gym.Env):
         idx = self._start_idx + self._step_idx
 
         # --- Execute action ---
+        old_position = self._position
         new_position = _ACTION_TO_POS[int(action)]
-        delta        = abs(new_position - self._position)
+        delta        = abs(new_position - old_position)
         fee          = delta * FEE_PER_SIDE
 
-        if new_position != self._position:
+        if new_position != old_position:
             self._position  = new_position
             self._entry_ret = 0.0
             self._bars_held = 0
 
         # --- Step return ---
+        # Reward uses old_position (held entering bar idx), not new_position.
+        # The action taken here sets the position for bar idx+1.
+        # This prevents the agent from exploiting log_ret_1[t] in the
+        # observation to retroactively profit from the same bar.
         log_ret = float(self._ret_arr[idx])
-        step_pnl = self._position * log_ret
-        reward   = step_pnl - fee
+        step_pnl = old_position * log_ret
+        holding_bonus = self._holding_bonus_rate if old_position == 1 else 0.0
+        reward   = step_pnl - fee + holding_bonus
 
         # Update unrealised PnL and bars held
         self._entry_ret += log_ret if self._position != 0 else 0.0
@@ -183,7 +205,7 @@ class CryptoTradingEnv(gym.Env):
         done      = self._step_idx >= self._episode_length
         truncated = False
 
-        obs  = self._obs() if not done else np.zeros(OBS_DIM, dtype=np.float32)
+        obs  = self._obs() if not done else np.zeros(OBS_DIM * self._frame_stack, dtype=np.float32)
         info = {
             "step":      self._step_idx,
             "position":  self._position,
@@ -208,7 +230,9 @@ class CryptoTradingEnv(gym.Env):
         state  = np.array(
             [float(self._position), upnl, bars_n], dtype=np.float32
         )
-        return np.concatenate([feats, state])
+        raw_obs = np.concatenate([feats, state])
+        self._frame_buffer.append(raw_obs)
+        return np.concatenate(list(self._frame_buffer))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +245,7 @@ def make_env(
     episode_length: int = DEFAULT_EP_LEN,
     deterministic: bool = False,
     seed: Optional[int] = None,
+    frame_stack: int = 1,
 ) -> CryptoTradingEnv:
     """Convenience factory: load candles from DB, build features, return env."""
     from app.core.db import get_connection
@@ -251,6 +276,8 @@ def make_env(
         "taker_buy_base_volume", "taker_buy_quote_volume",
     ]
     df_raw = pd.DataFrame(rows, columns=cols)
+    numeric_cols = [col for col in cols if col != "open_time"]
+    df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
     df     = build_crypto_features(df_raw).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
 
     return CryptoTradingEnv(
@@ -258,4 +285,5 @@ def make_env(
         episode_length=episode_length,
         deterministic=deterministic,
         seed=seed,
+        frame_stack=frame_stack,
     )

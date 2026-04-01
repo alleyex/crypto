@@ -244,6 +244,18 @@ def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] 
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
 
+def get_futures_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None, timeframes: Optional[list] = None) -> list[dict[str, Any]]:
+    if symbol and timeframes:
+        placeholders = ",".join("?" * len(timeframes))
+        sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nWHERE symbol = ? AND timeframe IN ({placeholders})\nORDER BY open_time DESC\nLIMIT ?;"
+        return fetch_all_as_dicts(connection, sql, (symbol, *timeframes, limit))
+    if symbol:
+        sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nWHERE symbol = ?\nORDER BY open_time DESC\nLIMIT ?;"
+        return fetch_all_as_dicts(connection, sql, (symbol, limit))
+    sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nORDER BY open_time DESC\nLIMIT ?;"
+    return _fetch_all(connection, sql, limit)
+
+
 def get_signals(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_SIGNALS_SQL, limit)
 
@@ -322,8 +334,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         """
         SELECT
             job_type,
-            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
-            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
         FROM job_queue
         GROUP BY job_type
         ORDER BY job_type ASC;
@@ -333,8 +345,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         connection,
         """
         SELECT
-            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
-            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
         FROM job_queue;
         """,
     )[0]
@@ -495,18 +507,20 @@ def get_strategy_activity_summary(
         order_ids = {item["id"] for item in strategy_orders}
         latest_fill = next((item for item in fills if item["order_id"] in order_ids), None)
         latest_closed_trade = latest_closed_trades.get(strategy_name)
-        latest_activity_at = max(
-            (
-                timestamp
-                for timestamp in (
-                    latest_fill["created_at"] if latest_fill is not None else None,
-                    latest_order["created_at"] if latest_order is not None else None,
-                    latest_risk["created_at"] if latest_risk is not None else None,
-                    latest_signal["created_at"] if latest_signal is not None else None,
-                )
-                if timestamp is not None
-            ),
-            default=None,
+        latest_activity_candidates = [
+            timestamp
+            for timestamp in (
+                latest_fill["created_at"] if latest_fill is not None else None,
+                latest_order["created_at"] if latest_order is not None else None,
+                latest_risk["created_at"] if latest_risk is not None else None,
+                latest_signal["created_at"] if latest_signal is not None else None,
+            )
+            if timestamp is not None
+        ]
+        latest_activity_at = (
+            max(parse_db_timestamp(timestamp) for timestamp in latest_activity_candidates).isoformat()
+            if latest_activity_candidates
+            else None
         )
         filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
         filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
@@ -649,7 +663,7 @@ def get_strategy_closed_trades(
     fills_by_order_id = {int(item["order_id"]): item for item in fills}
     strategy_filter = strategy_name.strip() if strategy_name else None
     filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
-    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
 
     for order in filled_orders:
@@ -657,7 +671,8 @@ def get_strategy_closed_trades(
         if strategy_filter and current_strategy_name != strategy_filter:
             continue
         symbol = str(order["symbol"])
-        key = (current_strategy_name, symbol)
+        timeframe = str(order.get("timeframe") or "1m")
+        key = (current_strategy_name, symbol, timeframe)
         position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
 
         qty = float(order["qty"])
@@ -680,6 +695,7 @@ def get_strategy_closed_trades(
             {
                 "strategy_name": current_strategy_name,
                 "symbol": symbol,
+                "timeframe": timeframe,
                 "qty": close_qty,
                 "entry_price": average_entry_price,
                 "exit_price": price,
@@ -743,7 +759,7 @@ def get_execution_report(
     ]
 
     filled_orders = list(reversed(filtered_orders))
-    positions_by_key: dict[tuple[str, str], dict[str, float]] = {}
+    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
     closed_trades: list[dict[str, Any]] = []
     total_fees = 0.0
     for order in filled_orders:
@@ -752,7 +768,8 @@ def get_execution_report(
         if created_at < cutoff:
             continue
         current_strategy_name = str(order["strategy_name"])
-        key = (current_strategy_name, symbol)
+        timeframe = str(order.get("timeframe") or "1m")
+        key = (current_strategy_name, symbol, timeframe)
         position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
         qty = float(order["qty"])
         price = float(order["price"])
@@ -777,6 +794,7 @@ def get_execution_report(
                 if earlier["side"] == "BUY"
                 and earlier["symbol"] == symbol
                 and earlier["strategy_name"] == current_strategy_name
+                and str(earlier.get("timeframe") or "1m") == timeframe
             ),
             None,
         )
@@ -793,6 +811,7 @@ def get_execution_report(
             {
                 "strategy_name": current_strategy_name,
                 "symbol": symbol,
+                "timeframe": timeframe,
                 "qty": close_qty,
                 "entry_price": average_entry_price,
                 "exit_price": price,

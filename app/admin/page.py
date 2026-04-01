@@ -585,10 +585,41 @@ def render_admin_page() -> str:
         color: var(--accent);
       }
 
+      .toggle-pill:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 35%);
+        outline-offset: 2px;
+        border-color: color-mix(in srgb, var(--accent) 55%, white 45%);
+        color: var(--fg);
+        background: transparent;
+        box-shadow: none;
+      }
+
       .toggle-pill.selected {
-        background: var(--accent);
-        border-color: var(--accent);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, #fff 18%), var(--accent-2));
+        border-color: color-mix(in srgb, var(--accent) 78%, #fff 22%);
         color: #fff;
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
+          inset 0 1px 0 rgba(255,255,255,0.18);
+        transform: translateY(-1px);
+      }
+
+      .toggle-pill.selected::before {
+        content: "✓";
+        font-size: 11px;
+        margin-right: 6px;
+        opacity: 0.95;
+      }
+
+      .selection-summary {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .selection-summary strong {
+        color: var(--fg);
+        font-weight: 700;
       }
 
       .ctrl-section {
@@ -829,7 +860,20 @@ def render_admin_page() -> str:
         padding: 12px 14px;
         border-radius: 8px;
         background: var(--panel-2);
+        color: var(--text);
         margin-bottom: 6px;
+        cursor: pointer;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+      }
+
+      .status-symbol-row:hover {
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+        transform: translateY(-1px);
+      }
+
+      .status-symbol-row:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 35%);
+        outline-offset: 2px;
       }
 
       .status-symbol-left {
@@ -847,19 +891,35 @@ def render_admin_page() -> str:
       }
 
       .status-symbol-name {
+        color: var(--text);
         font-weight: 600;
         font-size: 14px;
         margin-right: 6px;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.22);
       }
 
       .status-badge {
-        display: inline-block;
-        padding: 1px 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 132px;
+        min-height: 42px;
+        text-align: center;
+        padding: 6px 12px;
         border-radius: 4px;
         background: var(--line);
+        color: #d7e3ef;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .status-badge.badge-live {
+        color: #4ade80;
+      }
+
+      .status-badge.badge-paused {
         color: var(--muted);
-        font-size: 11px;
-        font-weight: 500;
       }
 
       .status-symbol-stats {
@@ -877,11 +937,12 @@ def render_admin_page() -> str:
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: var(--muted);
+        color: #b6c5d5;
         margin-bottom: 2px;
       }
 
       .status-stat-value {
+        color: var(--text);
         font-size: 13px;
         font-weight: 600;
       }
@@ -1114,6 +1175,23 @@ def render_admin_page() -> str:
       .data-table td.num,
       .data-table th.num {
         text-align: right;
+      }
+
+      .symbol-link-button {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: none;
+      }
+
+      .symbol-link-button:hover {
+        transform: none;
+        box-shadow: none;
+        color: var(--accent);
       }
 
       .mini-trade-grid {
@@ -1492,7 +1570,7 @@ def render_admin_page() -> str:
 
       .training-form-grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
         margin: 14px 0 10px;
       }
@@ -1501,6 +1579,11 @@ def render_admin_page() -> str:
         display: flex;
         flex-direction: column;
         gap: 6px;
+      }
+
+      .training-field input {
+        width: 100%;
+        box-sizing: border-box;
       }
 
       .training-field label {
@@ -1563,6 +1646,72 @@ def render_admin_page() -> str:
         flex-wrap: wrap;
         gap: 8px;
         margin-bottom: 12px;
+      }
+
+      .ppo-job-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .ppo-job-details {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .ppo-job-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .ppo-job-detail-card {
+        padding: 12px;
+        border-radius: 12px;
+        background: #0b1219;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .ppo-job-detail-card strong {
+        display: block;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .ppo-job-detail-card code {
+        font-size: 11px;
+        word-break: break-all;
+      }
+
+      .ppo-job-detail-list {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+      }
+
+      .ppo-job-detail-list div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .ppo-job-detail-list span:last-child {
+        text-align: right;
+        color: var(--text);
+      }
+
+      .ppo-job-detail-table-wrap {
+        margin-top: 12px;
+      }
+
+      .ppo-job-detail-note {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
       }
 
       .training-inline-checks {
@@ -1820,6 +1969,11 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
             <button class="fetch-btn-primary" data-action="pipeline">Run Pipeline</button>
             <button class="fetch-btn-secondary" data-refresh="all">Refresh Data</button>
           </div>
+          <div class="ctrl-section" style="margin-top:14px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase">Kill Switch</span>
+            <span id="kill-switch-badge" class="chip">Loading…</span>
+            <button class="secondary" id="kill-switch-btn" data-action="kill-switch-toggle" style="padding:3px 14px;font-size:12px">—</button>
+          </div>
           <div class="auto-refresh" style="margin-top:12px">
             <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
             <span id="auto-refresh-status">Auto refresh every 10 seconds.</span>
@@ -1847,6 +2001,10 @@ __PIPELINE_ORCHESTRATION_OPTIONS__
           <div class="ctrl-section">
             <div class="fetch-field-label">Active Symbols</div>
             <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Timeframes</div>
+            <div id="scheduler-timeframe-pills" class="toggle-pill-group" style="margin-top:6px"></div>
           </div>
           <div style="margin-bottom:18px">
             <button class="fetch-btn-primary" data-action="scheduler-strategy-save">Apply Strategy State</button>
@@ -2084,17 +2242,18 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="section-kicker">Data Layer</div>
             <h2>Market Data</h2>
           </div>
-          <p>Manage candle fetching, freshness, and storage status.</p>
+          <p>Manage futures candle fetching, freshness, and storage status.</p>
         </div>
       <section class="grid">
 
         <article class="panel data-card">
-          <h2>Data Status</h2>
-          <p>Candle count, freshness, and gap estimate per symbol.</p>
+          <h2>Futures Data Status</h2>
+          <p>Perpetual futures candle count, freshness, and gap estimate per symbol.</p>
           <div class="button-row" style="gap:8px">
             <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
             <button class="secondary" id="market-status-view-toggle" data-view="cards">Coverage Matrix</button>
           </div>
+          <div id="market-status-collector-meta" style="margin-top:10px;font-size:12px;color:var(--muted)">Loading collector status...</div>
           <div id="market-status-board" style="margin-top:12px;">
             <span style="color:var(--muted);font-size:13px;">Loading...</span>
           </div>
@@ -2104,17 +2263,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card fetch-panel">
           <div class="fetch-panel-header">
             <div>
-              <h2>Fetch Market Data</h2>
-              <p class="fetch-panel-desc">Trigger market data fetch independently without running the full pipeline. Binance limit: 1000 candles per request.</p>
+              <h2>Fetch Futures Market Data</h2>
+              <p class="fetch-panel-desc">Trigger Binance USDT perpetual kline fetch independently without running the full pipeline. Binance limit: 1000 candles per request.</p>
             </div>
           </div>
           <div class="fetch-field">
-            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use active symbols</span></div>
+            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use configured futures symbols</span></div>
             <div id="market-fetch-symbol-checkboxes" class="toggle-pill-group"></div>
+            <div id="market-fetch-symbol-summary" class="selection-summary"></div>
           </div>
           <div class="fetch-field">
             <div class="fetch-field-label">Timeframes <span class="fetch-field-hint">leave empty to use active timeframes</span></div>
             <div id="market-fetch-timeframe-pills" class="toggle-pill-group"></div>
+            <div id="market-fetch-timeframe-summary" class="selection-summary"></div>
           </div>
           <div class="fetch-field">
             <div class="fetch-field-label">Start Date <span class="fetch-field-hint">leave empty to fetch latest candles only</span></div>
@@ -2130,6 +2291,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
           <div class="fetch-actions">
             <button class="fetch-btn-primary" data-action="market-fetch">Fetch Now</button>
+            <button class="secondary" data-action="market-clear">Clear Data</button>
           </div>
           <div id="market-fetch-result" style="display:none">
             <div class="fetch-result-header">
@@ -2148,8 +2310,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       </section>
 
       <article class="panel data-card" id="market-candles-panel" style="display:none; margin-top:20px">
-        <h2 id="market-candles-title">Latest Candles</h2>
-        <p>Last 10 candles per symbol from the most recent fetch.</p>
+        <h2 id="market-candles-title">Latest Futures Candles</h2>
+        <p>Last 10 perpetual futures candles per symbol from the most recent fetch.</p>
         <div id="market-fetch-candles" style="overflow-x:auto"></div>
       </article>
 
@@ -2182,6 +2344,115 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </div>
         <div id="fetch-history-board" style="margin-top:12px">
           <span style="color:var(--muted);font-size:13px">Loading...</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Order Book Collection</h2>
+            <p>Binance top-10 depth snapshots, collected every minute.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="ob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="ob-enable-btn" data-action="ob-enable" style="display:none">Enable Collection</button>
+            <button class="secondary" id="ob-refresh-btn" data-action="ob-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="ob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="ob-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+        <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <div>
+              <h3 style="margin:0 0 4px 0">Futures Order Book Collection</h3>
+              <p style="margin:0;color:var(--muted)">Binance USDT perpetual top-10 depth snapshots for the configured futures symbols.</p>
+            </div>
+            <div class="button-row" style="gap:8px">
+              <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+              <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
+              <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh</button>
+            </div>
+          </div>
+          <div id="fob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+          <div id="fob-stats-board" style="margin-top:14px">
+            <span style="color:var(--muted);font-size:13px">Loading…</span>
+          </div>
+          <div id="fob-detail-board" style="margin-top:14px">
+            <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures aggTrades Collection</h2>
+            <p>Binance USDT perpetual aggTrade minute aggregates for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fag-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fag-refresh-btn" data-action="fag-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fag-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fag-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+        <div id="fag-detail-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 minute aggregates.</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Premium Collection</h2>
+            <p>Mark price, index price, basis, and funding snapshots for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fpm-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fpm-refresh-btn" data-action="fpm-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fpm-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fpm-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Open Interest Collection</h2>
+            <p>Open interest minute snapshots and short-term changes for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="foi-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="foi-refresh-btn" data-action="foi-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="foi-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="foi-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Liquidations Collection</h2>
+            <p>Minute liquidation aggregates from the futures force-order stream.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fliq-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fliq-refresh-btn" data-action="fliq-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fliq-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fliq-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
         </div>
       </article>
 
@@ -2247,8 +2518,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </article>
 
         <article class="panel data-card" style="grid-column: 1 / -1;">
-          <h2>Active Feature Set — V2 (19 features)</h2>
-          <p>Model input features used by PPO and LightGBM. All computed by <code>build_crypto_features()</code> in <code>app/features/crypto_features.py</code>. V2 adds trend, momentum, and K-bar pattern features — PPO walk-forward avg return improved from +40.97% → +80.16%.</p>
+          <h2>Active Feature Set — V2 (25 features)</h2>
+          <p>Model input features used by PPO. All computed by <code>build_crypto_features()</code> in <code>app/features/crypto_features.py</code>. V2 adds trend, momentum, K-bar pattern, and time features. OBS_DIM = 28 (25 features + position + upnl + bars_held).</p>
           <table class="data-table" style="margin-top:14px">
             <thead>
               <tr>
@@ -2266,7 +2537,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <tr><td><code>log_ret_10</code></td><td>Returns</td><td>clip ±0.60</td><td>10-bar log return</td><td class="num">−1.89</td></tr>
               <tr><td><code>log_ret_20</code></td><td>Returns</td><td>clip ±0.80</td><td>20-bar log return</td><td class="num" style="color:#4ade80">−2.60 ✓</td></tr>
               <tr><td><code>flow_imbalance</code></td><td>Order Flow</td><td>bounded [−1, 1]</td><td>Taker buy imbalance: 2×taker_buy/volume − 1</td><td class="num">−0.31</td></tr>
-              <tr><td><code>hl_spread</code></td><td>Volatility</td><td>clip [0, 0.5]</td><td>(high − low) / close</td><td class="num">+0.00</td></tr>
               <tr><td><code>dist_sma_60</code></td><td>Trend</td><td>clip ±0.20</td><td>(close − SMA60) / close</td><td class="num" style="color:#4ade80">−3.07 ✓</td></tr>
               <tr><td><code>rsi_14</code></td><td>Momentum</td><td>bounded [−1, 1]</td><td>RSI(14) normalised: RSI/50 − 1</td><td class="num">−1.38</td></tr>
               <tr><td><code>close_location</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>(close − low) / (high − low) — 棒內收盤位置</td><td class="num" style="color:#4ade80">+2.61 ✓</td></tr>
@@ -2274,14 +2544,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <tr><td><code>lower_wick_ratio</code></td><td>K-bar Pattern</td><td>bounded [0, 1]</td><td>下影線 / (high − low) — 買盤支撐</td><td class="num" style="color:#4ade80">+2.68 ✓</td></tr>
               <tr><td><code>atr_14_norm_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>ATR(14) / close z-scored</td><td class="num">−1.01</td></tr>
               <tr><td><code>rv_20_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>20-bar realized volatility z-scored</td><td class="num">−0.62</td></tr>
-              <tr><td><code>hl_spread_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>hl_spread z-scored</td><td class="num" style="color:#4ade80">−2.13 ✓</td></tr>
+              <tr><td><code>hl_spread</code></td><td>Volatility</td><td>clip [0, 0.5]</td><td>(high − low) / close</td><td class="num">+0.00</td></tr>
+              <tr><td><code>hl_spread_z</code></td><td>Volatility</td><td>rolling z-score w=50</td><td>(high − low) / close z-scored — regime-adjusted spread</td><td class="num" style="color:#4ade80">−2.13 ✓</td></tr>
               <tr><td><code>log_vol_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(volume+1) z-scored</td><td class="num" style="color:#4ade80">−2.04 ✓</td></tr>
-              <tr><td><code>log_trades_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(trades+1) z-scored</td><td class="num">−1.33</td></tr>
-              <tr><td><code>avg_quote_per_trade_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>quote_asset_volume / trades z-scored</td><td class="num">−1.02</td></tr>
-              <tr><td><code>liquidity_proxy_z</code></td><td>Liquidity</td><td>log1p → robust z-score w=100</td><td>volume / hl_spread z-scored (IQR-based)</td><td class="num">−1.04</td></tr>
+              <tr><td><code>log_trades_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>log(trades+1) z-scored — 交易頻率</td><td class="num">−1.33</td></tr>
+              <tr><td><code>avg_quote_per_trade_z</code></td><td>Volume</td><td>log1p → z-score w=50</td><td>quote_vol / trades z-scored — 平均交易規模</td><td class="num">−1.02</td></tr>
+              <tr><td><code>liquidity_proxy_z</code></td><td>Liquidity</td><td>log1p → robust z-score w=100</td><td>quote_vol / hl_spread z-scored (IQR-based)</td><td class="num">−1.04</td></tr>
+              <tr><td><code>hour_sin</code></td><td>Time</td><td>bounded [−1, 1]</td><td>sin(2π × hour / 24) — 小時週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>hour_cos</code></td><td>Time</td><td>bounded [−1, 1]</td><td>cos(2π × hour / 24) — 小時週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>dow_sin</code></td><td>Time</td><td>bounded [−1, 1]</td><td>sin(2π × day_of_week / 7) — 星期週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>dow_cos</code></td><td>Time</td><td>bounded [−1, 1]</td><td>cos(2π × day_of_week / 7) — 星期週期編碼</td><td class="num">—</td></tr>
+              <tr><td><code>is_asia_session</code></td><td>Time</td><td>binary {0, 1}</td><td>hour ∈ [0, 8) UTC — 亞洲時段</td><td class="num">—</td></tr>
+              <tr><td><code>is_us_session</code></td><td>Time</td><td>binary {0, 1}</td><td>hour ∈ [13, 22) UTC — 美國時段</td><td class="num">—</td></tr>
             </tbody>
           </table>
-          <div class="inline-note" style="margin-top:10px">✓ = |t-stat| &gt; 2（統計顯著，95% 信心水準）。IC 為負 = 均值回歸；IC 為正 = 動能延續。已移除：<code>dist_sma_20</code>（r=+0.92 與 log_ret_10 重複）、<code>body_ratio</code>（t=+0.23 無訊號）、<code>taker_ratio</code>（r=1.0 與 flow_imbalance 完全重複）。</div>
+          <div class="inline-note" style="margin-top:10px">✓ = |t-stat| &gt; 2（統計顯著，95% 信心水準）。IC 為負 = 均值回歸；IC 為正 = 動能延續。已移除：<code>dist_sma_20</code>（r=+0.92 與 log_ret_10 重複）、<code>body_ratio</code>（t=+0.23 無訊號）、<code>taker_ratio</code>（r=1.0 與 flow_imbalance 完全重複）。2026-03-29 ablation test：移除 hl_spread / log_vol_z / lower_wick_ratio / is_asia_session / is_us_session 後效果變差（FAIL↑ vs MARGINAL），故全數還原。</div>
         </article>
 
       </section>
@@ -2461,6 +2738,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <label for="ppo-gamma-input">Gamma</label>
                 <input id="ppo-gamma-input" type="number" value="0.99" min="0" max="1" step="0.01" />
               </div>
+              <div class="training-field">
+                <label for="ppo-gae-lambda-input">GAE Lambda</label>
+                <input id="ppo-gae-lambda-input" type="number" value="0.95" min="0" max="1" step="0.01" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-clip-range-input">Clip Range</label>
+                <input id="ppo-clip-range-input" type="number" value="0.2" min="0" max="1" step="0.01" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-ent-coef-input">Entropy Coef</label>
+                <input id="ppo-ent-coef-input" type="number" value="0.01" min="0" max="1" step="0.001" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-frame-stack-input">Frame Stack</label>
+                <input id="ppo-frame-stack-input" type="number" value="1" min="1" max="20" step="1" />
+              </div>
             </div>
           </details>
           <div class="button-row">
@@ -2468,12 +2761,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="ppo-jobs-refresh">Refresh Jobs</button>
           </div>
           <div class="message" id="ppo-train-message">PPO training workspace ready.</div>
-          <div style="margin-top:10px;font-size:12px;color:var(--muted)">
-            TensorBoard:
-            <a id="ppo-tb-link" href="http://localhost:6006" target="_blank" style="color:var(--accent)">http://localhost:6006</a>
-            &nbsp;—&nbsp;start with:
-            <code style="font-size:11px;background:var(--panel-2);padding:2px 6px;border-radius:4px">.venv/bin/tensorboard --logdir runtime/tb_logs</code>
-          </div>
         </article>
 
         <article class="panel data-card">
@@ -2809,6 +3096,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let closedTradesStrategyFilter = "all";
       let queueSummaryState = null;
       let queueFilterMode = "all";
+      let futuresObSelectedSymbol = null;
+      let futuresAggSelectedSymbol = null;
       const STRATEGY_STALE_AFTER_MINUTES = 15;
 
       function formatJson(value) {
@@ -3797,7 +4086,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return `
             <div class="ops-card">
               <div class="ops-card-header">
-                <div class="ops-card-title">${item.strategy_name} · ${item.symbol}</div>
+                <div class="ops-card-title">${item.strategy_name} · ${item.symbol}/${item.timeframe || "1m"}</div>
                 <div class="chip"><span class="${pnlClass}">${item.status}</span></div>
               </div>
               <div class="ops-card-grid">
@@ -4289,6 +4578,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
           });
         }
+        const schedulerTimeframePills = el("scheduler-timeframe-pills");
+        if (schedulerTimeframePills && !_schedulerPillsDirty) {
+          try {
+            const tfData = await api("/scheduler/timeframes");
+            const tfOrder = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
+            const supportedTf = (tfData?.supported_timeframes || ["1m","5m"]).slice().sort((a,b) => (tfOrder[a]||0)-(tfOrder[b]||0));
+            const activeTfSet = new Set(tfData?.timeframe_names || ["1m"]);
+            schedulerTimeframePills.innerHTML = supportedTf
+              .map((tf) => `<button type="button" class="toggle-pill${activeTfSet.has(tf) ? " selected" : ""}" data-tf="${tf}">${tf}</button>`)
+              .join("");
+            schedulerTimeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
+              pill.addEventListener("click", () => { pill.classList.toggle("selected"); _schedulerPillsDirty = true; });
+            });
+          } catch (e) { /* ignore */ }
+        }
         const schedulerEffectiveLimitInput = el("scheduler-effective-limit-input");
         if (schedulerEffectiveLimitInput) {
           schedulerEffectiveLimitInput.value = schedulerStrategy?.effective_strategy_limit || "";
@@ -4310,16 +4614,25 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           });
         }
         const marketFetchPills = el("market-fetch-symbol-checkboxes");
-        if (marketFetchPills && schedulerSymbols?.available_symbols) {
-          const prevSelected = new Set(
-            Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
-          );
-          marketFetchPills.innerHTML = schedulerSymbols.available_symbols
-            .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
-            .join("");
-          marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-            pill.addEventListener("click", () => pill.classList.toggle("selected"));
-          });
+        if (marketFetchPills) {
+          try {
+            const futuresConfig = await api("/market-data/futures/config");
+            const futuresSymbols = futuresConfig?.symbol_names || [];
+            const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
+            const prevSelected = new Set(
+              Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
+            );
+            marketFetchPills.innerHTML = futuresSymbols
+              .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}" title="${symbol}">${symbolLabel(symbol)}</button>`)
+              .join("");
+            marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+              pill.addEventListener("click", () => {
+                pill.classList.toggle("selected");
+                updateMarketFetchSelectionSummary();
+              });
+            });
+            updateMarketFetchSelectionSummary();
+          } catch (_) {}
         }
         const marketFetchTimeframePills = el("market-fetch-timeframe-pills");
         if (marketFetchTimeframePills) {
@@ -4336,8 +4649,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               .map((tf) => `<button type="button" class="toggle-pill${selectedTf.has(tf) ? " selected" : ""}" data-tf="${tf}">${tf}</button>`)
               .join("");
             marketFetchTimeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
-              pill.addEventListener("click", () => pill.classList.toggle("selected"));
+              pill.addEventListener("click", () => {
+                pill.classList.toggle("selected");
+                updateMarketFetchSelectionSummary();
+              });
             });
+            updateMarketFetchSelectionSummary();
           } catch (_) {}
         }
         const fsPills = el("market-fs-symbol-pills");
@@ -4427,8 +4744,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           "queue-retry-execution": "queue-message",
           "alert-test": "alerts-message",
           "soak-record": "soak-message",
+          "kill-switch-toggle": "kill-switch-badge",
         };
         const target = el(messages[type]);
+        if (!target) return;
         target.textContent = "Running...";
 
         try {
@@ -4485,6 +4804,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 symbol_names: payload.symbol_names,
               }),
             });
+            const selectedTf = Array.from(
+              el("scheduler-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []
+            ).map((p) => p.dataset.tf);
+            if (selectedTf.length > 0) {
+              await api("/scheduler/timeframes", {
+                method: "POST",
+                body: JSON.stringify({ timeframe_names: selectedTf }),
+              });
+            }
             result = await api("/scheduler/strategy", {
               method: "POST",
               body: JSON.stringify(payload),
@@ -4607,6 +4935,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             });
           } else if (type === "soak-record") {
             result = await api("/validation/soak/record", { method: "POST" });
+          } else if (type === "kill-switch-toggle") {
+            const currentlyEnabled = el("kill-switch-badge")?.dataset.enabled === "true";
+            const endpoint = currentlyEnabled ? "/kill-switch/disable" : "/kill-switch/enable";
+            result = await api(endpoint, { method: "POST" });
+            updateKillSwitchUI(result);
+            return;
           }
           target.textContent = formatJson(result);
           await refreshAll();
@@ -4626,11 +4960,31 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         button.addEventListener("click", () => runAction(button.dataset.action));
       });
 
+      function updateKillSwitchUI(status) {
+        const badge = el("kill-switch-badge");
+        const btn   = el("kill-switch-btn");
+        if (!badge || !btn) return;
+        const enabled = !!status?.enabled;
+        badge.dataset.enabled = String(enabled);
+        badge.textContent     = enabled ? "ENABLED" : "OFF";
+        badge.style.background = enabled ? "var(--bad)" : "var(--good)";
+        badge.style.color      = "#fff";
+        btn.textContent        = enabled ? "Disable" : "Enable";
+        btn.style.borderColor  = enabled ? "var(--bad)" : "";
+      }
+
+      (async () => {
+        try {
+          const status = await api("/kill-switch/status");
+          updateKillSwitchUI(status);
+        } catch (_) {}
+      })();
+
       async function refreshFetchHistory() {
         const board = el("fetch-history-board");
         if (!board) return;
         try {
-          const entries = await api("/market-data/fetch/history?limit=20");
+          const entries = await api("/market-data/fetch/history?limit=5");
           if (!entries || !entries.length) {
             board.innerHTML = '<span style="color:var(--muted);font-size:13px">No fetch history yet.</span>';
             return;
@@ -4831,6 +5185,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
       refreshMarketStatus();
       refreshFetchHistory();
+      refreshObStatus();
+      refreshFuturesObStatus();
+      refreshFuturesAggStatus();
+      refreshFuturesPremiumStatus();
+      refreshFuturesOpenInterestStatus();
+      refreshFuturesLiquidationStatus();
       refreshPPOJobs().catch((error) => {
         const msg = el("ppo-train-message");
         if (msg) {
@@ -5053,7 +5413,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           closedBoard.innerHTML = trades.length
             ? trades.map((trade) => `<div class="ops-card">
                 <div class="ops-card-header">
-                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}</div>
+                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}/${trade.timeframe || "1m"}</div>
                   <div class="chip"><span class="${Number(trade.realized_pnl || 0) >= 0 ? "ok" : "bad"}">${Number(trade.realized_pnl || 0).toFixed(6)}</span></div>
                 </div>
                 <div class="ops-card-grid">
@@ -5104,6 +5464,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       let ppoJobsState = [];
       let ppoSelectedJobId = null;
       let ppoPollingTimer = null;
+      let ppoExpandedJobIds = new Set();
 
       function ppoStatusTone(status) {
         if (status === "done") return "ok";
@@ -5116,6 +5477,85 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (value == null || value === "") return "n/a";
         const n = Number(value);
         return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(digits) : String(value);
+      }
+
+      function renderPPOJobDetails(job) {
+        const params = job.params || {};
+        const metrics = job.metrics || {};
+        const model = job.model || {};
+        const wf = Array.isArray(metrics.walk_forward) ? metrics.walk_forward : [];
+        const paramRows = [
+          ["total_steps", (params.total_steps ?? "n/a").toLocaleString?.() || String(params.total_steps ?? "n/a")],
+          ["eval_windows", params.eval_windows ?? "n/a"],
+          ["learning_rate", params.learning_rate ?? "n/a"],
+          ["n_steps", params.n_steps ?? "n/a"],
+          ["batch_size", params.batch_size ?? "n/a"],
+          ["n_epochs", params.n_epochs ?? "n/a"],
+          ["train_ep_len", params.train_ep_len ?? "n/a"],
+          ["eval_ep_len", params.eval_ep_len ?? "n/a"],
+          ["gamma", params.gamma ?? "n/a"],
+          ["gae_lambda", params.gae_lambda ?? "n/a"],
+          ["clip_range", params.clip_range ?? "n/a"],
+          ["ent_coef", params.ent_coef ?? "n/a"],
+          ["frame_stack", params.frame_stack ?? 1],
+          ["fee_rate", params.fee_rate ?? "n/a"],
+          ["seed", params.seed ?? "n/a"],
+        ];
+
+        return `
+          <div class="ppo-job-details">
+            <div class="ppo-job-detail-grid">
+              <div class="ppo-job-detail-card">
+                <strong>Training Parameters</strong>
+                <div class="ppo-job-detail-list">
+                  ${paramRows.map(([label, value]) => `<div><span>${label}</span><span>${value}</span></div>`).join("")}
+                </div>
+              </div>
+              <div class="ppo-job-detail-card">
+                <strong>Run Summary</strong>
+                <div class="ppo-job-detail-list">
+                  <div><span>status</span><span>${String(job.status || "n/a").toUpperCase()}</span></div>
+                  <div><span>verdict</span><span>${metrics.verdict || "n/a"}</span></div>
+                  <div><span>win_rate</span><span>${metrics.win_rate != null ? (metrics.win_rate * 100).toFixed(1) + "%" : "n/a"}</span></div>
+                  <div><span>avg_edge</span><span>${ppoFmt(metrics.avg_edge)}</span></div>
+                  <div><span>finished_at</span><span>${job.finished_at || "running..."}</span></div>
+                  <div><span>model</span><span>${model.model_path ? `<code>${model.model_path.split("/").pop()}</code>` : "n/a"}</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="ppo-job-detail-table-wrap">
+              <strong style="display:block;margin-bottom:8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)">Eval Windows</strong>
+              ${wf.length ? `
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Window</th>
+                        <th class="num">PPO Ret</th>
+                        <th class="num">B&H Ret</th>
+                        <th class="num">Edge</th>
+                        <th class="num">Trades</th>
+                        <th>Beats</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${wf.map((r) => {
+                        const edge = ((r.ppo?.log_ret ?? 0) - (r.bnh?.log_ret ?? 0)).toFixed(5);
+                        return `<tr>
+                          <td>${r.window ?? "—"}</td>
+                          <td class="num">${ppoFmt(r.ppo?.pct_ret)}</td>
+                          <td class="num">${ppoFmt(r.bnh?.pct_ret)}</td>
+                          <td class="num">${edge}</td>
+                          <td class="num">${r.ppo?.n_trades ?? "—"}</td>
+                          <td>${r.beats_bnh ? '<span class="ok">YES</span>' : '<span class="bad">NO</span>'}</td>
+                        </tr>`;
+                      }).join("")}
+                    </tbody>
+                  </table>
+                </div>
+              ` : `<div class="ppo-job-detail-note">Eval window results are not available yet for this job.</div>`}
+            </div>
+          </div>`;
       }
 
       function renderPPOSummary(job) {
@@ -5196,6 +5636,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (!board) return;
         const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
         ppoJobsState = jobs;
+        ppoExpandedJobIds = new Set([...ppoExpandedJobIds].filter((id) => jobs.some((job) => Number(job.id) === Number(id))));
         if (!jobs.length) {
           board.innerHTML = `<div class="ops-card"><div class="ops-card-title">No PPO jobs yet.</div><div class="ops-card-note">Click "Start PPO Training" to create the first job.</div></div>`;
           renderPPOSummary(null);
@@ -5208,13 +5649,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const params  = job.params  || {};
           const tone    = ppoStatusTone(job.status);
           const sel     = Number(job.id) === Number(resolvedId);
+          const expanded = ppoExpandedJobIds.has(Number(job.id));
           const verdictTone = metrics.verdict === "PASS" ? "ok" : metrics.verdict === "FAIL" ? "bad" : "warn";
           return `
             <div class="ops-card training-job-row${sel ? " selected" : ""}" data-ppo-job-id="${job.id}">
               <div class="ops-card-header">
                 <div class="ops-card-title">Job #${job.id} \u00b7 ${job.symbol}/${job.timeframe} \u00b7 PPO</div>
-                <div style="display:flex;gap:8px;align-items:center">
+                <div class="ppo-job-actions">
                   <div class="chip"><span class="${tone}">${String(job.status).toUpperCase()}</span></div>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-toggle" data-job-id="${job.id}">${expanded ? "Hide Details" : "Details"}</button>
+                  <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-reuse" data-job-id="${job.id}">Reuse</button>
+                  ${job.status === "done" ? `<button class="secondary" style="padding:2px 10px;font-size:11px;border-color:var(--accent);color:var(--accent)" data-action="ppo-job-deploy" data-job-id="${job.id}">Deploy</button>` : ""}
                   <button class="secondary" style="padding:2px 10px;font-size:11px" data-action="ppo-job-delete" data-job-id="${job.id}">Delete</button>
                 </div>
               </div>
@@ -5230,6 +5675,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div><strong>Avg edge</strong>${ppoFmt(metrics.avg_edge)}</div>
                 <div><strong>Finished</strong>${job.finished_at || job.created_at || "\u2014"}</div>
               </div>
+              ${expanded ? renderPPOJobDetails(job) : ""}
               ${job.error ? `<div class="ops-card-note" style="color:var(--bad)">${job.error}</div>` : ""}
             </div>`;
         }).join("");
@@ -5294,6 +5740,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               batch_size:    parseInt(el("ppo-batch-size-input")?.value || "256"),
               n_epochs:      parseInt(el("ppo-n-epochs-input")?.value || "10"),
               gamma:         parseFloat(el("ppo-gamma-input")?.value || "0.99"),
+              gae_lambda:    parseFloat(el("ppo-gae-lambda-input")?.value || "0.95"),
+              clip_range:    parseFloat(el("ppo-clip-range-input")?.value || "0.2"),
+              ent_coef:      parseFloat(el("ppo-ent-coef-input")?.value || "0.01"),
+              frame_stack:   parseInt(el("ppo-frame-stack-input")?.value || "1"),
             };
             const result = await api("/training/ppo-jobs", { method: "POST", body: JSON.stringify(body) });
             ppoSelectedJobId = result.id;
@@ -5327,6 +5777,63 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           return;
         }
 
+        if (action === "ppo-job-deploy") {
+          const jobId = event.target.dataset?.jobId;
+          if (!jobId) return;
+          const btn = event.target;
+          btn.disabled = true;
+          btn.textContent = "Deploying...";
+          try {
+            await api(`/training/ppo-jobs/${jobId}/deploy`, { method: "POST" });
+            btn.textContent = "Deployed";
+            btn.style.borderColor = "var(--good)";
+            btn.style.color = "var(--good)";
+            const msg = document.getElementById("ppo-train-message");
+            if (msg) { msg.textContent = `Job #${jobId} deployed as active model.`; msg.className = "message ok"; }
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = "Deploy";
+            const msg = document.getElementById("ppo-train-message");
+            if (msg) { msg.textContent = String(e); msg.className = "message bad"; }
+          }
+          return;
+        }
+
+        if (action === "ppo-job-reuse") {
+          const jobId = Number(event.target.dataset?.jobId);
+          const job   = ppoJobsState.find((j) => j.id === jobId);
+          if (!job) return;
+          const p = job.params || {};
+          const setVal = (id, val) => { const el2 = document.getElementById(id); if (el2 && val != null) el2.value = val; };
+          setVal("ppo-symbol-input",       job.symbol);
+          setVal("ppo-timeframe-input",    job.timeframe);
+          setVal("ppo-steps-input",        p.total_steps);
+          setVal("ppo-eval-windows-input", p.eval_windows);
+          setVal("ppo-fee-rate-input",     p.fee_rate);
+          setVal("ppo-seed-input",         p.seed);
+          setVal("ppo-lr-input",           p.learning_rate);
+          setVal("ppo-n-steps-input",      p.n_steps);
+          setVal("ppo-batch-size-input",   p.batch_size);
+          setVal("ppo-n-epochs-input",     p.n_epochs);
+          setVal("ppo-gamma-input",        p.gamma);
+          setVal("ppo-gae-lambda-input",   p.gae_lambda);
+          setVal("ppo-clip-range-input",   p.clip_range);
+          setVal("ppo-ent-coef-input",     p.ent_coef);
+          setVal("ppo-frame-stack-input",  p.frame_stack);
+          const msg = document.getElementById("ppo-train-message");
+          if (msg) { msg.textContent = `Parameters loaded from Job #${jobId}.`; msg.className = "message ok"; }
+          return;
+        }
+
+        if (action === "ppo-job-toggle") {
+          const jobId = Number(event.target.dataset?.jobId);
+          if (!jobId) return;
+          if (ppoExpandedJobIds.has(jobId)) ppoExpandedJobIds.delete(jobId);
+          else ppoExpandedJobIds.add(jobId);
+          renderPPOJobs({ jobs: ppoJobsState }, ppoSelectedJobId);
+          return;
+        }
+
         if (action === "ppo-deploy") {
           const jobId = event.target.dataset?.jobId || ppoSelectedJobId;
           const deployMsg = el("ppo-deploy-message");
@@ -5350,7 +5857,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("ppo-jobs-board")?.addEventListener("click", (event) => {
+        if (event.target.closest("[data-action='ppo-job-toggle']")) return;
         if (event.target.closest("[data-action='ppo-job-delete']")) return;
+        if (event.target.closest("[data-action='ppo-job-reuse']")) return;
+        if (event.target.closest("[data-action='ppo-job-deploy']")) return;
         const card = event.target.closest("[data-ppo-job-id]");
         if (!card) return;
         ppoSelectedJobId = Number(card.dataset.ppoJobId);
@@ -5360,13 +5870,39 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       // ---- Market Data actions ----
       async function refreshMarketStatus() {
         try {
-          const rows = await api("/candles/status");
+          const collector = await api("/candles/futures/collector/status");
+          const rows = await api("/candles/futures/status");
+          window.__futuresCandleStatusRows = rows || [];
+          const collectorMeta = el("market-status-collector-meta");
+          if (collectorMeta) {
+            const age = collector.age_seconds == null
+              ? "n/a"
+              : (collector.age_seconds < 60
+                ? `${collector.age_seconds}s ago`
+                : `${Math.round(collector.age_seconds / 60)}m ago`);
+            const runCount = collector.payload?.run_count ?? "—";
+            const interval = collector.payload?.interval_seconds ?? "—";
+            const saved = collector.payload?.saved_klines ?? "—";
+            const tone = collector.stale || collector.status === "failed"
+              ? "var(--bad)"
+              : collector.status === "running"
+                ? "var(--warn)"
+                : "var(--ok)";
+            const statusLabel = String(collector.status || "unknown").toUpperCase();
+            collectorMeta.innerHTML =
+              `<strong style="color:${tone}">Collector ${statusLabel}</strong>`
+              + ` · heartbeat ${age}`
+              + ` · run #${runCount}`
+              + ` · interval ${interval}s`
+              + ` · last saved ${saved}`;
+          }
           const board = el("market-status-board");
           if (!board) return;
           if (!rows || rows.length === 0) {
-            board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
+            board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No futures candle data found.</span>';
             return;
           }
+          const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
 
           // Card view
           board.innerHTML = rows.map((r) => {
@@ -5380,11 +5916,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const cov = r.coverage_pct ?? 100;
             const covColor = cov >= 99 ? "var(--ok)" : cov >= 90 ? "var(--warn)" : "var(--bad)";
             return `
-              <div class="status-symbol-row">
+              <button type="button" class="status-symbol-row" data-action="market-apply-selection" data-symbol="${r.symbol}" data-timeframe="${r.timeframe}">
                 <div class="status-symbol-left">
                   <span class="status-dot" style="background:${dotColor}"></span>
                   <div>
-                    <span class="status-symbol-name">${r.symbol}</span>
+                    <span class="status-symbol-name">${symbolLabel(r.symbol)}</span>
                     <span class="status-badge">${r.timeframe}</span>
                   </div>
                 </div>
@@ -5408,7 +5944,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                     </div>
                   </div>
                 </div>
-              </div>`;
+              </button>`;
           }).join("");
 
           // Coverage matrix
@@ -5433,7 +5969,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   <span style="display:block;font-size:10px;color:${dotColor}">${staleMin < 60 ? staleMin + "m" : Math.round(staleMin/60) + "h"} ago</span>
                 </td>`;
               }).join("");
-              return `<tr><td style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${sym}</td>${cells}</tr>`;
+              return `<tr><td style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${symbolLabel(sym)}</td>${cells}</tr>`;
             }).join("");
             matrix.innerHTML = `<table style="border-collapse:collapse;width:100%"><thead>${header}</thead><tbody>${bodyRows}</tbody></table>`;
           }
@@ -5449,8 +5985,496 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               if (matrix) matrix.style.display = isCards ? "" : "none";
             };
           }
-        } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+        } catch (e) {
+          if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`;
+          const collectorMeta = el("market-status-collector-meta");
+          if (collectorMeta) collectorMeta.textContent = `Collector status refresh failed: ${e}`;
+        }
       }
+
+      function updateMarketFetchSelectionSummary() {
+        const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
+        const selectedSymbols = Array.from(
+          el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.symbol);
+        const selectedTimeframes = Array.from(
+          el("market-fetch-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((p) => p.dataset.tf);
+
+        const symbolSummary = el("market-fetch-symbol-summary");
+        if (symbolSummary) {
+          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.map(symbolLabel).join(", ") : "all configured futures symbols"}`;
+        }
+
+        const timeframeSummary = el("market-fetch-timeframe-summary");
+        if (timeframeSummary) {
+          timeframeSummary.innerHTML = `<strong>Selected timeframes:</strong> ${selectedTimeframes.length ? selectedTimeframes.join(", ") : "active timeframes"}`;
+        }
+      }
+
+      function applyMarketSelection(symbol, timeframe) {
+        const symbolPills = el("market-fetch-symbol-checkboxes");
+        if (symbolPills) {
+          symbolPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.classList.toggle("selected", pill.dataset.symbol === symbol);
+          });
+        }
+
+        const timeframePills = el("market-fetch-timeframe-pills");
+        if (timeframePills) {
+          timeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.classList.toggle("selected", pill.dataset.tf === timeframe);
+          });
+        }
+
+        updateMarketFetchSelectionSummary();
+
+        const msg = el("market-fetch-message");
+        if (msg) {
+          const symbolLabel = symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
+          msg.textContent = `Selected ${symbolLabel} / ${timeframe} for fetch and clear actions.`;
+          msg.className = "message ok";
+          msg.style.display = "block";
+        }
+      }
+
+      // ── Order Book Collection ────────────────────────────────────────────
+      async function refreshObStatus() {
+        try {
+          const r = await api("/orderbook/status");
+          const badge = el("ob-status-badge");
+          const enableBtn = el("ob-enable-btn");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
+
+          const board = el("ob-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No data collected yet. Enable collection to start.</span>`;
+            return;
+          }
+          const rows = r.symbols.map(s => {
+            const staleLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.stale_seconds}s ago</span>`
+              : `<span style="color:#4ade80">${s.stale_seconds}s ago</span>`;
+            return `<tr>
+              <td>${s.symbol}</td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${staleLabel}</td>
+              <td class="num">${s.latest}</td>
+            </tr>`;
+          }).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Snapshots</th>
+                  <th class="num">Coverage</th><th class="num">Last Seen</th>
+                  <th class="num">Latest (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+          const meta = el("ob-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch(e) {
+          const board = el("ob-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("ob-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesObStatus() {
+        try {
+          const r = await api("/orderbook/futures/status");
+          const badge = el("fob-status-badge");
+          const enableBtn = el("fob-enable-btn");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
+
+          const board = el("fob-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures snapshots collected yet.</span>`;
+            const detail = el("fob-detail-board");
+            if (detail) detail.innerHTML = `<span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>`;
+            return;
+          }
+          const rows = r.symbols.map(s => {
+            const eventAgeLabel = s.event_age_seconds == null
+              ? `<span style="color:var(--muted)">n/a</span>`
+              : (s.event_age_seconds > 180
+                ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
+                : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
+            const snapshotLabel = s.is_stale
+                ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
+                : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
+            return `<tr>
+              <td><button class="symbol-link-button" data-action="fob-recent" data-symbol="${s.symbol}">${s.symbol}</button></td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${s.latest_source || "unknown"}</td>
+              <td class="num">${s.current_minute_sample_count ?? 0}</td>
+              <td class="num">${eventAgeLabel}</td>
+              <td class="num">${snapshotLabel}</td>
+            </tr>`;
+          }).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong><br>
+              Watchdog restarts (24h): <strong style="color:var(--text)">${(r.watchdog_restart_count_24h||0).toLocaleString()}</strong>
+              <span style="margin-left:8px">Last restart: <strong style="color:var(--text)">${r.last_watchdog_restart_at || "never"}</strong></span>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Snapshots</th>
+                  <th class="num">Coverage</th><th class="num">Source</th>
+                  <th class="num">Samples</th><th class="num">Last Event</th>
+                  <th class="num">Last Snapshot (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+          const meta = el("fob-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (futuresObSelectedSymbol) {
+            refreshFuturesObRecent(futuresObSelectedSymbol).catch((error) => {
+              const detail = el("fob-detail-board");
+              if (detail) detail.innerHTML = `<span style="color:#f87171;font-size:13px">${error}</span>`;
+            });
+          }
+        } catch(e) {
+          const board = el("fob-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fob-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesObRecent(symbol) {
+        futuresObSelectedSymbol = symbol;
+        const board = el("fob-detail-board");
+        if (!board) return;
+        board.innerHTML = `<span style="color:var(--muted);font-size:13px">Loading recent snapshots for ${symbol}…</span>`;
+        try {
+          const payload = await api(`/orderbook/futures/recent?symbol=${encodeURIComponent(symbol)}&limit=5`);
+          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          if (!rows.length) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No recent snapshots found for ${symbol}.</span>`;
+            return;
+          }
+          const detailRows = rows.map((row) => `
+            <tr>
+              <td>${row.timestamp}</td>
+              <td class="num">${row.sample_count ?? 0}</td>
+              <td class="num">${row.active_seconds ?? 0}s / ${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
+              <td class="num">${row.best_bid != null ? row.best_bid.toFixed(4) : "—"} / ${row.best_ask != null ? row.best_ask.toFixed(4) : "—"}</td>
+              <td class="num">${row.ob_imbalance != null ? row.ob_imbalance.toFixed(4) : "—"} / ${row.ob_imbalance_mean != null ? row.ob_imbalance_mean.toFixed(4) : "—"} / ${row.ob_imbalance_std != null ? row.ob_imbalance_std.toFixed(4) : "—"}</td>
+              <td class="num">${row.spread_bps != null ? row.spread_bps.toFixed(3) : "—"} / ${row.spread_bps_mean != null ? row.spread_bps_mean.toFixed(3) : "—"} / ${row.spread_bps_max != null ? row.spread_bps_max.toFixed(3) : "—"}</td>
+              <td class="num">${row.mid_price != null ? row.mid_price.toFixed(4) : "—"} / ${row.mid_price_mean != null ? row.mid_price_mean.toFixed(4) : "—"} / ${row.mid_price_ret_1m != null ? (row.mid_price_ret_1m * 100).toFixed(4) + "%" : "—"}</td>
+            </tr>
+          `).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Latest 5 snapshots for <strong style="color:var(--text)">${symbol}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Timestamp (UTC)</th>
+                  <th class="num">Samples</th>
+                  <th class="num">Coverage</th>
+                  <th class="num">Best Bid / Ask</th>
+                  <th class="num">Imbalance L / M / Std</th>
+                  <th class="num">Spread L / M / Max</th>
+                  <th class="num">Mid L / M / Ret</th>
+                </tr></thead>
+                <tbody>${detailRows}</tbody>
+              </table>
+            </div>`;
+        } catch (e) {
+          board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+        }
+      }
+
+      async function refreshFuturesAggStatus() {
+        try {
+          const r = await api("/aggtrades/futures/status");
+          const badge = el("fag-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          const board = el("fag-stats-board");
+          if (!board) return;
+          if (!r.symbols || r.symbols.length === 0) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures aggTrade minutes collected yet.</span>`;
+            const detail = el("fag-detail-board");
+            if (detail) detail.innerHTML = `<span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 minute aggregates.</span>`;
+            return;
+          }
+          const rows = r.symbols.map((s) => {
+            const eventAgeLabel = s.event_age_seconds == null
+              ? `<span style="color:var(--muted)">n/a</span>`
+              : (s.event_age_seconds > 180
+                ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
+                : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
+            const snapshotLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
+              : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
+            return `<tr>
+              <td><button class="symbol-link-button" data-action="fag-recent" data-symbol="${s.symbol}">${s.symbol}</button></td>
+              <td class="num">${s.total.toLocaleString()}</td>
+              <td class="num">${s.coverage_pct}%</td>
+              <td class="num">${s.latest_source || "unknown"}</td>
+              <td class="num">${s.current_minute_trade_count ?? 0}</td>
+              <td class="num">${s.current_minute_active_seconds ?? 0}s</td>
+              <td class="num">${eventAgeLabel}</td>
+              <td class="num">${snapshotLabel}</td>
+            </tr>`;
+          }).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Total minutes: <strong style="color:var(--text)">${(r.total_minutes || 0).toLocaleString()}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Symbol</th><th class="num">Minutes</th>
+                  <th class="num">Coverage</th><th class="num">Source</th>
+                  <th class="num">Trades</th><th class="num">Active</th>
+                  <th class="num">Last Event</th><th class="num">Last Minute (UTC)</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`;
+          const meta = el("fag-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (futuresAggSelectedSymbol) {
+            await refreshFuturesAggRecent(futuresAggSelectedSymbol);
+          }
+        } catch (e) {
+          const board = el("fag-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fag-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesAggRecent(symbol) {
+        futuresAggSelectedSymbol = symbol;
+        const board = el("fag-detail-board");
+        if (!board) return;
+        board.innerHTML = `<span style="color:var(--muted);font-size:13px">Loading recent aggTrade minutes for ${symbol}…</span>`;
+        try {
+          const payload = await api(`/aggtrades/futures/recent?symbol=${encodeURIComponent(symbol)}&limit=5`);
+          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          if (!rows.length) {
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No recent aggTrade minutes found for ${symbol}.</span>`;
+            return;
+          }
+          const detailRows = rows.map((row) => `
+            <tr>
+              <td>${row.timestamp}</td>
+              <td class="num">${row.trade_count ?? 0}</td>
+              <td class="num">${row.active_seconds ?? 0}s / ${((row.coverage_ratio ?? 0) * 100).toFixed(1)}%</td>
+              <td class="num">${row.taker_buy_count ?? 0} / ${row.taker_sell_count ?? 0}</td>
+              <td class="num">${row.qty_total != null ? row.qty_total.toFixed(4) : "—"} / ${row.quote_total != null ? row.quote_total.toFixed(2) : "—"}</td>
+              <td class="num">${row.price_open != null ? row.price_open.toFixed(4) : "—"} / ${row.price_high != null ? row.price_high.toFixed(4) : "—"} / ${row.price_low != null ? row.price_low.toFixed(4) : "—"} / ${row.price_close != null ? row.price_close.toFixed(4) : "—"}</td>
+              <td class="num">${row.vwap != null ? row.vwap.toFixed(4) : "—"} / ${row.avg_trade_size != null ? row.avg_trade_size.toFixed(4) : "—"}</td>
+            </tr>
+          `).join("");
+          board.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+              Latest 5 aggTrade minutes for <strong style="color:var(--text)">${symbol}</strong>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Timestamp (UTC)</th>
+                  <th class="num">Trades</th>
+                  <th class="num">Active</th>
+                  <th class="num">Buy / Sell Count</th>
+                  <th class="num">Qty / Quote</th>
+                  <th class="num">O / H / L / C</th>
+                  <th class="num">VWAP / Avg Size</th>
+                </tr></thead>
+                <tbody>${detailRows}</tbody>
+              </table>
+            </div>`;
+        } catch (e) {
+          board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+        }
+      }
+
+      function renderSimpleFuturesCollectorStatus(targetId, rows, emptyText, totalLabel, totalValue) {
+        const board = el(targetId);
+        if (!board) return;
+        if (!rows || rows.length === 0) {
+          board.innerHTML = `<span style="color:var(--muted);font-size:13px">${emptyText}</span>`;
+          return;
+        }
+        const tableRows = rows.map((s) => {
+          const latestLabel = s.is_stale
+            ? `<span style="color:#f87171">${s.latest || "n/a"}</span>`
+            : `<span style="color:var(--text)">${s.latest || "n/a"}</span>`;
+          return `<tr>
+            <td>${s.symbol}</td>
+            <td class="num">${s.total.toLocaleString()}</td>
+            <td class="num">${s.coverage_pct}%</td>
+            <td class="num">${s.latest_source || "unknown"}</td>
+            <td class="num">${latestLabel}</td>
+          </tr>`;
+        }).join("");
+        board.innerHTML = `
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+            ${totalLabel}: <strong style="color:var(--text)">${(totalValue || 0).toLocaleString()}</strong>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead><tr>
+                <th>Symbol</th><th class="num">Minutes</th>
+                <th class="num">Coverage</th><th class="num">Source</th>
+                <th class="num">Latest (UTC)</th>
+              </tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>`;
+      }
+
+      async function refreshFuturesPremiumStatus() {
+        try {
+          const r = await api("/premium/futures/status");
+          const badge = el("fpm-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "fpm-stats-board",
+            r.symbols,
+            "No futures premium minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("fpm-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("fpm-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fpm-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesOpenInterestStatus() {
+        try {
+          const r = await api("/open-interest/futures/status");
+          const badge = el("foi-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "foi-stats-board",
+            r.symbols,
+            "No futures open-interest minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("foi-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("foi-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("foi-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesLiquidationStatus() {
+        try {
+          const r = await api("/liquidations/futures/status");
+          const badge = el("fliq-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "fliq-stats-board",
+            r.symbols,
+            "No futures liquidation minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("fliq-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("fliq-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fliq-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function withRefreshButton(buttonId, runRefresh) {
+        const button = el(buttonId);
+        const originalText = button?.textContent || "Refresh";
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Refreshing...";
+        }
+        try {
+          await runRefresh();
+        } finally {
+          if (button) {
+            button.disabled = false;
+            button.textContent = originalText;
+          }
+        }
+      }
+
+      document.addEventListener("click", async (event) => {
+        const obAction = event.target.dataset?.action;
+        if (obAction === "ob-refresh") { await withRefreshButton("ob-refresh-btn", refreshObStatus); return; }
+        if (obAction === "ob-enable") {
+          await api("/orderbook/enable", { method: "POST" });
+          await refreshObStatus();
+          return;
+        }
+        if (obAction === "fob-refresh") { await withRefreshButton("fob-refresh-btn", refreshFuturesObStatus); return; }
+        if (obAction === "fob-enable") {
+          await api("/orderbook/futures/enable", { method: "POST" });
+          await refreshFuturesObStatus();
+          return;
+        }
+        if (obAction === "fob-recent") {
+          const symbol = event.target.dataset?.symbol;
+          if (symbol) await refreshFuturesObRecent(symbol);
+          return;
+        }
+        if (obAction === "fag-refresh") { await withRefreshButton("fag-refresh-btn", refreshFuturesAggStatus); return; }
+        if (obAction === "fag-recent") {
+          const symbol = event.target.dataset?.symbol;
+          if (symbol) await refreshFuturesAggRecent(symbol);
+          return;
+        }
+        if (obAction === "fpm-refresh") { await withRefreshButton("fpm-refresh-btn", refreshFuturesPremiumStatus); return; }
+        if (obAction === "foi-refresh") { await withRefreshButton("foi-refresh-btn", refreshFuturesOpenInterestStatus); return; }
+        if (obAction === "fliq-refresh") { await withRefreshButton("fliq-refresh-btn", refreshFuturesLiquidationStatus); return; }
+      });
 
       document.addEventListener("click", async (event) => {
         const action = event.target.dataset?.action;
@@ -5458,6 +6482,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (action === "market-status-refresh") {
           await refreshMarketStatus();
+        }
+
+        if (action === "market-apply-selection") {
+          const symbol = event.target.closest("[data-symbol]")?.dataset.symbol;
+          const timeframe = event.target.closest("[data-timeframe]")?.dataset.timeframe;
+          if (symbol && timeframe) {
+            applyMarketSelection(symbol, timeframe);
+          }
+          return;
         }
 
         if (action === "market-fetch") {
@@ -5468,13 +6501,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const startDate = el("market-fetch-start-date")?.value || null;
           const body = startDate ? { symbols, timeframes, start_date: startDate } : { symbols, timeframes, limit: 100 };
           try {
-            const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(body) });
+            const r = await api("/market-data/futures/fetch", { method: "POST", body: JSON.stringify(body) });
             const result = el("market-fetch-result");
             const msg = el("market-fetch-message");
             if (msg) { msg.textContent = ""; }
             if (result) {
               const summary = el("market-fetch-summary");
-              if (summary) summary.textContent = `${r.saved_klines ?? 0} new candles saved`;
+              if (summary) summary.textContent = `${r.saved_klines ?? 0} new futures candles saved`;
               const modeLabel = { incremental: "incremental", seed: "seed", backfill: "backfill" };
               const rows = (r.symbol_results || []).map((s) => {
                 const isNew = s.saved_klines > 0;
@@ -5501,7 +6534,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 for (const sym of fetchedSymbols) {
                   const tfQueryStr = [...activeTimeframeFilter].map((tf) => `timeframe=${encodeURIComponent(tf)}`).join("&");
                   const tfSuffix = tfQueryStr ? `&${tfQueryStr}` : "";
-                  const candles = await api(`/candles?symbol=${encodeURIComponent(sym)}&limit=10${tfSuffix}`);
+                  const candles = await api(`/candles/futures?symbol=${encodeURIComponent(sym)}&limit=10${tfSuffix}`);
                   if (!candles || !candles.length) continue;
                   const headers = cols.map((c) => `<th>${colLabels[c] || c}</th>`).join("");
                   const dataRows = candles.map((row) => {
@@ -5544,6 +6577,74 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             }
             refreshMarketStatus();
           } catch (e) { const msg = el("market-fetch-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; } }
+        }
+
+        if (action === "market-clear") {
+          const selected = Array.from(el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.symbol);
+          const symbols = selected.length > 0 ? selected : null;
+          const selectedTf = Array.from(el("market-fetch-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.tf);
+          const timeframes = selectedTf.length > 0 ? selectedTf : null;
+          const msg = el("market-fetch-message");
+          const result = el("market-fetch-result");
+          const statusRows = Array.isArray(window.__futuresCandleStatusRows) ? window.__futuresCandleStatusRows : [];
+          if (!symbols && !timeframes) {
+            if (msg) {
+              msg.textContent = "Select at least one symbol or timeframe before clearing data.";
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+            return;
+          }
+          const matches = statusRows.filter((row) => {
+            const symbolOk = !symbols || symbols.includes(row.symbol);
+            const timeframeOk = !timeframes || timeframes.includes(row.timeframe);
+            return symbolOk && timeframeOk;
+          });
+          if (matches.length === 0) {
+            const availableBits = (symbols || [])
+              .map((symbol) => {
+                const tfs = statusRows
+                  .filter((row) => row.symbol === symbol)
+                  .map((row) => row.timeframe);
+                const unique = [...new Set(tfs)];
+                return unique.length ? `${symbol}: ${unique.join(", ")}` : `${symbol}: none`;
+              })
+              .join(" | ");
+            if (msg) {
+              msg.textContent = `No futures candle rows match the current selection.${availableBits ? ` Available timeframes: ${availableBits}` : ""}`;
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+            return;
+          }
+          const scopeBits = [];
+          scopeBits.push(`symbols: ${symbols?.length ? symbols.map((symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol).join(", ") : "all configured futures symbols"}`);
+          scopeBits.push(`timeframes: ${timeframes?.length ? timeframes.join(", ") : "active timeframes"}`);
+          const confirmed = window.confirm(`Clear ${matches.length} futures candle row groups for ${scopeBits.join(" | ")}?`);
+          if (!confirmed) return;
+          try {
+            const r = await api("/market-data/futures/clear", {
+              method: "POST",
+              body: JSON.stringify({ symbols, timeframes }),
+            });
+            if (msg) {
+              msg.textContent = `Deleted ${r.deleted_rows ?? 0} futures candles.`;
+              msg.className = "message ok";
+              msg.style.display = "block";
+            }
+            if (result) result.style.display = "none";
+            const candlesPanel = el("market-candles-panel");
+            const candlesContainer = el("market-fetch-candles");
+            if (candlesContainer) candlesContainer.innerHTML = "";
+            if (candlesPanel) candlesPanel.style.display = "none";
+            await refreshMarketStatus();
+          } catch (e) {
+            if (msg) {
+              msg.textContent = String(e);
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+          }
         }
 
         if (action === "market-fs-materialize") {
@@ -5686,13 +6787,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           el("confirm-overlay").classList.add("active");
         });
       }
-      el("confirm-ok")?.addEventListener("click", () => {
-        el("confirm-overlay").classList.remove("active");
-        if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
-      });
-      el("confirm-cancel")?.addEventListener("click", () => {
-        el("confirm-overlay").classList.remove("active");
-        if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+      document.addEventListener("click", (e) => {
+        if (e.target.id === "confirm-ok") {
+          document.getElementById("confirm-overlay").classList.remove("active");
+          if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
+        } else if (e.target.id === "confirm-cancel") {
+          document.getElementById("confirm-overlay").classList.remove("active");
+          if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+        }
       });
     </script>
 

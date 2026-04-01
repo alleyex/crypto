@@ -2,7 +2,9 @@ import json
 import pytest
 import sqlite3
 import urllib.error
+import numpy as np
 from io import StringIO
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -108,6 +110,8 @@ from app.strategy.ma_cross import ensure_table as ensure_signals_table
 from app.strategy.ma_cross import insert_signal
 from app.strategy.ma_cross import generate_signal
 from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
+from app.strategy.ppo_strategy import _build_observation
+from app.strategy import ppo_strategy
 from app.strategy.registry import generate_registered_signal
 from app.strategy.registry import get_strategy
 from app.strategy.registry import list_registered_strategies
@@ -180,6 +184,108 @@ def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
         assert result["signal_type"] == "BUY"
         signals = get_signals(connection, limit=1)
         assert signals[0]["strategy_name"] == "ma_cross"
+    finally:
+        connection.close()
+
+
+def test_ppo_build_observation_handles_decimal_candle_rows() -> None:
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class _Connection:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def execute(self, *_args, **_kwargs):
+            return _Cursor(self._rows)
+
+    rows = []
+    base_open_time = 60_000
+    for index in range(170):
+        close = Decimal("100") + Decimal(index) / Decimal("10")
+        rows.append(
+            (
+                base_open_time * (index + 1),
+                close - Decimal("0.5"),
+                close + Decimal("1.0"),
+                close - Decimal("1.0"),
+                close,
+                Decimal("100"),
+                Decimal("1000"),
+                Decimal("10"),
+                Decimal("50"),
+                Decimal("500"),
+            )
+        )
+
+    obs = _build_observation(
+        _Connection(list(reversed(rows))),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        state={"position": 0, "entry_price": None, "bars_held": 0},
+    )
+
+    assert obs is not None
+    assert obs.dtype == "float32"
+
+
+def test_ppo_generate_signal_supports_two_action_long_flat_model(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, 100 + index) for index in range(170)],
+        )
+
+        class _FakeDistribution:
+            def __init__(self):
+                self.distribution = SimpleNamespace(
+                    probs=SimpleNamespace(
+                        squeeze=lambda: SimpleNamespace(
+                            cpu=lambda: SimpleNamespace(
+                                numpy=lambda: np.array([0.2, 0.8], dtype=float)
+                            )
+                        )
+                    )
+                )
+
+        class _FakePolicy:
+            @staticmethod
+            def obs_to_tensor(obs):
+                return (obs, None)
+
+            @staticmethod
+            def get_distribution(_obs_tensor):
+                return _FakeDistribution()
+
+        class _FakeModel:
+            policy = _FakePolicy()
+
+            @staticmethod
+            def predict(_obs, deterministic=True):
+                return 1, None
+
+        monkeypatch.setattr(ppo_strategy, "_load_model", lambda *_args, **_kwargs: _FakeModel())
+        monkeypatch.setattr(
+            ppo_strategy,
+            "_load_state",
+            lambda *_args, **_kwargs: {"position": 0, "entry_price": None, "bars_held": 0},
+        )
+        monkeypatch.setattr(ppo_strategy, "_save_state", lambda *_args, **_kwargs: None)
+
+        result = ppo_strategy.generate_signal(connection, symbol="BTCUSDT", timeframe="1m")
+
+        assert result is not None
+        assert result["signal_type"] == "BUY"
+        assert result["position"] == 1
+        assert result["prob_buy"] == 0.8
+        assert result["prob_sell"] == 0.0
     finally:
         connection.close()
 
@@ -1951,6 +2057,33 @@ def test_save_klines_does_not_duplicate_existing_candles() -> None:
         connection.close()
 
 
+def test_save_klines_skips_unclosed_latest_candle(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        monkeypatch.setattr(
+            "app.data.candles_service.datetime",
+            type(
+                "_FrozenDateTime",
+                (),
+                {
+                    "now": staticmethod(lambda tz=None: datetime.fromtimestamp(90, tz=timezone.utc)),
+                },
+            ),
+        )
+        closed = make_kline(0, 10.0)
+        open_kline = make_kline(60_000, 11.0)  # close_time=119999, still open at now_ms=90000
+
+        saved = save_klines(connection, [closed, open_kline])
+
+        rows = connection.execute("SELECT open_time, close FROM candles ORDER BY open_time ASC;").fetchall()
+        assert saved == 1
+        assert len(rows) == 1
+        assert rows[0][0] == 0
+    finally:
+        connection.close()
+
+
 def test_evaluate_signal_id_rejects_when_kill_switch_enabled(monkeypatch) -> None:
     monkeypatch.setattr("app.risk.risk_service.kill_switch_enabled", lambda: True)
     connection = make_connection()
@@ -3441,6 +3574,47 @@ def test_broker_protection_check_ignores_duplicate_only_rejected_risk_streak(mon
         connection.close()
 
 
+def test_broker_protection_check_ignores_no_position_sell_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "BTCUSDT",
+                    "1m",
+                    "ma_cross",
+                    "SELL",
+                    "REJECTED",
+                    "No position available to sell.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "paper", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "No position available to sell."}},
+        )
+
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "No position available to sell."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
+    finally:
+        connection.close()
+
+
 def test_maybe_send_broker_alert_deduplicates_same_protected_state(monkeypatch, tmp_path) -> None:
     state_file = tmp_path / "broker_alert_state.json"
     sent_messages: list[str] = []
@@ -4851,6 +5025,79 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[0]["gross_realized_pnl"] == 12.5
     assert payload[0]["winning_trade_count"] == 1
     assert payload[1]["strategy_name"] == "momentum_3bar"
+
+
+def test_get_strategy_activity_summary_handles_mixed_timestamp_types(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from app.query.read_service import get_strategy_activity_summary
+
+    class DummyConnection:
+        def execute(self, query, params=()):
+            class DummyCursor:
+                def fetchone(self_inner):
+                    return None
+
+            return DummyCursor()
+
+    monkeypatch.setattr("app.query.read_service.list_registered_strategies", lambda: ["ppo"])
+    monkeypatch.setattr(
+        "app.query.read_service.get_signals",
+        lambda connection, limit=100: [
+            {
+                "id": 1,
+                "symbol": "BTCUSDT",
+                "timeframe": "5m",
+                "strategy_name": "ppo",
+                "signal_type": "BUY",
+                "created_at": "2026-04-01 12:00:00",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_risk_events",
+        lambda connection, limit=100: [
+            {
+                "id": 1,
+                "strategy_name": "ppo",
+                "decision": "APPROVED",
+                "created_at": datetime(2026, 4, 1, 12, 1, tzinfo=timezone.utc),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_all_orders",
+        lambda connection: [
+            {
+                "id": 10,
+                "symbol": "BTCUSDT",
+                "timeframe": "5m",
+                "strategy_name": "ppo",
+                "side": "BUY",
+                "qty": 0.001,
+                "price": 70000,
+                "status": "FILLED",
+                "created_at": "2026-04-01 12:02:00",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.query.read_service.get_all_fills",
+        lambda connection: [
+            {
+                "order_id": 10,
+                "created_at": datetime(2026, 4, 1, 12, 3, tzinfo=timezone.utc),
+                "commission": 0.0,
+                "commission_asset": "USDT",
+            }
+        ],
+    )
+    monkeypatch.setattr("app.query.read_service.get_strategy_closed_trades", lambda connection, limit, per_table_limit: [])
+
+    payload = get_strategy_activity_summary(DummyConnection())
+
+    assert payload[0]["strategy_name"] == "ppo"
+    assert payload[0]["latest_activity_at"] == "2026-04-01T12:03:00+00:00"
 
 
 def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> None:
@@ -8328,6 +8575,48 @@ def test_build_soak_validation_report_marks_stale_activity_as_degraded(monkeypat
     assert any("signals activity is stale" in issue for issue in report["issues"])
 
 
+def test_build_soak_validation_report_normalizes_datetime_heartbeats(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "heartbeat-soak.db"
+    log_path = tmp_path / "scheduler.log"
+    log_path.write_text(
+        "[2026-03-18T16:08:53] run=1 signal=BUY risk=APPROVED execution=FILLED BUY\n",
+        encoding="utf-8",
+    )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        seed_candles(connection, [10, 11, 12, 13, 14])
+        insert_signal(connection, "BUY", strategy_name="manual_test")
+    finally:
+        connection.close()
+
+    monkeypatch.setattr("app.validation.soak_report.get_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        "app.validation.soak_report.read_scheduler_log",
+        lambda lines=200: log_path.read_text(encoding="utf-8").splitlines()[-lines:],
+    )
+    monkeypatch.setattr(
+        "app.validation.soak_report.get_heartbeats",
+        lambda connection: [
+            {
+                "component": "scheduler",
+                "status": "ok",
+                "message": "Scheduler loop completed.",
+                "payload_json": "{}",
+                "last_seen_at": datetime(2026, 3, 18, 16, 8, 53, tzinfo=timezone.utc),
+            }
+        ],
+    )
+
+    report = build_soak_validation_report()
+    snapshot = json.dumps(report, sort_keys=True)
+
+    assert report["heartbeats"][0]["last_seen_at"] == "2026-03-18T16:08:53+00:00"
+    assert "2026-03-18T16:08:53+00:00" in snapshot
+
+
 def test_record_soak_validation_snapshot_persists_history(monkeypatch, tmp_path) -> None:
     history_file = tmp_path / "soak_history.jsonl"
     monkeypatch.setattr(
@@ -8650,6 +8939,37 @@ def test_metrics_service_returns_zeros_on_empty_db() -> None:
         assert result["execution"]["fills"] == 0
         assert result["pnl"]["today"] is None
         assert result["queue"]["completed"] == 0
+    finally:
+        connection.close()
+
+
+def test_metrics_service_queue_summary_handles_backend_neutral_timestamps() -> None:
+    from app.metrics.metrics_service import build_metrics
+    from app.core.migrations import run_migrations
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO job_queue (job_type, payload_json, status, created_at, started_at, completed_at)
+            VALUES (?, ?, 'completed', ?, ?, ?);
+            """,
+            (
+                "pipeline",
+                "{}",
+                "2026-04-01 10:00:00",
+                "2026-04-01 10:00:05",
+                "2026-04-01 10:00:08",
+            ),
+        )
+        connection.commit()
+
+        result = build_metrics(connection, period_hours=24)
+
+        assert result["queue"]["completed"] == 1
+        assert result["queue"]["failed"] == 0
+        assert result["queue"]["avg_job_duration_seconds"] == 3.0
     finally:
         connection.close()
 

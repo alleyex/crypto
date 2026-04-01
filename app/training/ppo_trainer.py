@@ -18,6 +18,7 @@ import subprocess
 import sys
 import warnings
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 warnings.filterwarnings("ignore")
@@ -77,8 +78,46 @@ def _ensure_tensorboard_running() -> None:
 
 
 TRAIN_FRAC   = 0.70
-TRAIN_EP_LEN = 1440   # 1 day of 1m bars
-EVAL_EP_LEN  = 2880   # 2 days of 1m bars
+DEFAULT_TRAIN_EP_LEN = 1440   # 1 day of 1m bars
+DEFAULT_EVAL_EP_LEN  = 2880   # 2 days of 1m bars
+
+
+def resolve_episode_lengths(timeframe: str) -> tuple[int, int]:
+    """Return fair episode lengths for the given timeframe.
+
+    All timeframes use a fixed 2-day train / 4-day eval window expressed in
+    bars, so slower timeframes (15m, 1h) are not penalised by an artificial
+    bar-count minimum that was designed for 5m.
+
+    Examples:
+      1m  → train=1440 (1d), eval=2880 (2d)   [special-cased for legacy]
+      5m  → train=576  (2d), eval=1152 (4d)
+      15m → train=192  (2d), eval=384  (4d)
+      1h  → train=48   (2d), eval=96   (4d)
+    """
+    normalized = str(timeframe or "1m").strip().lower()
+    if normalized == "1m":
+        return DEFAULT_TRAIN_EP_LEN, DEFAULT_EVAL_EP_LEN
+
+    match = re.fullmatch(r"(\d+)(m|h|d)", normalized)
+    if not match:
+        return DEFAULT_TRAIN_EP_LEN, DEFAULT_EVAL_EP_LEN
+
+    value = int(match.group(1))
+    unit = match.group(2)
+    minutes_per_bar = value
+    if unit == "h":
+        minutes_per_bar *= 60
+    elif unit == "d":
+        minutes_per_bar *= 1440
+
+    if minutes_per_bar <= 0:
+        return DEFAULT_TRAIN_EP_LEN, DEFAULT_EVAL_EP_LEN
+
+    bars_per_day = max(1, 1440 // minutes_per_bar)
+    train_ep_len = bars_per_day * 2   # 2 days in bars
+    eval_ep_len  = bars_per_day * 4   # 4 days in bars
+    return train_ep_len, eval_ep_len
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +137,7 @@ def _make_progress_callback(
                 super().__init__(verbose=0)
 
             def _on_step(self) -> bool:
-                if on_progress and self.n_calls % 10_000 == 0:
+                if on_progress and self.n_calls % 2_048 == 0:
                     on_progress(self.num_timesteps, total_steps)
                 return True
 
@@ -146,7 +185,8 @@ def _run_episode(env, model=None) -> dict:
 
 
 def _walk_forward_eval(df: pd.DataFrame, model, eval_start_idx: int,
-                        n_windows: int, ep_len: int) -> List[dict]:
+                        n_windows: int, ep_len: int,
+                        frame_stack: int = 1) -> List[dict]:
     from app.rl.crypto_env import CryptoTradingEnv
 
     results = []
@@ -156,8 +196,8 @@ def _walk_forward_eval(df: pd.DataFrame, model, eval_start_idx: int,
 
     for w in range(actual_windows):
         window_df = df.iloc[idx: idx + ep_len + 1].reset_index(drop=True)
-        ppo_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True)
-        bnh_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True)
+        ppo_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True, frame_stack=frame_stack)
+        bnh_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True, frame_stack=frame_stack)
 
         ppo_r = _run_episode(ppo_env, model)
         bnh_r = _run_episode(bnh_env, model=None)
@@ -189,7 +229,12 @@ def run_ppo_training(
     batch_size: int = 256,
     n_epochs: int = 10,
     gamma: float = 0.99,
+    gae_lambda: float = 0.95,
+    clip_range: float = 0.2,
+    ent_coef: float = 0.01,
     seed: int = 42,
+    frame_stack: int = 1,
+    holding_bonus: float = 0.0,
     job_id: Optional[int] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
@@ -246,11 +291,12 @@ def run_ppo_training(
     ).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
 
     n_total   = len(df)
+    train_ep_len, eval_ep_len = resolve_episode_lengths(timeframe)
     train_end = int(n_total * TRAIN_FRAC)
 
-    if train_end < TRAIN_EP_LEN:
+    if train_end < train_ep_len:
         raise ValueError(
-            f"Not enough training data: {train_end} rows (need {TRAIN_EP_LEN}). "
+            f"Not enough training data: {train_end} rows (need {train_ep_len}). "
             "Run more candle history first."
         )
 
@@ -262,7 +308,7 @@ def run_ppo_training(
     _original_fee = _env_mod.FEE_PER_SIDE
     _env_mod.FEE_PER_SIDE = fee_rate
     try:
-        train_env = Monitor(CryptoTradingEnv(train_df, episode_length=TRAIN_EP_LEN, seed=seed))
+        train_env = Monitor(CryptoTradingEnv(train_df, episode_length=train_ep_len, seed=seed, frame_stack=frame_stack, holding_bonus_rate=holding_bonus))
 
         ppo_kwargs = {**DEFAULT_PPO_KWARGS,
                       "learning_rate": learning_rate,
@@ -270,6 +316,9 @@ def run_ppo_training(
                       "batch_size": batch_size,
                       "n_epochs": n_epochs,
                       "gamma": gamma,
+                      "gae_lambda": gae_lambda,
+                      "clip_range": clip_range,
+                      "ent_coef": ent_coef,
                       "seed": seed}
 
         tb_log_name = f"ppo_{symbol}_{timeframe}" + (f"_job{job_id}" if job_id else "")
@@ -287,7 +336,8 @@ def run_ppo_training(
             df, model,
             eval_start_idx=train_end,
             n_windows=eval_windows,
-            ep_len=EVAL_EP_LEN,
+            ep_len=eval_ep_len,
+            frame_stack=frame_stack,
         )
     finally:
         _env_mod.FEE_PER_SIDE = _original_fee
@@ -301,9 +351,11 @@ def run_ppo_training(
     avg_bnh  = float(np.mean(bnh_rets)) if bnh_rets else 0.0
     avg_edge = avg_ppo - avg_bnh
 
-    if win_rate >= 0.75 and avg_edge > 0:
+    total_trades = sum(r["ppo"].get("n_trades", 0) for r in eval_results)
+    avg_trades   = total_trades / len(eval_results) if eval_results else 0.0
+    if win_rate >= 0.75 and avg_edge > 0 and avg_trades >= 1.0:
         verdict = "PASS"
-    elif win_rate >= 0.5 and avg_edge > 0:
+    elif win_rate >= 0.5 and avg_edge > 0 and avg_trades >= 1.0:
         verdict = "MARGINAL"
     else:
         verdict = "FAIL"
@@ -322,6 +374,18 @@ def run_ppo_training(
         "n_total":      n_total,
         "n_train":      train_end,
         "fee_rate":     fee_rate,
+        "learning_rate": learning_rate,
+        "n_steps":      n_steps,
+        "batch_size":   batch_size,
+        "n_epochs":     n_epochs,
+        "gamma":        gamma,
+        "gae_lambda":   gae_lambda,
+        "clip_range":   clip_range,
+        "ent_coef":        ent_coef,
+        "frame_stack":     frame_stack,
+        "holding_bonus":   holding_bonus,
+        "train_ep_len":    train_ep_len,
+        "eval_ep_len":  eval_ep_len,
         "walk_forward": eval_results,
         "verdict":      verdict,
         "win_rate":     round(win_rate, 4),

@@ -26,6 +26,11 @@ def _get_choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
     return default
 
 
+def _get_csv_list(name: str, default: str) -> list[str]:
+    value = os.getenv(name, default)
+    return [item.strip().upper() for item in value.split(",") if item.strip()]
+
+
 DEFAULT_ORDER_QTY = _get_float("CRYPTO_ORDER_QTY", 0.001)
 COMMISSION_RATE = _get_float("CRYPTO_COMMISSION_RATE", 0.001)  # 0.1% per side
 MAX_POSITION_QTY = _get_float("CRYPTO_MAX_POSITION_QTY", 0.001)
@@ -60,3 +65,27 @@ JOB_LEASE_TIMEOUT_SECONDS = _get_int("CRYPTO_JOB_LEASE_TIMEOUT_SECONDS", 300)
 # How long an alert state is valid before the same condition re-fires an alert.
 # Default: 86400 seconds (24 hours). Set to 0 to disable TTL (never re-fire).
 ALERT_REFIRE_SECONDS = _get_int("CRYPTO_ALERT_REFIRE_SECONDS", 86400)
+FUTURES_ORDERBOOK_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_ORDERBOOK_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)
+FUTURES_AGGTRADE_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_AGGTRADE_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)
+FUTURES_PREMIUM_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_PREMIUM_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)
+FUTURES_OPEN_INTEREST_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_OPEN_INTEREST_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)
+FUTURES_LIQUIDATION_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_LIQUIDATION_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)
+FUTURES_CANDLE_SYMBOLS = _get_csv_list(
+    "CRYPTO_FUTURES_CANDLE_SYMBOLS",
+    "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
+)

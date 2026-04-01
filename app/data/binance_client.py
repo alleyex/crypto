@@ -6,6 +6,8 @@ import requests
 
 
 BASE_URL = "https://api.binance.com/api/v3/klines"
+FUTURES_BASE_URL = "https://fapi.binance.com/fapi/v1/klines"
+FUTURES_TESTNET_BASE_URL = "https://testnet.binancefuture.com/fapi/v1/klines"
 BOOK_TICKER_URL = "https://api.binance.com/api/v3/ticker/bookTicker"
 TESTNET_BOOK_TICKER_URL = "https://testnet.binance.vision/api/v3/ticker/bookTicker"
 DEFAULT_FAKE_CLOSES = (10.0, 11.0, 12.0, 13.0, 14.0)
@@ -76,6 +78,10 @@ def _book_ticker_url() -> str:
     return TESTNET_BOOK_TICKER_URL if _use_testnet() else BOOK_TICKER_URL
 
 
+def _futures_klines_url() -> str:
+    return FUTURES_TESTNET_BASE_URL if _use_testnet() else FUTURES_BASE_URL
+
+
 def fetch_klines(
     symbol: str = "BTCUSDT",
     interval: str = "1m",
@@ -97,6 +103,40 @@ def fetch_klines(
     for attempt in range(max_retries + 1):
         try:
             response = requests.get(BASE_URL, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries and _is_retryable(exc):
+                wait = backoff * (2 ** attempt)
+                time.sleep(wait)
+                continue
+            raise
+
+    raise last_exc
+
+
+def fetch_futures_klines(
+    symbol: str = "BTCUSDT",
+    interval: str = "1m",
+    limit: int = 5,
+    start_ms: Optional[int] = None,
+) -> list[list]:
+    if os.getenv("CRYPTO_USE_FAKE_KLINES", "").strip().lower() in ("1", "true", "yes", "on"):
+        return _build_fake_klines(symbol=symbol, interval=interval, limit=limit)
+
+    params: dict = {"symbol": symbol, "interval": interval, "limit": limit}
+    if start_ms is not None:
+        params["startTime"] = start_ms
+
+    timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
+    max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
+    backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
+
+    last_exc: Exception = RuntimeError("fetch_futures_klines: no attempts made")
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(_futures_klines_url(), params=params, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except Exception as exc:

@@ -1,0 +1,16 @@
+[Unit]
+Description=Crypto Scheduler
+After=network-online.target crypto-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/crypto
+EnvironmentFile=/root/crypto/.env
+ExecStartPre=/usr/bin/rm -f /root/crypto/runtime/scheduler.pid
+ExecStart=/root/crypto/.venv/bin/python /root/crypto/scripts/run_scheduler.py --interval 60 --strategy ppo
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

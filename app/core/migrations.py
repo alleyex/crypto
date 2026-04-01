@@ -396,10 +396,11 @@ def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
 
 
 def _create_feature_vectors_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS feature_vectors (
-            id            INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol        TEXT    NOT NULL,
             timeframe     TEXT    NOT NULL,
             open_time     INTEGER NOT NULL,
@@ -417,10 +418,11 @@ def _create_feature_vectors_table(connection: DBConnection) -> None:
 
 
 def _create_training_jobs_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS training_jobs (
-            id           INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol       TEXT    NOT NULL,
             timeframe    TEXT    NOT NULL,
             feature_set  TEXT    NOT NULL DEFAULT 'v1',
@@ -448,10 +450,11 @@ def _add_training_jobs_job_type(connection: DBConnection) -> None:
 
 
 def _create_model_registry_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS model_registry (
-            id              INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol          TEXT    NOT NULL,
             timeframe       TEXT    NOT NULL,
             feature_set     TEXT    NOT NULL DEFAULT 'v1',
@@ -470,6 +473,43 @@ def _create_model_registry_table(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_model_registry_symbol"
         " ON model_registry (symbol, timeframe, feature_set, status, created_at);"
     )
+
+
+def _ensure_postgres_identity_pk(
+    connection: DBConnection,
+    table_name: str,
+) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, table_name):
+        return
+    if "id" not in get_table_columns(connection, table_name):
+        return
+
+    sequence_name = f"{table_name}_id_seq"
+    connection.execute(
+        f"CREATE SEQUENCE IF NOT EXISTS {sequence_name};"
+    )
+    connection.execute(
+        f"ALTER SEQUENCE {sequence_name} OWNED BY {table_name}.id;"
+    )
+    connection.execute(
+        f"ALTER TABLE {table_name} ALTER COLUMN id SET DEFAULT nextval('{sequence_name}');"
+    )
+    connection.execute(
+        f"""
+        SELECT setval(
+            '{sequence_name}',
+            GREATEST(COALESCE((SELECT MAX(id) FROM {table_name}), 0), 1),
+            COALESCE((SELECT MAX(id) FROM {table_name}), 0) > 0
+        );
+        """
+    )
+
+
+def _ensure_postgres_training_model_identity_columns(connection: DBConnection) -> None:
+    _ensure_postgres_identity_pk(connection, "training_jobs")
+    _ensure_postgres_identity_pk(connection, "model_registry")
 
 
 _CANDLES_NUMERIC_COLS = [
@@ -649,6 +689,331 @@ def _add_fills_commission(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE fills ADD COLUMN transact_time INTEGER DEFAULT NULL;")
 
 
+def _create_order_book_snapshots(connection: DBConnection) -> None:
+    """Create order_book_snapshots table for 1m order book collection."""
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS order_book_snapshots (
+            {_auto_id_column_sql(backend)},
+            symbol        TEXT NOT NULL,
+            timestamp_ms  {epoch_t} NOT NULL,
+            bids_json     TEXT,
+            asks_json     TEXT,
+            ob_imbalance  NUMERIC(10,6),
+            spread_pct    NUMERIC(10,8),
+            mid_price     NUMERIC(20,8),
+            created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ob_snapshots_symbol_ts"
+        " ON order_book_snapshots(symbol, timestamp_ms);"
+    )
+
+
+def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
+    """Create futures_order_book_snapshots table for perp order book collection."""
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_order_book_snapshots (
+            {_auto_id_column_sql(backend)},
+            symbol        TEXT NOT NULL,
+            timestamp_ms  {epoch_t} NOT NULL,
+            bids_json     TEXT,
+            asks_json     TEXT,
+            ob_imbalance  NUMERIC(10,6),
+            ob_imbalance_mean NUMERIC(10,6),
+            ob_imbalance_std  NUMERIC(10,6),
+            ob_imbalance_min  NUMERIC(10,6),
+            ob_imbalance_max  NUMERIC(10,6),
+            spread_pct    NUMERIC(10,8),
+            spread_pct_mean NUMERIC(10,8),
+            spread_pct_max  NUMERIC(10,8),
+            spread_bps    NUMERIC(10,4),
+            spread_bps_mean NUMERIC(10,4),
+            spread_bps_max  NUMERIC(10,4),
+            mid_price     NUMERIC(20,8),
+            mid_price_mean NUMERIC(20,8),
+            mid_price_min  NUMERIC(20,8),
+            mid_price_max  NUMERIC(20,8),
+            mid_price_ret_1m NUMERIC(12,8),
+            source        TEXT NOT NULL DEFAULT 'rest',
+            sample_count  INTEGER NOT NULL DEFAULT 0,
+            active_seconds INTEGER NOT NULL DEFAULT 0,
+            coverage_ratio NUMERIC(10,6),
+            first_event_ms {epoch_t},
+            last_event_ms {epoch_t},
+            created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_ob_snapshots_symbol_ts"
+        " ON futures_order_book_snapshots(symbol, timestamp_ms);"
+    )
+
+
+def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    existing = get_table_columns(connection, "futures_order_book_snapshots")
+    additions = [
+        ("ob_imbalance_mean", "NUMERIC(10,6)"),
+        ("ob_imbalance_std", "NUMERIC(10,6)"),
+        ("ob_imbalance_min", "NUMERIC(10,6)"),
+        ("ob_imbalance_max", "NUMERIC(10,6)"),
+        ("spread_pct_mean", "NUMERIC(10,8)"),
+        ("spread_pct_max", "NUMERIC(10,8)"),
+        ("spread_bps", "NUMERIC(10,4)"),
+        ("spread_bps_mean", "NUMERIC(10,4)"),
+        ("spread_bps_max", "NUMERIC(10,4)"),
+        ("mid_price_mean", "NUMERIC(20,8)"),
+        ("mid_price_min", "NUMERIC(20,8)"),
+        ("mid_price_max", "NUMERIC(20,8)"),
+        ("mid_price_ret_1m", "NUMERIC(12,8)"),
+        ("active_seconds", "INTEGER"),
+        ("coverage_ratio", "NUMERIC(10,6)"),
+        ("first_event_ms", _epoch_millis_column_sql(get_backend_name(connection))),
+    ]
+    for column, sql_type in additions:
+        if column not in existing:
+            connection.execute(f"ALTER TABLE futures_order_book_snapshots ADD COLUMN {column} {sql_type};")
+
+
+def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    existing = get_table_columns(connection, "futures_order_book_snapshots")
+    if "active_seconds" not in existing:
+        connection.execute("ALTER TABLE futures_order_book_snapshots ADD COLUMN active_seconds INTEGER DEFAULT 0;")
+
+
+def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> None:
+    if not table_exists(connection, "futures_order_book_snapshots"):
+        return
+    if get_backend_name(connection) == "postgres":
+        connection.execute(
+            """
+            UPDATE futures_order_book_snapshots
+            SET active_seconds = LEAST(
+                60,
+                GREATEST(0, CAST(ROUND(COALESCE(coverage_ratio, 0) * 60) AS INTEGER))
+            )
+            WHERE COALESCE(active_seconds, 0) = 0
+              AND COALESCE(coverage_ratio, 0) > 0
+            """
+        )
+        return
+    connection.execute(
+        """
+        UPDATE futures_order_book_snapshots
+        SET active_seconds = MIN(60, MAX(0, ROUND(COALESCE(coverage_ratio, 0) * 60)))
+        WHERE COALESCE(active_seconds, 0) = 0
+          AND COALESCE(coverage_ratio, 0) > 0
+        """
+    )
+
+
+def _create_futures_aggtrade_minutes(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_aggtrade_minutes (
+            {_auto_id_column_sql(backend)},
+            symbol            TEXT NOT NULL,
+            timestamp_ms      {epoch_t} NOT NULL,
+            trade_count       INTEGER NOT NULL DEFAULT 0,
+            taker_buy_count   INTEGER NOT NULL DEFAULT 0,
+            taker_sell_count  INTEGER NOT NULL DEFAULT 0,
+            qty_total         NUMERIC(20,8),
+            qty_taker_buy     NUMERIC(20,8),
+            qty_taker_sell    NUMERIC(20,8),
+            quote_total       NUMERIC(24,8),
+            quote_taker_buy   NUMERIC(24,8),
+            quote_taker_sell  NUMERIC(24,8),
+            price_open        NUMERIC(20,8),
+            price_high        NUMERIC(20,8),
+            price_low         NUMERIC(20,8),
+            price_close       NUMERIC(20,8),
+            vwap              NUMERIC(20,8),
+            avg_trade_size    NUMERIC(20,8),
+            first_trade_id    BIGINT,
+            last_trade_id     BIGINT,
+            first_event_ms    {epoch_t},
+            last_event_ms     {epoch_t},
+            active_seconds    INTEGER NOT NULL DEFAULT 0,
+            coverage_ratio    NUMERIC(10,6),
+            source            TEXT NOT NULL DEFAULT 'rest',
+            created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_aggtrade_minutes_symbol_ts"
+        " ON futures_aggtrade_minutes(symbol, timestamp_ms);"
+    )
+
+
+def _create_futures_premium_metrics(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_premium_metrics (
+            {_auto_id_column_sql(backend)},
+            symbol               TEXT NOT NULL,
+            timestamp_ms         {epoch_t} NOT NULL,
+            mark_price           NUMERIC(20,8),
+            index_price          NUMERIC(20,8),
+            estimated_settle_price NUMERIC(20,8),
+            last_funding_rate    NUMERIC(16,10),
+            next_funding_time_ms {epoch_t},
+            mark_index_basis_pct NUMERIC(16,10),
+            mark_index_spread_bps NUMERIC(16,6),
+            source               TEXT NOT NULL DEFAULT 'rest',
+            created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_premium_metrics_symbol_ts"
+        " ON futures_premium_metrics(symbol, timestamp_ms);"
+    )
+
+
+def _create_futures_open_interest_metrics(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_open_interest_metrics (
+            {_auto_id_column_sql(backend)},
+            symbol               TEXT NOT NULL,
+            timestamp_ms         {epoch_t} NOT NULL,
+            open_interest        NUMERIC(24,8),
+            open_interest_value  NUMERIC(24,8),
+            oi_change_1m         NUMERIC(16,10),
+            oi_change_pct_1m     NUMERIC(16,10),
+            source               TEXT NOT NULL DEFAULT 'rest',
+            created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_open_interest_metrics_symbol_ts"
+        " ON futures_open_interest_metrics(symbol, timestamp_ms);"
+    )
+
+
+def _create_futures_liquidation_minutes(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_liquidation_minutes (
+            {_auto_id_column_sql(backend)},
+            symbol                TEXT NOT NULL,
+            timestamp_ms          {epoch_t} NOT NULL,
+            event_count           INTEGER NOT NULL DEFAULT 0,
+            buy_count             INTEGER NOT NULL DEFAULT 0,
+            sell_count            INTEGER NOT NULL DEFAULT 0,
+            qty_total             NUMERIC(24,8),
+            qty_buy               NUMERIC(24,8),
+            qty_sell              NUMERIC(24,8),
+            quote_total           NUMERIC(24,8),
+            quote_buy             NUMERIC(24,8),
+            quote_sell            NUMERIC(24,8),
+            avg_price             NUMERIC(20,8),
+            max_quote             NUMERIC(24,8),
+            first_event_ms        {epoch_t},
+            last_event_ms         {epoch_t},
+            active_seconds        INTEGER NOT NULL DEFAULT 0,
+            coverage_ratio        NUMERIC(10,6),
+            source                TEXT NOT NULL DEFAULT 'ws',
+            created_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timestamp_ms)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_liquidation_minutes_symbol_ts"
+        " ON futures_liquidation_minutes(symbol, timestamp_ms);"
+    )
+
+
+def _create_futures_candles_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_candles (
+            {_auto_id_column_sql(backend)},
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            open_time {epoch_t} NOT NULL,
+            open NUMERIC(20,8) NOT NULL,
+            high NUMERIC(20,8) NOT NULL,
+            low NUMERIC(20,8) NOT NULL,
+            close NUMERIC(20,8) NOT NULL,
+            volume NUMERIC(20,8) NOT NULL,
+            close_time {epoch_t} NOT NULL,
+            quote_asset_volume NUMERIC(20,8),
+            number_of_trades INTEGER,
+            taker_buy_base_volume NUMERIC(20,8),
+            taker_buy_quote_volume NUMERIC(20,8),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timeframe, open_time)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_candles_symbol_tf_open_time"
+        " ON futures_candles(symbol, timeframe, open_time);"
+    )
+
+
+def _widen_futures_open_interest_numeric_columns(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, "futures_open_interest_metrics"):
+        return
+    existing = get_table_columns(connection, "futures_open_interest_metrics")
+    if "oi_change_1m" in existing:
+        connection.execute(
+            "ALTER TABLE futures_open_interest_metrics "
+            "ALTER COLUMN oi_change_1m TYPE NUMERIC(24,8) USING oi_change_1m::NUMERIC;"
+        )
+    if "oi_change_pct_1m" in existing:
+        connection.execute(
+            "ALTER TABLE futures_open_interest_metrics "
+            "ALTER COLUMN oi_change_pct_1m TYPE NUMERIC(20,10) USING oi_change_pct_1m::NUMERIC;"
+        )
+
+
+def _widen_fills_transact_time(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, "fills"):
+        return
+    existing = get_table_columns(connection, "fills")
+    if "transact_time" not in existing:
+        return
+    connection.execute(
+        "ALTER TABLE fills ALTER COLUMN transact_time TYPE BIGINT USING transact_time::BIGINT;"
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -755,6 +1120,19 @@ MIGRATIONS: list[Migration] = [
     ("038_add_retention_and_heartbeat_indexes", _add_retention_and_heartbeat_indexes),
     ("039_add_fills_commission", _add_fills_commission),
     ("040_add_training_jobs_progress", _add_training_jobs_progress),
+    ("041_create_order_book_snapshots", _create_order_book_snapshots),
+    ("042_create_futures_order_book_snapshots", _create_futures_order_book_snapshots),
+    ("043_add_futures_order_book_aggregate_columns", _add_futures_order_book_aggregate_columns),
+    ("044_add_futures_order_book_active_seconds", _add_futures_order_book_active_seconds),
+    ("045_backfill_futures_order_book_active_seconds", _backfill_futures_order_book_active_seconds),
+    ("046_create_futures_aggtrade_minutes", _create_futures_aggtrade_minutes),
+    ("047_create_futures_premium_metrics", _create_futures_premium_metrics),
+    ("048_create_futures_open_interest_metrics", _create_futures_open_interest_metrics),
+    ("049_create_futures_liquidation_minutes", _create_futures_liquidation_minutes),
+    ("050_create_futures_candles_table", _create_futures_candles_table),
+    ("051_widen_futures_open_interest_numeric_columns", _widen_futures_open_interest_numeric_columns),
+    ("052_widen_fills_transact_time", _widen_fills_transact_time),
+    ("053_ensure_postgres_training_model_identity_columns", _ensure_postgres_training_model_identity_columns),
 ]
 
 

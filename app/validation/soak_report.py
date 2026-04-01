@@ -27,6 +27,19 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_jsonable(value: Any) -> Any:
+    if isinstance(value, datetime):
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return normalized.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _normalize_jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_jsonable(item) for item in value]
+    return value
+
+
 def _count_rows(connection: DBConnection, table_name: str) -> int:
     if not table_exists(connection, table_name):
         return 0
@@ -278,7 +291,7 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
 
     status = "ok" if not issues else "degraded"
 
-    return {
+    return _normalize_jsonable({
         "status": status,
         "checked_at": _utc_now().isoformat(),
         "issues": issues,
@@ -290,4 +303,4 @@ def build_soak_validation_report(log_lines: int = 200) -> dict[str, Any]:
         "heartbeats": heartbeats,
         "signal_quality": signal_quality,
         "history_summary": build_soak_history_summary(),
-    }
+    })

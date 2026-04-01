@@ -49,6 +49,8 @@ from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
 from app.data.fetch_history import read_fetch_history
+from app.data.futures_candles_service import get_status as get_futures_candles_status
+from app.data.futures_candles_service import delete_candles as delete_futures_candles
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
@@ -58,8 +60,10 @@ from app.execution.runtime import set_execution_backend
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
+from app.core.settings import FUTURES_CANDLE_SYMBOLS
 from app.execution.adapter import get_execution_adapter
 from app.pipeline.execution_job import reconcile_orphan_orders
+from app.pipeline.futures_market_data_job import run_futures_market_data_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -67,6 +71,7 @@ from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
 from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_candles
+from app.query.read_service import get_futures_candles
 from app.query.read_service import get_audit_events
 from app.query.read_service import get_fills
 from app.query.read_service import get_job_queue_summary
@@ -291,6 +296,7 @@ def _broker_protection_check(
             "Cooldown active" in reason
             or reason == "Signal is HOLD."
             or reason == "Duplicate signal type."
+            or reason == "No position available to sell."
         )
 
     latest_run = pipeline_check.get("latest_run", {}) if isinstance(pipeline_check, dict) else {}
@@ -622,7 +628,7 @@ def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
             "components": [],
         }
 
-    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker"}
+    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker", "futures_orderbook_collector", "futures_aggtrade_collector", "futures_premium_collector", "futures_open_interest_collector", "futures_liquidation_collector"}
     enriched_heartbeats: list[dict[str, Any]] = []
     stale_workers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
@@ -852,8 +858,12 @@ def favicon() -> Response:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin() -> str:
-    return render_admin_page()
+def admin() -> HTMLResponse:
+    response = HTMLResponse(render_admin_page())
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/alerts/status")
@@ -930,6 +940,20 @@ def candles(
         connection.close()
 
 
+@app.get("/candles/futures")
+def futures_candles(
+    limit: int = Query(default=5, ge=1, le=100),
+    symbol: Optional[str] = Query(default=None),
+    timeframe: Optional[List[str]] = Query(default=None),
+) -> list[dict]:
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_futures_candles(connection, limit=limit, symbol=symbol, timeframes=timeframe or None)
+    finally:
+        connection.close()
+
+
 @app.get("/candles/status")
 def candles_status() -> list[dict]:
     """Return per-(symbol, timeframe) candle statistics: count, latest, staleness, gap estimate."""
@@ -937,6 +961,56 @@ def candles_status() -> list[dict]:
     try:
         run_migrations(connection)
         return get_candles_status(connection)
+    finally:
+        connection.close()
+
+
+@app.get("/candles/futures/status")
+def futures_candles_status() -> list[dict]:
+    """Return per-(symbol, timeframe) futures candle statistics: count, latest, staleness, gap estimate."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_futures_candles_status(connection)
+    finally:
+        connection.close()
+
+
+@app.get("/candles/futures/collector/status")
+def futures_candles_collector_status() -> Dict[str, Any]:
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT status, message, payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_candles_collector'
+            """
+        ).fetchone()
+        if heartbeat_row is None:
+            return {
+                "enabled": True,
+                "status": "unknown",
+                "message": "No futures candles collector heartbeat recorded yet.",
+                "last_seen_at": None,
+                "age_seconds": None,
+                "staleness_threshold_seconds": WORKER_HEARTBEAT_STALENESS_SECONDS,
+                "stale": True,
+                "payload": {},
+            }
+        payload = json.loads(heartbeat_row[2]) if heartbeat_row[2] else {}
+        age_seconds = int((_utc_now() - parse_db_timestamp(heartbeat_row[3])).total_seconds())
+        return {
+            "enabled": True,
+            "status": heartbeat_row[0],
+            "message": heartbeat_row[1],
+            "last_seen_at": heartbeat_row[3],
+            "age_seconds": age_seconds,
+            "staleness_threshold_seconds": WORKER_HEARTBEAT_STALENESS_SECONDS,
+            "stale": age_seconds > WORKER_HEARTBEAT_STALENESS_SECONDS,
+            "payload": payload,
+        }
     finally:
         connection.close()
 
@@ -979,6 +1053,66 @@ def market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -
         return {"status": "ok", "start_date": body.start_date, **result}
     finally:
         connection.close()
+
+
+@app.post("/market-data/futures/fetch")
+def futures_market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
+    """Trigger an independent futures market data fetch without running the full pipeline."""
+    from datetime import datetime, timezone
+
+    start_ms: Optional[int] = None
+    if body.start_date:
+        try:
+            dt = datetime.strptime(body.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD.")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        result = run_futures_market_data_job(
+            connection,
+            symbol_names=body.symbols,
+            timeframes=body.timeframes,
+            limit=body.limit,
+            start_ms=start_ms,
+        )
+        return {"status": "ok", "start_date": body.start_date, **result}
+    finally:
+        connection.close()
+
+
+@app.post("/market-data/futures/clear")
+def futures_market_data_clear(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
+    symbols = body.symbols or None
+    timeframes = body.timeframes or None
+    if not symbols and not timeframes:
+        raise HTTPException(status_code=400, detail="Select at least one symbol or timeframe to clear.")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        deleted = delete_futures_candles(connection, symbols=symbols, timeframes=timeframes)
+        return {
+            "status": "ok",
+            "deleted_rows": deleted,
+            "symbol_names": symbols or [],
+            "timeframes": timeframes or [],
+            "market": "futures",
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/market-data/futures/config")
+def futures_market_data_config() -> Dict[str, Any]:
+    from app.data.candles_service import TIMEFRAME_INTERVAL_MS
+
+    return {
+        "symbol_names": list(FUTURES_CANDLE_SYMBOLS),
+        "supported_timeframes": sorted(TIMEFRAME_INTERVAL_MS.keys()),
+    }
 
 
 @app.get("/audit-events")
@@ -3063,7 +3197,12 @@ class PPOJobRequest(BaseModel):
     batch_size: int = Field(default=256, ge=16)
     n_epochs: int = Field(default=10, ge=1, le=50)
     gamma: float = Field(default=0.99, ge=0.0, le=1.0)
+    gae_lambda: float = Field(default=0.95, ge=0.0, le=1.0)
+    clip_range: float = Field(default=0.2, ge=0.0, le=1.0)
+    ent_coef: float = Field(default=0.01, ge=0.0, le=1.0)
     seed: int = Field(default=42)
+    frame_stack: int = Field(default=1, ge=1, le=20)
+    holding_bonus: float = Field(default=0.0, ge=0.0, le=0.01)
 
 
 @app.post("/training/ppo-jobs")
@@ -3076,12 +3215,14 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
     import json as _json
     import threading
 
+    from app.training.ppo_trainer import resolve_episode_lengths
     from app.training.ppo_trainer import run_ppo_training
     from app.core.db import get_connection as _get_conn
 
     connection = get_connection()
     try:
         run_migrations(connection)
+        train_ep_len, eval_ep_len = resolve_episode_lengths(body.timeframe)
 
         params = {
             "job_type":      "ppo",
@@ -3093,7 +3234,14 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
             "batch_size":    body.batch_size,
             "n_epochs":      body.n_epochs,
             "gamma":         body.gamma,
-            "seed":          body.seed,
+            "gae_lambda":    body.gae_lambda,
+            "clip_range":    body.clip_range,
+            "ent_coef":      body.ent_coef,
+            "train_ep_len":  train_ep_len,
+            "eval_ep_len":   eval_ep_len,
+            "seed":           body.seed,
+            "frame_stack":    body.frame_stack,
+            "holding_bonus":  body.holding_bonus,
         }
         job_id = create_training_job(
             connection,
@@ -3106,6 +3254,12 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
         from datetime import datetime, timezone as _tz
         started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
         update_training_job(connection, job_id, status="running", started_at=started_at)
+        # Write initial progress so the bar shows immediately
+        connection.execute(
+            "UPDATE training_jobs SET progress_json=? WHERE id=?;",
+            (_json.dumps({"pct": 0, "step": 0, "total": body.total_steps}), job_id),
+        )
+        connection.commit()
         job = get_training_job(connection, job_id)
     finally:
         connection.close()
@@ -3137,7 +3291,12 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
                 batch_size=body.batch_size,
                 n_epochs=body.n_epochs,
                 gamma=body.gamma,
+                gae_lambda=body.gae_lambda,
+                clip_range=body.clip_range,
+                ent_coef=body.ent_coef,
                 seed=body.seed,
+                frame_stack=body.frame_stack,
+                holding_bonus=body.holding_bonus,
                 job_id=job_id,
                 on_progress=_on_progress,
             )
@@ -3240,15 +3399,343 @@ def deploy_ppo_job(job_id: int) -> Dict[str, Any]:
 
 @app.delete("/training/jobs/{job_id}")
 def delete_training_job(job_id: int) -> Dict[str, Any]:
-    """Delete a training job record by id."""
+    """Delete a training job record and its TensorBoard log directory."""
+    import shutil
+    from pathlib import Path as _Path
+
     connection = get_connection()
     try:
         run_migrations(connection)
         job = get_training_job(connection, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Training job {job_id} not found.")
+
+        symbol    = job.get("symbol", "")
+        timeframe = job.get("timeframe", "")
+
         connection.execute("DELETE FROM training_jobs WHERE id = ?;", (job_id,))
         connection.commit()
-        return {"deleted": True, "job_id": job_id}
     finally:
         connection.close()
+
+    # Remove TensorBoard log directories for this job.
+    # SB3 names them: ppo_{symbol}_{timeframe}_job{id}_1, _2, …
+    tb_logs_dir = _Path(__file__).resolve().parent.parent.parent / "runtime" / "tb_logs"
+    deleted_dirs: list[str] = []
+    if symbol and timeframe and tb_logs_dir.is_dir():
+        prefix = f"ppo_{symbol}_{timeframe}_job{job_id}_"
+        for entry in tb_logs_dir.iterdir():
+            if entry.is_dir() and entry.name.startswith(prefix):
+                shutil.rmtree(entry, ignore_errors=True)
+                deleted_dirs.append(entry.name)
+
+    return {"deleted": True, "job_id": job_id, "tb_dirs_removed": deleted_dirs}
+
+
+# ---------------------------------------------------------------------------
+# Order Book Collection
+# ---------------------------------------------------------------------------
+
+@app.get("/orderbook/status")
+def get_orderbook_status() -> Dict[str, Any]:
+    """Return order book collection status and per-symbol stats."""
+    from app.data.orderbook_service import (
+        get_orderbook_stats,
+        is_orderbook_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        stats = get_orderbook_stats(connection)
+    finally:
+        connection.close()
+    return {
+        "enabled": is_orderbook_collection_enabled(),
+        "symbols": stats,
+        "total_snapshots": sum(s["total"] for s in stats),
+    }
+
+
+@app.post("/orderbook/enable")
+def enable_orderbook() -> Dict[str, Any]:
+    """Enable order book collection."""
+    from app.data.orderbook_service import enable_orderbook_collection
+    enable_orderbook_collection()
+    return {"enabled": True}
+
+
+@app.post("/orderbook/pause")
+def pause_orderbook() -> Dict[str, Any]:
+    """Pause order book collection."""
+    from app.data.orderbook_service import disable_orderbook_collection
+    disable_orderbook_collection()
+    return {"enabled": False}
+
+
+@app.get("/orderbook/futures/status")
+def get_futures_orderbook_status() -> Dict[str, Any]:
+    """Return futures order book collection status and per-symbol stats."""
+    from datetime import datetime, timedelta, timezone
+    from app.data.futures_orderbook_service import (
+        configured_futures_orderbook_symbols,
+        get_futures_orderbook_stats,
+        is_futures_orderbook_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_orderbook_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        collector_runtime = dict((heartbeat_payload.get("collector") or {}))
+        stats = get_futures_orderbook_stats(
+            connection,
+            runtime=(collector_runtime.get("symbol_runtime") or {}),
+        )
+        cutoff_24h = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        watchdog_row = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS restart_count_24h,
+                MAX(created_at) AS last_restart_at
+            FROM audit_events
+            WHERE event_type = 'futures_orderbook_watchdog_restart'
+              AND created_at >= ?
+            """
+            ,
+            (cutoff_24h,),
+        ).fetchone()
+        watchdog_restart_count_24h = int(watchdog_row[0] or 0) if watchdog_row is not None else 0
+        last_watchdog_restart_at = watchdog_row[1] if watchdog_row is not None else None
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_orderbook_collection_enabled(),
+        "configured_symbols": configured_futures_orderbook_symbols(),
+        "symbols": stats,
+        "total_snapshots": sum(s["total"] for s in stats),
+        "collector": collector_runtime,
+        "last_heartbeat_at": last_heartbeat_at,
+        "watchdog_restart_count_24h": watchdog_restart_count_24h,
+        "last_watchdog_restart_at": last_watchdog_restart_at,
+    }
+
+
+@app.get("/orderbook/futures/recent")
+def get_recent_futures_orderbook(symbol: str, limit: int = 5) -> Dict[str, Any]:
+    """Return recent futures order book snapshots for a symbol."""
+    from app.data.futures_orderbook_service import get_recent_futures_orderbook_snapshots
+
+    requested_symbol = str(symbol or "").strip().upper()
+    if not requested_symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        rows = get_recent_futures_orderbook_snapshots(connection, requested_symbol, limit=max(1, min(int(limit), 20)))
+    finally:
+        connection.close()
+
+    return {
+        "symbol": requested_symbol,
+        "rows": rows,
+    }
+
+
+@app.post("/orderbook/futures/enable")
+def enable_futures_orderbook() -> Dict[str, Any]:
+    """Enable futures order book collection."""
+    from app.data.futures_orderbook_service import enable_futures_orderbook_collection
+    enable_futures_orderbook_collection()
+    return {"enabled": True}
+
+
+@app.post("/orderbook/futures/pause")
+def pause_futures_orderbook() -> Dict[str, Any]:
+    """Pause futures order book collection."""
+    from app.data.futures_orderbook_service import disable_futures_orderbook_collection
+    disable_futures_orderbook_collection()
+    return {"enabled": False}
+
+
+@app.get("/aggtrades/futures/status")
+def get_futures_aggtrade_status() -> Dict[str, Any]:
+    """Return futures aggTrade collection status and per-symbol stats."""
+    from app.data.futures_aggtrade_service import (
+        configured_futures_aggtrade_symbols,
+        get_futures_aggtrade_stats,
+        is_futures_aggtrade_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_aggtrade_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        collector_runtime = dict((heartbeat_payload.get("collector") or {}))
+        stats = get_futures_aggtrade_stats(
+            connection,
+            runtime=(collector_runtime.get("symbol_runtime") or {}),
+        )
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_aggtrade_collection_enabled(),
+        "configured_symbols": configured_futures_aggtrade_symbols(),
+        "symbols": stats,
+        "total_minutes": sum(s["total"] for s in stats),
+        "collector": collector_runtime,
+        "last_heartbeat_at": last_heartbeat_at,
+    }
+
+
+@app.get("/aggtrades/futures/recent")
+def get_recent_futures_aggtrades(symbol: str, limit: int = 5) -> Dict[str, Any]:
+    """Return recent futures aggTrade minute aggregates for a symbol."""
+    from app.data.futures_aggtrade_service import get_recent_futures_aggtrade_minutes
+
+    requested_symbol = str(symbol or "").strip().upper()
+    if not requested_symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        rows = get_recent_futures_aggtrade_minutes(connection, requested_symbol, limit=max(1, min(int(limit), 20)))
+    finally:
+        connection.close()
+
+    return {
+        "symbol": requested_symbol,
+        "rows": rows,
+    }
+
+
+@app.get("/premium/futures/status")
+def get_futures_premium_status() -> Dict[str, Any]:
+    """Return futures premium metrics collection status and per-symbol stats."""
+    from app.data.futures_premium_service import (
+        configured_futures_premium_symbols,
+        get_futures_premium_stats,
+        is_futures_premium_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_premium_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        stats = get_futures_premium_stats(connection)
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_premium_collection_enabled(),
+        "configured_symbols": configured_futures_premium_symbols(),
+        "symbols": stats,
+        "total_minutes": sum(s["total"] for s in stats),
+        "collector": heartbeat_payload,
+        "last_heartbeat_at": last_heartbeat_at,
+    }
+
+
+@app.get("/open-interest/futures/status")
+def get_futures_open_interest_status() -> Dict[str, Any]:
+    """Return futures open interest collection status and per-symbol stats."""
+    from app.data.futures_open_interest_service import (
+        configured_futures_open_interest_symbols,
+        get_futures_open_interest_stats,
+        is_futures_open_interest_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_open_interest_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        stats = get_futures_open_interest_stats(connection)
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_open_interest_collection_enabled(),
+        "configured_symbols": configured_futures_open_interest_symbols(),
+        "symbols": stats,
+        "total_minutes": sum(s["total"] for s in stats),
+        "collector": heartbeat_payload,
+        "last_heartbeat_at": last_heartbeat_at,
+    }
+
+
+@app.get("/liquidations/futures/status")
+def get_futures_liquidation_status() -> Dict[str, Any]:
+    """Return futures liquidation collection status and per-symbol stats."""
+    from app.data.futures_liquidation_service import (
+        configured_futures_liquidation_symbols,
+        get_futures_liquidation_stats,
+        is_futures_liquidation_collection_enabled,
+    )
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_liquidation_collector'
+            """
+        ).fetchone()
+        heartbeat_payload: Dict[str, Any] = {}
+        last_heartbeat_at = None
+        if heartbeat_row is not None:
+            heartbeat_payload = json.loads(heartbeat_row[0]) if heartbeat_row[0] else {}
+            last_heartbeat_at = heartbeat_row[1]
+        stats = get_futures_liquidation_stats(
+            connection,
+            runtime=(heartbeat_payload.get("collector", {}) or {}).get("symbol_runtime", {}),
+        )
+    finally:
+        connection.close()
+    return {
+        "enabled": is_futures_liquidation_collection_enabled(),
+        "configured_symbols": configured_futures_liquidation_symbols(),
+        "symbols": stats,
+        "total_minutes": sum(s["total"] for s in stats),
+        "collector": heartbeat_payload,
+        "last_heartbeat_at": last_heartbeat_at,
+    }
