@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.db import _load_psycopg
+from app.core.db import PostgresConnectionAdapter
 from app.core.migrations import run_migrations
 from app.core.settings import DATABASE_URL
 from app.core.settings import SQLITE_PATH
@@ -76,16 +77,15 @@ def _sqlite_tables(connection: sqlite3.Connection) -> set[str]:
 
 
 def _postgres_tables(connection: Any) -> set[str]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT tablename
-            FROM pg_catalog.pg_tables
-            WHERE schemaname = 'public'
-            ORDER BY tablename;
-            """
-        )
-        return {str(row[0]) for row in cursor.fetchall()}
+    rows = connection.execute(
+        """
+        SELECT tablename
+        FROM pg_catalog.pg_tables
+        WHERE schemaname = 'public'
+        ORDER BY tablename;
+        """
+    ).fetchall()
+    return {str(row[0]) for row in rows}
 
 
 def _sqlite_columns(connection: sqlite3.Connection, table: str) -> list[str]:
@@ -94,17 +94,16 @@ def _sqlite_columns(connection: sqlite3.Connection, table: str) -> list[str]:
 
 
 def _postgres_columns(connection: Any, table: str) -> list[str]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s
-            ORDER BY ordinal_position;
-            """,
-            (table,),
-        )
-        return [str(row[0]) for row in cursor.fetchall()]
+    rows = connection.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ?
+        ORDER BY ordinal_position;
+        """,
+        (table,),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def _copy_table(
@@ -131,23 +130,22 @@ def _copy_table(
     )
 
     inserted = 0
-    with postgres_connection.cursor() as cursor:
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start:start + batch_size]
-            params = [tuple(row[column] for column in columns) for row in batch]
-            cursor.executemany(insert_sql, params)
-            inserted += len(batch)
-        if "id" in columns:
-            cursor.execute(
-                f"""
-                SELECT setval(
-                    pg_get_serial_sequence(%s, 'id'),
-                    COALESCE((SELECT MAX(id) FROM {table}), 1),
-                    true
-                );
-                """,
-                (table,),
-            )
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start:start + batch_size]
+        params = [tuple(row[column] for column in columns) for row in batch]
+        postgres_connection.executemany(insert_sql, params)
+        inserted += len(batch)
+    if "id" in columns:
+        postgres_connection.execute(
+            f"""
+            SELECT setval(
+                pg_get_serial_sequence(?, 'id'),
+                COALESCE((SELECT MAX(id) FROM {table}), 1),
+                true
+            );
+            """,
+            (table,),
+        )
     postgres_connection.commit()
     return inserted
 
@@ -155,8 +153,7 @@ def _copy_table(
 def _truncate_tables(connection: Any, tables: list[str]) -> None:
     if not tables:
         return
-    with connection.cursor() as cursor:
-        cursor.execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE;")
+    connection.execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE;")
     connection.commit()
 
 
@@ -177,17 +174,15 @@ def get_table_counts_sqlite(sqlite_path: Path, tables: list[str] | None = None) 
 
 def get_table_counts_postgres(database_url: str, tables: list[str] | None = None) -> dict[str, int]:
     psycopg = _load_psycopg()
-    connection = psycopg.connect(database_url)
+    connection = PostgresConnectionAdapter(psycopg.connect(database_url))
     try:
         target_tables = _postgres_tables(connection)
         requested_tables = tables or TABLE_ORDER
         active_tables = [table for table in requested_tables if table in target_tables]
         counts: dict[str, int] = {}
-        with connection.cursor() as cursor:
-            for table in active_tables:
-                cursor.execute(f"SELECT COUNT(*) FROM {table};")
-                row = cursor.fetchone()
-                counts[table] = int(row[0]) if row else 0
+        for table in active_tables:
+            row = connection.execute(f"SELECT COUNT(*) FROM {table};").fetchone()
+            counts[table] = int(row[0]) if row else 0
         return counts
     finally:
         connection.close()
@@ -203,7 +198,7 @@ def migrate_sqlite_to_postgres(
 ) -> list[tuple[str, int]]:
     psycopg = _load_psycopg()
     sqlite_connection = sqlite3.connect(str(sqlite_path))
-    postgres_connection = psycopg.connect(database_url)
+    postgres_connection = PostgresConnectionAdapter(psycopg.connect(database_url))
 
     try:
         run_migrations(postgres_connection)
