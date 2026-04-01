@@ -758,6 +758,19 @@ def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
 def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> None:
     if not table_exists(connection, "futures_order_book_snapshots"):
         return
+    if get_backend_name(connection) == "postgres":
+        connection.execute(
+            """
+            UPDATE futures_order_book_snapshots
+            SET active_seconds = LEAST(
+                60,
+                GREATEST(0, CAST(ROUND(COALESCE(coverage_ratio, 0) * 60) AS INTEGER))
+            )
+            WHERE COALESCE(active_seconds, 0) = 0
+              AND COALESCE(coverage_ratio, 0) > 0
+            """
+        )
+        return
     connection.execute(
         """
         UPDATE futures_order_book_snapshots
