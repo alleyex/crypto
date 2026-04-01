@@ -2275,9 +2275,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <span id="ob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
             <button class="secondary" id="ob-enable-btn" data-action="ob-enable" style="display:none">Enable Collection</button>
             <button class="secondary" id="ob-pause-btn"  data-action="ob-pause"  style="display:none">Pause</button>
-            <button class="secondary" data-action="ob-refresh">Refresh</button>
+            <button class="secondary" id="ob-refresh-btn" data-action="ob-refresh">Refresh Status</button>
           </div>
         </div>
+        <div id="ob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
         <div id="ob-stats-board" style="margin-top:14px">
           <span style="color:var(--muted);font-size:13px">Loading…</span>
         </div>
@@ -2291,9 +2292,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
               <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
               <button class="secondary" id="fob-pause-btn"  data-action="fob-pause"  style="display:none">Pause</button>
-              <button class="secondary" data-action="fob-refresh">Refresh</button>
+              <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh Status</button>
             </div>
           </div>
+          <div id="fob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
           <div id="fob-stats-board" style="margin-top:14px">
             <span style="color:var(--muted);font-size:13px">Loading…</span>
           </div>
@@ -5833,9 +5835,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <tbody>${rows}</tbody>
               </table>
             </div>`;
+          const meta = el("ob-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
         } catch(e) {
           const board = el("ob-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("ob-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
         }
       }
 
@@ -5896,15 +5902,36 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <tbody>${rows}</tbody>
               </table>
             </div>`;
+          const meta = el("fob-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
         } catch(e) {
           const board = el("fob-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fob-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function withRefreshButton(buttonId, runRefresh) {
+        const button = el(buttonId);
+        const originalText = button?.textContent || "Refresh Status";
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Refreshing...";
+        }
+        try {
+          await runRefresh();
+        } finally {
+          if (button) {
+            button.disabled = false;
+            button.textContent = originalText;
+          }
         }
       }
 
       document.addEventListener("click", async (event) => {
         const obAction = event.target.dataset?.action;
-        if (obAction === "ob-refresh") { await refreshObStatus(); return; }
+        if (obAction === "ob-refresh") { await withRefreshButton("ob-refresh-btn", refreshObStatus); return; }
         if (obAction === "ob-enable") {
           await api("/orderbook/enable", { method: "POST" });
           await refreshObStatus();
@@ -5915,7 +5942,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           await refreshObStatus();
           return;
         }
-        if (obAction === "fob-refresh") { await refreshFuturesObStatus(); return; }
+        if (obAction === "fob-refresh") { await withRefreshButton("fob-refresh-btn", refreshFuturesObStatus); return; }
         if (obAction === "fob-enable") {
           await api("/orderbook/futures/enable", { method: "POST" });
           await refreshFuturesObStatus();
