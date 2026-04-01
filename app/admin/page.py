@@ -861,6 +861,18 @@ def render_admin_page() -> str:
         border-radius: 8px;
         background: var(--panel-2);
         margin-bottom: 6px;
+        cursor: pointer;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+      }
+
+      .status-symbol-row:hover {
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+        transform: translateY(-1px);
+      }
+
+      .status-symbol-row:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 35%);
+        outline-offset: 2px;
       }
 
       .status-symbol-left {
@@ -5900,7 +5912,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             const cov = r.coverage_pct ?? 100;
             const covColor = cov >= 99 ? "var(--ok)" : cov >= 90 ? "var(--warn)" : "var(--bad)";
             return `
-              <div class="status-symbol-row">
+              <button type="button" class="status-symbol-row" data-action="market-apply-selection" data-symbol="${r.symbol}" data-timeframe="${r.timeframe}">
                 <div class="status-symbol-left">
                   <span class="status-dot" style="background:${dotColor}"></span>
                   <div>
@@ -5928,7 +5940,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                     </div>
                   </div>
                 </div>
-              </div>`;
+              </button>`;
           }).join("");
 
           // Coverage matrix
@@ -5993,6 +6005,32 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const timeframeSummary = el("market-fetch-timeframe-summary");
         if (timeframeSummary) {
           timeframeSummary.innerHTML = `<strong>Selected timeframes:</strong> ${selectedTimeframes.length ? selectedTimeframes.join(", ") : "active timeframes"}`;
+        }
+      }
+
+      function applyMarketSelection(symbol, timeframe) {
+        const symbolPills = el("market-fetch-symbol-checkboxes");
+        if (symbolPills) {
+          symbolPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.classList.toggle("selected", pill.dataset.symbol === symbol);
+          });
+        }
+
+        const timeframePills = el("market-fetch-timeframe-pills");
+        if (timeframePills) {
+          timeframePills.querySelectorAll(".toggle-pill").forEach((pill) => {
+            pill.classList.toggle("selected", pill.dataset.tf === timeframe);
+          });
+        }
+
+        updateMarketFetchSelectionSummary();
+
+        const msg = el("market-fetch-message");
+        if (msg) {
+          const symbolLabel = symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
+          msg.textContent = `Selected ${symbolLabel} / ${timeframe} for fetch and clear actions.`;
+          msg.className = "message ok";
+          msg.style.display = "block";
         }
       }
 
@@ -6437,6 +6475,15 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (action === "market-status-refresh") {
           await refreshMarketStatus();
+        }
+
+        if (action === "market-apply-selection") {
+          const symbol = event.target.closest("[data-symbol]")?.dataset.symbol;
+          const timeframe = event.target.closest("[data-timeframe]")?.dataset.timeframe;
+          if (symbol && timeframe) {
+            applyMarketSelection(symbol, timeframe);
+          }
+          return;
         }
 
         if (action === "market-fetch") {
