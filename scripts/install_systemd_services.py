@@ -11,6 +11,7 @@ SERVICE_DIR = PROJECT_ROOT / "deploy" / "systemd"
 SERVICE_NAMES = [
     "crypto-api.service",
     "crypto-scheduler.service",
+    "crypto-futures-candles.service",
     "crypto-futures-orderbook.service",
     "crypto-futures-aggtrade.service",
     "crypto-futures-premium.service",

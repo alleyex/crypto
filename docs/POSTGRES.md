@@ -66,15 +66,12 @@ This profile set brings up:
 - `api`
 - `scheduler`
 - `postgres`
+- `futures-candles`
 - `futures-orderbook`
 - `futures-aggtrade`
 - `futures-premium`
 - `futures-open-interest`
 - `futures-liquidation`
-
-Current Docker gap to keep in mind:
-
-- futures candles do not yet have an always-on collector service equivalent to the five futures microstructure collectors above
 
 **Automated Compose validation:**
 
