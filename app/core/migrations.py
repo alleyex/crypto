@@ -961,6 +961,19 @@ def _widen_futures_open_interest_numeric_columns(connection: DBConnection) -> No
         )
 
 
+def _widen_fills_transact_time(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, "fills"):
+        return
+    existing = get_table_columns(connection, "fills")
+    if "transact_time" not in existing:
+        return
+    connection.execute(
+        "ALTER TABLE fills ALTER COLUMN transact_time TYPE BIGINT USING transact_time::BIGINT;"
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -1078,6 +1091,7 @@ MIGRATIONS: list[Migration] = [
     ("049_create_futures_liquidation_minutes", _create_futures_liquidation_minutes),
     ("050_create_futures_candles_table", _create_futures_candles_table),
     ("051_widen_futures_open_interest_numeric_columns", _widen_futures_open_interest_numeric_columns),
+    ("052_widen_fills_transact_time", _widen_fills_transact_time),
 ]
 
 
