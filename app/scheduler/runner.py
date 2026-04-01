@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Optional
 
 from app.pipeline.execution_job import run_execution_job
-from app.pipeline.futures_orderbook_job import run_futures_orderbook_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.orderbook_job import run_orderbook_job
 from app.pipeline.risk_job import run_risk_job
@@ -540,16 +539,6 @@ def run_scheduler(
                 conn_ob.close()
         except Exception:
             pass  # never let orderbook errors crash the scheduler
-
-        # Futures order book collection — independent collector for perp symbols
-        try:
-            conn_fob = get_connection()
-            try:
-                run_futures_orderbook_job(conn_fob)
-            finally:
-                conn_fob.close()
-        except Exception:
-            pass
 
         if not active_strategy_names:
             log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"

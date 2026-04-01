@@ -622,7 +622,7 @@ def _heartbeat_check(connection: DBConnection) -> dict[str, Any]:
             "components": [],
         }
 
-    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker"}
+    worker_components = {"data_worker", "strategy_worker", "risk_worker", "execution_worker", "futures_orderbook_collector"}
     enriched_heartbeats: list[dict[str, Any]] = []
     stale_workers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
