@@ -85,8 +85,15 @@ DEFAULT_EVAL_EP_LEN  = 2880   # 2 days of 1m bars
 def resolve_episode_lengths(timeframe: str) -> tuple[int, int]:
     """Return fair episode lengths for the given timeframe.
 
-    Keep 1m at 1d/2d bars, but avoid starving slower timeframes with too few
-    decision steps by enforcing a minimum bar count.
+    All timeframes use a fixed 2-day train / 4-day eval window expressed in
+    bars, so slower timeframes (15m, 1h) are not penalised by an artificial
+    bar-count minimum that was designed for 5m.
+
+    Examples:
+      1m  → train=1440 (1d), eval=2880 (2d)   [special-cased for legacy]
+      5m  → train=576  (2d), eval=1152 (4d)
+      15m → train=192  (2d), eval=384  (4d)
+      1h  → train=48   (2d), eval=96   (4d)
     """
     normalized = str(timeframe or "1m").strip().lower()
     if normalized == "1m":
@@ -108,8 +115,8 @@ def resolve_episode_lengths(timeframe: str) -> tuple[int, int]:
         return DEFAULT_TRAIN_EP_LEN, DEFAULT_EVAL_EP_LEN
 
     bars_per_day = max(1, 1440 // minutes_per_bar)
-    train_ep_len = max(bars_per_day, 576)
-    eval_ep_len = max(train_ep_len * 2, 1152)
+    train_ep_len = bars_per_day * 2   # 2 days in bars
+    eval_ep_len  = bars_per_day * 4   # 4 days in bars
     return train_ep_len, eval_ep_len
 
 
@@ -227,6 +234,7 @@ def run_ppo_training(
     ent_coef: float = 0.01,
     seed: int = 42,
     frame_stack: int = 1,
+    holding_bonus: float = 0.0,
     job_id: Optional[int] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
@@ -300,7 +308,7 @@ def run_ppo_training(
     _original_fee = _env_mod.FEE_PER_SIDE
     _env_mod.FEE_PER_SIDE = fee_rate
     try:
-        train_env = Monitor(CryptoTradingEnv(train_df, episode_length=train_ep_len, seed=seed, frame_stack=frame_stack))
+        train_env = Monitor(CryptoTradingEnv(train_df, episode_length=train_ep_len, seed=seed, frame_stack=frame_stack, holding_bonus_rate=holding_bonus))
 
         ppo_kwargs = {**DEFAULT_PPO_KWARGS,
                       "learning_rate": learning_rate,
@@ -343,9 +351,11 @@ def run_ppo_training(
     avg_bnh  = float(np.mean(bnh_rets)) if bnh_rets else 0.0
     avg_edge = avg_ppo - avg_bnh
 
-    if win_rate >= 0.75 and avg_edge > 0:
+    total_trades = sum(r["ppo"].get("n_trades", 0) for r in eval_results)
+    avg_trades   = total_trades / len(eval_results) if eval_results else 0.0
+    if win_rate >= 0.75 and avg_edge > 0 and avg_trades >= 1.0:
         verdict = "PASS"
-    elif win_rate >= 0.5 and avg_edge > 0:
+    elif win_rate >= 0.5 and avg_edge > 0 and avg_trades >= 1.0:
         verdict = "MARGINAL"
     else:
         verdict = "FAIL"
@@ -371,9 +381,10 @@ def run_ppo_training(
         "gamma":        gamma,
         "gae_lambda":   gae_lambda,
         "clip_range":   clip_range,
-        "ent_coef":     ent_coef,
-        "frame_stack":  frame_stack,
-        "train_ep_len": train_ep_len,
+        "ent_coef":        ent_coef,
+        "frame_stack":     frame_stack,
+        "holding_bonus":   holding_bonus,
+        "train_ep_len":    train_ep_len,
         "eval_ep_len":  eval_ep_len,
         "walk_forward": eval_results,
         "verdict":      verdict,

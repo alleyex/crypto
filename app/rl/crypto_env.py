@@ -8,15 +8,15 @@ Observation space  (Box float32, shape=(N_FEAT + 3,)):
   [N_FEAT+1]    unrealised log-return since entry, clipped ±0.10
   [N_FEAT+2]    bars held in current position / episode_length  [0, 1]
 
-Action space  (Discrete 3):
+Action space  (Discrete 2):
   0  →  flat   (close open position)
   1  →  long
-  2  →  short
 
 Reward:
-  step_pnl = position * log_ret_1_t
-  fee      = |Δposition| * FEE_PER_SIDE   (charged once on change)
-  reward   = step_pnl − fee
+  step_pnl      = position * log_ret_1_t
+  fee           = |Δposition| * FEE_PER_SIDE   (charged once on change)
+  holding_bonus = holding_bonus_rate  if position == 1 (long only) else 0
+  reward        = step_pnl − fee + holding_bonus
 
 Episode:
   Runs for `episode_length` steps.
@@ -47,8 +47,8 @@ _FEAT_COLS = get_feature_columns()
 N_FEAT     = len(_FEAT_COLS)
 OBS_DIM    = N_FEAT + 3   # features + position + upnl + bars_held_norm
 
-# Map discrete action → signed position
-_ACTION_TO_POS = {0: 0, 1: 1, 2: -1}
+# Map discrete action → signed position (long/flat only, no short)
+_ACTION_TO_POS = {0: 0, 1: 1}
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,7 @@ class CryptoTradingEnv(gym.Env):
         deterministic: bool = False,
         seed: Optional[int] = None,
         frame_stack: int = 1,
+        holding_bonus_rate: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -95,6 +96,7 @@ class CryptoTradingEnv(gym.Env):
         self._frame_stack   = frame_stack
 
         # Pre-extract numpy arrays for speed
+        self._holding_bonus_rate = float(holding_bonus_rate)
         self._feat_arr  = df[_FEAT_COLS].to_numpy(dtype=np.float32)
         self._ret_arr   = df["log_ret_1"].to_numpy(dtype=np.float32)
 
@@ -117,7 +119,7 @@ class CryptoTradingEnv(gym.Env):
             high = np.full(obs_dim_total,  10.0, dtype=np.float32),
             dtype=np.float32,
         )
-        self.action_space = spaces.Discrete(3)
+        self.action_space = spaces.Discrete(2)
 
         # Frame buffer (pre-filled with zeros)
         self._frame_buffer: deque = deque(
@@ -188,7 +190,8 @@ class CryptoTradingEnv(gym.Env):
         # observation to retroactively profit from the same bar.
         log_ret = float(self._ret_arr[idx])
         step_pnl = old_position * log_ret
-        reward   = step_pnl - fee
+        holding_bonus = self._holding_bonus_rate if old_position == 1 else 0.0
+        reward   = step_pnl - fee + holding_bonus
 
         # Update unrealised PnL and bars held
         self._entry_ret += log_ret if self._position != 0 else 0.0

@@ -3068,6 +3068,7 @@ class PPOJobRequest(BaseModel):
     ent_coef: float = Field(default=0.01, ge=0.0, le=1.0)
     seed: int = Field(default=42)
     frame_stack: int = Field(default=1, ge=1, le=20)
+    holding_bonus: float = Field(default=0.0, ge=0.0, le=0.01)
 
 
 @app.post("/training/ppo-jobs")
@@ -3104,8 +3105,9 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
             "ent_coef":      body.ent_coef,
             "train_ep_len":  train_ep_len,
             "eval_ep_len":   eval_ep_len,
-            "seed":          body.seed,
-            "frame_stack":   body.frame_stack,
+            "seed":           body.seed,
+            "frame_stack":    body.frame_stack,
+            "holding_bonus":  body.holding_bonus,
         }
         job_id = create_training_job(
             connection,
@@ -3160,6 +3162,7 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
                 ent_coef=body.ent_coef,
                 seed=body.seed,
                 frame_stack=body.frame_stack,
+                holding_bonus=body.holding_bonus,
                 job_id=job_id,
                 on_progress=_on_progress,
             )
