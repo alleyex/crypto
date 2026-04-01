@@ -2354,6 +2354,57 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </div>
       </article>
 
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Premium Collection</h2>
+            <p>Mark price, index price, basis, and funding snapshots for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fpm-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fpm-refresh-btn" data-action="fpm-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fpm-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fpm-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Open Interest Collection</h2>
+            <p>Open interest minute snapshots and short-term changes for the configured futures symbols.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="foi-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="foi-refresh-btn" data-action="foi-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="foi-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="foi-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
+      <article class="panel data-card" style="margin-top:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2>Futures Liquidations Collection</h2>
+            <p>Minute liquidation aggregates from the futures force-order stream.</p>
+          </div>
+          <div class="button-row" style="gap:8px">
+            <span id="fliq-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fliq-refresh-btn" data-action="fliq-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fliq-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fliq-stats-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Loading…</span>
+        </div>
+      </article>
+
       </section>
       </div>
 
@@ -5073,6 +5124,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       refreshObStatus();
       refreshFuturesObStatus();
       refreshFuturesAggStatus();
+      refreshFuturesPremiumStatus();
+      refreshFuturesOpenInterestStatus();
+      refreshFuturesLiquidationStatus();
       refreshPPOJobs().catch((error) => {
         const msg = el("ppo-train-message");
         if (msg) {
@@ -6122,6 +6176,116 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
       }
 
+      function renderSimpleFuturesCollectorStatus(targetId, rows, emptyText, totalLabel, totalValue) {
+        const board = el(targetId);
+        if (!board) return;
+        if (!rows || rows.length === 0) {
+          board.innerHTML = `<span style="color:var(--muted);font-size:13px">${emptyText}</span>`;
+          return;
+        }
+        const tableRows = rows.map((s) => {
+          const latestLabel = s.is_stale
+            ? `<span style="color:#f87171">${s.latest || "n/a"}</span>`
+            : `<span style="color:var(--text)">${s.latest || "n/a"}</span>`;
+          return `<tr>
+            <td>${s.symbol}</td>
+            <td class="num">${s.total.toLocaleString()}</td>
+            <td class="num">${s.coverage_pct}%</td>
+            <td class="num">${s.latest_source || "unknown"}</td>
+            <td class="num">${latestLabel}</td>
+          </tr>`;
+        }).join("");
+        board.innerHTML = `
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+            ${totalLabel}: <strong style="color:var(--text)">${(totalValue || 0).toLocaleString()}</strong>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead><tr>
+                <th>Symbol</th><th class="num">Minutes</th>
+                <th class="num">Coverage</th><th class="num">Source</th>
+                <th class="num">Latest (UTC)</th>
+              </tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>`;
+      }
+
+      async function refreshFuturesPremiumStatus() {
+        try {
+          const r = await api("/premium/futures/status");
+          const badge = el("fpm-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "fpm-stats-board",
+            r.symbols,
+            "No futures premium minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("fpm-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("fpm-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fpm-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesOpenInterestStatus() {
+        try {
+          const r = await api("/open-interest/futures/status");
+          const badge = el("foi-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "foi-stats-board",
+            r.symbols,
+            "No futures open-interest minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("foi-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("foi-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("foi-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function refreshFuturesLiquidationStatus() {
+        try {
+          const r = await api("/liquidations/futures/status");
+          const badge = el("fliq-status-badge");
+          if (badge) {
+            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
+            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
+          }
+          renderSimpleFuturesCollectorStatus(
+            "fliq-stats-board",
+            r.symbols,
+            "No futures liquidation minutes collected yet.",
+            "Total minutes",
+            r.total_minutes,
+          );
+          const meta = el("fliq-refresh-meta");
+          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          const board = el("fliq-stats-board");
+          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
+          const meta = el("fliq-refresh-meta");
+          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
       async function withRefreshButton(buttonId, runRefresh) {
         const button = el(buttonId);
         const originalText = button?.textContent || "Refresh";
@@ -6164,6 +6328,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           if (symbol) await refreshFuturesAggRecent(symbol);
           return;
         }
+        if (obAction === "fpm-refresh") { await withRefreshButton("fpm-refresh-btn", refreshFuturesPremiumStatus); return; }
+        if (obAction === "foi-refresh") { await withRefreshButton("foi-refresh-btn", refreshFuturesOpenInterestStatus); return; }
+        if (obAction === "fliq-refresh") { await withRefreshButton("fliq-refresh-btn", refreshFuturesLiquidationStatus); return; }
       });
 
       document.addEventListener("click", async (event) => {
