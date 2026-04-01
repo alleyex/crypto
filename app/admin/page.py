@@ -4594,7 +4594,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           try {
             const futuresConfig = await api("/market-data/futures/config");
             const futuresSymbols = futuresConfig?.symbol_names || [];
-            const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "1000PEPE" : symbol;
+            const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
             const prevSelected = new Set(
               Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
             );
@@ -5940,7 +5940,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       function updateMarketFetchSelectionSummary() {
-        const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "1000PEPE" : symbol;
+        const symbolLabel = (symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol;
         const selectedSymbols = Array.from(
           el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
         ).map((p) => p.dataset.symbol);
