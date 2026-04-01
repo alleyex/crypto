@@ -5936,19 +5936,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           await refreshObStatus();
           return;
         }
-        if (obAction === "ob-pause") {
-          await api("/orderbook/pause", { method: "POST" });
-          await refreshObStatus();
-          return;
-        }
         if (obAction === "fob-refresh") { await withRefreshButton("fob-refresh-btn", refreshFuturesObStatus); return; }
         if (obAction === "fob-enable") {
           await api("/orderbook/futures/enable", { method: "POST" });
-          await refreshFuturesObStatus();
-          return;
-        }
-        if (obAction === "fob-pause") {
-          await api("/orderbook/futures/pause", { method: "POST" });
           await refreshFuturesObStatus();
           return;
         }
