@@ -5869,10 +5869,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const board = el("fob-stats-board");
           if (!board) return;
           if (!r.symbols || r.symbols.length === 0) {
-            const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length
-              ? r.configured_symbols.join(", ")
-              : "none";
-            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures snapshots collected yet. Configured symbols: ${configured}</span>`;
+            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No futures snapshots collected yet.</span>`;
             return;
           }
           const rows = r.symbols.map(s => {
@@ -5894,12 +5891,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <td class="num">${snapshotLabel}</td>
             </tr>`;
           }).join("");
-          const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length
-            ? r.configured_symbols.join(", ")
-            : "none";
           board.innerHTML = `
             <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-              Configured symbols: <strong style="color:var(--text)">${configured}</strong><br>
               Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong><br>
               Watchdog restarts (24h): <strong style="color:var(--text)">${(r.watchdog_restart_count_24h||0).toLocaleString()}</strong>
               <span style="margin-left:8px">Last restart: <strong style="color:var(--text)">${r.last_watchdog_restart_at || "never"}</strong></span>
