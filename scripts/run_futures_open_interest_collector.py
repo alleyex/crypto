@@ -13,6 +13,7 @@ _PID_FILE = PROJECT_ROOT / "runtime" / "futures_open_interest.pid"
 _STOP_FILE = PROJECT_ROOT / "runtime" / "futures_open_interest.stop"
 _LOG_DIR = PROJECT_ROOT / "logs"
 _LOG_FILE = _LOG_DIR / "futures-open-interest-worker.log"
+_ALERT_STATE_FILE = PROJECT_ROOT / "runtime" / "futures_open_interest_alert_state.json"
 
 
 def _acquire_singleton() -> None:
@@ -61,6 +62,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.core.db import get_connection
 from app.core.env import load_dotenv_file
 from app.core.migrations import run_migrations
+from app.core.settings import ALERT_REFIRE_SECONDS
+from app.alerting.state import build_fingerprint
+from app.alerting.state import clear_alert_state
+from app.alerting.state import read_alert_state
+from app.alerting.state import write_alert_state
+from app.alerting.telegram import send_telegram_message
+from app.audit.service import log_event
+from app.data.futures_open_interest_service import configured_futures_open_interest_symbols
 from app.pipeline.futures_open_interest_job import run_futures_open_interest_job
 from app.system.heartbeat import record_heartbeat
 
@@ -72,6 +81,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--interval", type=int, default=60, help="Collection interval in seconds. Default: 60")
     parser.add_argument("--iterations", type=int, default=None, help="Optional number of runs before exit")
     return parser.parse_args()
+
+
+def _alert_on_partial_collection(run_count: int, expected_symbols: list[str], result: dict) -> None:
+    errors = list(result.get("errors") or [])
+    error_symbols = [str(item.get("symbol") or "").upper() for item in errors if item.get("symbol")]
+    saved_symbols = [str(item).upper() for item in (result.get("symbols") or expected_symbols)]
+    missing_symbols = sorted(
+        {
+            symbol
+            for symbol in expected_symbols
+            if symbol not in saved_symbols or symbol in error_symbols
+        }
+    )
+    saved = int(result.get("saved", 0))
+    payload = {
+        "run_count": run_count,
+        "expected_symbols": expected_symbols,
+        "saved": saved,
+        "errors": errors,
+        "missing_symbols": missing_symbols,
+        "source_counts": dict(result.get("source_counts") or {}),
+    }
+    fingerprint = build_fingerprint(
+        {
+            "type": "futures_open_interest_partial",
+            "saved": saved,
+            "expected": len(expected_symbols),
+            "errors": errors,
+            "missing_symbols": missing_symbols,
+        }
+    )
+    existing = read_alert_state(_ALERT_STATE_FILE, ttl_seconds=ALERT_REFIRE_SECONDS)
+    if existing and existing.get("fingerprint") == fingerprint:
+        return
+
+    log_event(
+        event_type="futures_open_interest_gap_alert",
+        status="warning",
+        source="futures_open_interest_collector",
+        message="Futures open interest collector missed one or more symbol updates.",
+        payload=payload,
+    )
+    missing_text = ", ".join(missing_symbols) if missing_symbols else "none"
+    error_text = "; ".join(f"{item.get('symbol')}: {item.get('error')}" for item in errors[:3]) or "none"
+    send_telegram_message(
+        "Crypto alert: futures open interest collector missed updates. "
+        f"saved={saved}/{len(expected_symbols)}, missing={missing_text}, errors={error_text}"
+    )
+    write_alert_state(_ALERT_STATE_FILE, {"fingerprint": fingerprint, "payload": payload})
 
 
 def main() -> None:
@@ -113,6 +171,11 @@ def main() -> None:
                     result = run_futures_open_interest_job(connection)
                 finally:
                     connection.close()
+                expected_symbols = configured_futures_open_interest_symbols()
+                if int(result.get("saved", 0)) < len(expected_symbols) or result.get("errors"):
+                    _alert_on_partial_collection(run_count, expected_symbols, result)
+                else:
+                    clear_alert_state(_ALERT_STATE_FILE)
                 line = (
                     f"[{started_at}] run={run_count} step=futures_open_interest "
                     f"status={result.get('status')} saved={result.get('saved', 0)} "

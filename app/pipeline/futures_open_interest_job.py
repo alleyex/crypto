@@ -44,6 +44,7 @@ def run_futures_open_interest_job(
         "status": job_status,
         "saved": saved,
         "source_counts": source_counts,
+        "symbols": symbols,
     }
     if errors:
         payload["errors"] = errors
