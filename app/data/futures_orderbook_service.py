@@ -630,11 +630,17 @@ def get_recent_futures_orderbook_snapshots(
                coverage_ratio,
                ob_imbalance,
                ob_imbalance_mean,
+               ob_imbalance_std,
                spread_bps,
                spread_bps_mean,
+               spread_bps_max,
                mid_price,
                mid_price_mean,
-               mid_price_ret_1m
+               mid_price_ret_1m,
+               first_event_ms,
+               last_event_ms,
+               bids_json,
+               asks_json
         FROM futures_order_book_snapshots
         WHERE symbol = ?
         ORDER BY timestamp_ms DESC
@@ -645,6 +651,10 @@ def get_recent_futures_orderbook_snapshots(
 
     result: list[dict[str, Any]] = []
     for row in rows:
+        bids = json.loads(row[16]) if row[16] else []
+        asks = json.loads(row[17]) if row[17] else []
+        best_bid = float(bids[0][0]) if bids else None
+        best_ask = float(asks[0][0]) if asks else None
         result.append(
             {
                 "symbol": str(row[0]),
@@ -654,11 +664,23 @@ def get_recent_futures_orderbook_snapshots(
                 "coverage_ratio": float(row[4] or 0.0),
                 "ob_imbalance": float(row[5] or 0.0),
                 "ob_imbalance_mean": float(row[6] or 0.0),
-                "spread_bps": float(row[7]) if row[7] is not None else None,
-                "spread_bps_mean": float(row[8]) if row[8] is not None else None,
-                "mid_price": float(row[9]) if row[9] is not None else None,
-                "mid_price_mean": float(row[10]) if row[10] is not None else None,
-                "mid_price_ret_1m": float(row[11]) if row[11] is not None else None,
+                "ob_imbalance_std": float(row[7] or 0.0),
+                "spread_bps": float(row[8]) if row[8] is not None else None,
+                "spread_bps_mean": float(row[9]) if row[9] is not None else None,
+                "spread_bps_max": float(row[10]) if row[10] is not None else None,
+                "mid_price": float(row[11]) if row[11] is not None else None,
+                "mid_price_mean": float(row[12]) if row[12] is not None else None,
+                "mid_price_ret_1m": float(row[13]) if row[13] is not None else None,
+                "first_event_at": (
+                    datetime.fromtimestamp(int(row[14]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if row[14] is not None else None
+                ),
+                "last_event_at": (
+                    datetime.fromtimestamp(int(row[15]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if row[15] is not None else None
+                ),
+                "best_bid": best_bid,
+                "best_ask": best_ask,
             }
         )
     return result
