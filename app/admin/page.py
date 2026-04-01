@@ -5873,6 +5873,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               : (s.event_age_seconds > 180
                 ? `<span style="color:#f87171">${s.event_age_seconds}s ago</span>`
                 : `<span style="color:#4ade80">${s.event_age_seconds}s ago</span>`);
+            const snapshotLabel = s.is_stale
+              ? `<span style="color:#f87171">${s.last_snapshot_at || s.latest}</span>`
+              : `<span style="color:var(--text)">${s.last_snapshot_at || s.latest}</span>`;
             return `<tr>
               <td>${s.symbol}</td>
               <td class="num">${s.total.toLocaleString()}</td>
@@ -5880,7 +5883,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <td class="num">${s.latest_source || "unknown"}</td>
               <td class="num">${s.current_minute_sample_count ?? 0}</td>
               <td class="num">${eventAgeLabel}</td>
-              <td class="num">${s.last_snapshot_at || s.latest}</td>
+              <td class="num">${snapshotLabel}</td>
             </tr>`;
           }).join("");
           const configured = Array.isArray(r.configured_symbols) && r.configured_symbols.length

@@ -583,7 +583,9 @@ def get_futures_orderbook_stats(
         coverage_pct = round(total / expected * 100, 1)
         stale_seconds = round((now_ms - latest_ms) / 1000)
         last_event_ms = symbol_runtime.get("last_event_ms")
-        event_age_seconds = symbol_runtime.get("event_age_seconds")
+        event_age_seconds = None
+        if last_event_ms:
+            event_age_seconds = max(0, round((now_ms - int(last_event_ms)) / 1000))
         result.append(
             {
                 "symbol": symbol,
