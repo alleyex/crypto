@@ -3475,6 +3475,7 @@ def pause_orderbook() -> Dict[str, Any]:
 @app.get("/orderbook/futures/status")
 def get_futures_orderbook_status() -> Dict[str, Any]:
     """Return futures order book collection status and per-symbol stats."""
+    from datetime import datetime, timedelta, timezone
     from app.data.futures_orderbook_service import (
         configured_futures_orderbook_symbols,
         get_futures_orderbook_stats,
@@ -3500,6 +3501,7 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
             connection,
             runtime=(collector_runtime.get("symbol_runtime") or {}),
         )
+        cutoff_24h = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         watchdog_row = connection.execute(
             """
             SELECT
@@ -3507,8 +3509,10 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
                 MAX(created_at) AS last_restart_at
             FROM audit_events
             WHERE event_type = 'futures_orderbook_watchdog_restart'
-              AND created_at >= datetime('now', '-1 day')
+              AND created_at >= ?
             """
+            ,
+            (cutoff_24h,),
         ).fetchone()
         watchdog_restart_count_24h = int(watchdog_row[0] or 0) if watchdog_row is not None else 0
         last_watchdog_restart_at = watchdog_row[1] if watchdog_row is not None else None
