@@ -334,8 +334,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         """
         SELECT
             job_type,
-            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
-            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
         FROM job_queue
         GROUP BY job_type
         ORDER BY job_type ASC;
@@ -345,8 +345,8 @@ def get_job_queue_summary(connection: DBConnection) -> dict[str, Any]:
         connection,
         """
         SELECT
-            AVG(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS avg_attempt_count,
-            MAX(CASE WHEN typeof(attempt_count) = 'integer' THEN attempt_count ELSE NULL END) AS max_attempt_count
+            AVG(attempt_count) AS avg_attempt_count,
+            MAX(attempt_count) AS max_attempt_count
         FROM job_queue;
         """,
     )[0]
