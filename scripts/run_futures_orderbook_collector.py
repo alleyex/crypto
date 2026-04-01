@@ -61,6 +61,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.core.db import get_connection
 from app.core.env import load_dotenv_file
 from app.core.migrations import run_migrations
+from app.alerting.telegram import send_telegram_message
+from app.audit.service import log_event
 from app.data.futures_orderbook_service import configured_futures_orderbook_symbols
 from app.data.futures_orderbook_service import reset_futures_orderbook_runtime
 from app.pipeline.futures_orderbook_job import run_futures_orderbook_job
@@ -87,6 +89,25 @@ def _should_restart_collector(result: dict, expected_symbols: list[str]) -> bool
         return False
     covered = [symbol for symbol in expected_symbols if symbol in symbol_runtime]
     return len(covered) == 0
+
+
+def _notify_watchdog_restart(run_count: int, expected_symbols: list[str], result: dict) -> None:
+    payload = {
+        "run_count": run_count,
+        "symbols": expected_symbols,
+        "source_counts": dict(result.get("source_counts") or {}),
+        "collector": dict(result.get("collector") or {}),
+    }
+    log_event(
+        event_type="futures_orderbook_watchdog_restart",
+        status="warning",
+        source="futures_orderbook_collector",
+        message="Futures order book watchdog restarted collector after stale WS runtime.",
+        payload=payload,
+    )
+    send_telegram_message(
+        "Crypto alert: futures order book watchdog restarted collector after stale WS runtime."
+    )
 
 
 def main() -> None:
@@ -140,6 +161,7 @@ def main() -> None:
                     restart_line = f"[{started_at}] watchdog=restarted reason=stale_ws_runtime"
                     print(restart_line, flush=True)
                     _write_log(restart_line)
+                    _notify_watchdog_restart(run_count, expected_symbols, result)
                 line = (
                     f"[{started_at}] run={run_count} step=futures_orderbook "
                     f"status={result.get('status')} saved={result.get('saved', 0)} "
