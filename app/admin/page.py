@@ -2243,6 +2243,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
           <div class="fetch-actions">
             <button class="fetch-btn-primary" data-action="market-fetch">Fetch Now</button>
+            <button class="secondary" data-action="market-clear">Clear Data</button>
           </div>
           <div id="market-fetch-result" style="display:none">
             <div class="fetch-result-header">
@@ -6431,6 +6432,51 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             }
             refreshMarketStatus();
           } catch (e) { const msg = el("market-fetch-message"); if (msg) { msg.textContent = String(e); msg.className = "message bad"; msg.style.display = "block"; } }
+        }
+
+        if (action === "market-clear") {
+          const selected = Array.from(el("market-fetch-symbol-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.symbol);
+          const symbols = selected.length > 0 ? selected : null;
+          const selectedTf = Array.from(el("market-fetch-timeframe-pills")?.querySelectorAll(".toggle-pill.selected") || []).map((p) => p.dataset.tf);
+          const timeframes = selectedTf.length > 0 ? selectedTf : null;
+          const msg = el("market-fetch-message");
+          const result = el("market-fetch-result");
+          if (!symbols && !timeframes) {
+            if (msg) {
+              msg.textContent = "Select at least one symbol or timeframe before clearing data.";
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+            return;
+          }
+          const scopeBits = [];
+          if (symbols?.length) scopeBits.push(`symbols: ${symbols.join(", ")}`);
+          if (timeframes?.length) scopeBits.push(`timeframes: ${timeframes.join(", ")}`);
+          const confirmed = window.confirm(`Clear futures candle data for ${scopeBits.join(" | ")}?`);
+          if (!confirmed) return;
+          try {
+            const r = await api("/market-data/futures/clear", {
+              method: "POST",
+              body: JSON.stringify({ symbols, timeframes }),
+            });
+            if (msg) {
+              msg.textContent = `Deleted ${r.deleted_rows ?? 0} futures candles.`;
+              msg.className = "message ok";
+              msg.style.display = "block";
+            }
+            if (result) result.style.display = "none";
+            const candlesPanel = el("market-candles-panel");
+            const candlesContainer = el("market-fetch-candles");
+            if (candlesContainer) candlesContainer.innerHTML = "";
+            if (candlesPanel) candlesPanel.style.display = "none";
+            await refreshMarketStatus();
+          } catch (e) {
+            if (msg) {
+              msg.textContent = String(e);
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+          }
         }
 
         if (action === "market-fs-materialize") {

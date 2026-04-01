@@ -50,6 +50,7 @@ from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
 from app.data.fetch_history import read_fetch_history
 from app.data.futures_candles_service import get_status as get_futures_candles_status
+from app.data.futures_candles_service import delete_candles as delete_futures_candles
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
@@ -1038,6 +1039,28 @@ def futures_market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequ
             start_ms=start_ms,
         )
         return {"status": "ok", "start_date": body.start_date, **result}
+    finally:
+        connection.close()
+
+
+@app.post("/market-data/futures/clear")
+def futures_market_data_clear(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
+    symbols = body.symbols or None
+    timeframes = body.timeframes or None
+    if not symbols and not timeframes:
+        raise HTTPException(status_code=400, detail="Select at least one symbol or timeframe to clear.")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        deleted = delete_futures_candles(connection, symbols=symbols, timeframes=timeframes)
+        return {
+            "status": "ok",
+            "deleted_rows": deleted,
+            "symbol_names": symbols or [],
+            "timeframes": timeframes or [],
+            "market": "futures",
+        }
     finally:
         connection.close()
 

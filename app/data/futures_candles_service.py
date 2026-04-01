@@ -134,3 +134,46 @@ def get_latest_open_time(connection: DBConnection, symbol: str, timeframe: str) 
         return None
     return int(row[0])
 
+
+def delete_candles(
+    connection: DBConnection,
+    *,
+    symbols: Optional[list[str]] = None,
+    timeframes: Optional[list[str]] = None,
+) -> int:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if symbols:
+        placeholders = ",".join("?" for _ in symbols)
+        clauses.append(f"symbol IN ({placeholders})")
+        params.extend(symbols)
+    if timeframes:
+        placeholders = ",".join("?" for _ in timeframes)
+        clauses.append(f"timeframe IN ({placeholders})")
+        params.extend(timeframes)
+    if not clauses:
+        raise ValueError("At least one symbol or timeframe filter is required.")
+
+    where_sql = " AND ".join(clauses)
+    before_row = connection.execute(
+        f"SELECT COUNT(*) FROM futures_candles WHERE {where_sql};",
+        tuple(params),
+    ).fetchone()
+    before_count = int(before_row[0]) if before_row and before_row[0] is not None else 0
+    connection.execute(
+        f"DELETE FROM futures_candles WHERE {where_sql};",
+        tuple(params),
+    )
+    connection.commit()
+    upsert_heartbeat(
+        connection,
+        component="futures_market_data",
+        status="ok",
+        message="Futures market data cleared.",
+        payload={
+            "symbols": symbols or [],
+            "timeframes": timeframes or [],
+            "deleted_rows": before_count,
+        },
+    )
+    return before_count
