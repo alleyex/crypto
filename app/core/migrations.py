@@ -396,10 +396,11 @@ def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
 
 
 def _create_feature_vectors_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS feature_vectors (
-            id            INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol        TEXT    NOT NULL,
             timeframe     TEXT    NOT NULL,
             open_time     INTEGER NOT NULL,
@@ -417,10 +418,11 @@ def _create_feature_vectors_table(connection: DBConnection) -> None:
 
 
 def _create_training_jobs_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS training_jobs (
-            id           INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol       TEXT    NOT NULL,
             timeframe    TEXT    NOT NULL,
             feature_set  TEXT    NOT NULL DEFAULT 'v1',
@@ -448,10 +450,11 @@ def _add_training_jobs_job_type(connection: DBConnection) -> None:
 
 
 def _create_model_registry_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
     connection.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS model_registry (
-            id              INTEGER PRIMARY KEY,
+            {_auto_id_column_sql(backend)},
             symbol          TEXT    NOT NULL,
             timeframe       TEXT    NOT NULL,
             feature_set     TEXT    NOT NULL DEFAULT 'v1',
@@ -470,6 +473,37 @@ def _create_model_registry_table(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_model_registry_symbol"
         " ON model_registry (symbol, timeframe, feature_set, status, created_at);"
     )
+
+
+def _ensure_postgres_identity_pk(
+    connection: DBConnection,
+    table_name: str,
+) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    if not table_exists(connection, table_name):
+        return
+    if "id" not in get_table_columns(connection, table_name):
+        return
+
+    sequence_name = f"{table_name}_id_seq"
+    connection.execute(
+        f"CREATE SEQUENCE IF NOT EXISTS {sequence_name};"
+    )
+    connection.execute(
+        f"ALTER SEQUENCE {sequence_name} OWNED BY {table_name}.id;"
+    )
+    connection.execute(
+        f"ALTER TABLE {table_name} ALTER COLUMN id SET DEFAULT nextval('{sequence_name}');"
+    )
+    connection.execute(
+        f"SELECT setval('{sequence_name}', COALESCE((SELECT MAX(id) FROM {table_name}), 0), true);"
+    )
+
+
+def _ensure_postgres_training_model_identity_columns(connection: DBConnection) -> None:
+    _ensure_postgres_identity_pk(connection, "training_jobs")
+    _ensure_postgres_identity_pk(connection, "model_registry")
 
 
 _CANDLES_NUMERIC_COLS = [
@@ -1092,6 +1126,7 @@ MIGRATIONS: list[Migration] = [
     ("050_create_futures_candles_table", _create_futures_candles_table),
     ("051_widen_futures_open_interest_numeric_columns", _widen_futures_open_interest_numeric_columns),
     ("052_widen_fills_transact_time", _widen_fills_transact_time),
+    ("053_ensure_postgres_training_model_identity_columns", _ensure_postgres_training_model_identity_columns),
 ]
 
 
