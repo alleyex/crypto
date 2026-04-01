@@ -49,6 +49,7 @@ from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
 from app.data.fetch_history import read_fetch_history
+from app.data.futures_candles_service import get_status as get_futures_candles_status
 from app.data.symbols import DEFAULT_SYMBOL
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.execution.adapter import get_execution_backend_status
@@ -60,6 +61,7 @@ from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
 from app.execution.adapter import get_execution_adapter
 from app.pipeline.execution_job import reconcile_orphan_orders
+from app.pipeline.futures_market_data_job import run_futures_market_data_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
@@ -67,6 +69,7 @@ from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import ensure_table as ensure_positions_table
 from app.portfolio.positions_service import update_positions
 from app.query.read_service import get_candles
+from app.query.read_service import get_futures_candles
 from app.query.read_service import get_audit_events
 from app.query.read_service import get_fills
 from app.query.read_service import get_job_queue_summary
@@ -934,6 +937,20 @@ def candles(
         connection.close()
 
 
+@app.get("/candles/futures")
+def futures_candles(
+    limit: int = Query(default=5, ge=1, le=100),
+    symbol: Optional[str] = Query(default=None),
+    timeframe: Optional[List[str]] = Query(default=None),
+) -> list[dict]:
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_futures_candles(connection, limit=limit, symbol=symbol, timeframes=timeframe or None)
+    finally:
+        connection.close()
+
+
 @app.get("/candles/status")
 def candles_status() -> list[dict]:
     """Return per-(symbol, timeframe) candle statistics: count, latest, staleness, gap estimate."""
@@ -941,6 +958,17 @@ def candles_status() -> list[dict]:
     try:
         run_migrations(connection)
         return get_candles_status(connection)
+    finally:
+        connection.close()
+
+
+@app.get("/candles/futures/status")
+def futures_candles_status() -> list[dict]:
+    """Return per-(symbol, timeframe) futures candle statistics: count, latest, staleness, gap estimate."""
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        return get_futures_candles_status(connection)
     finally:
         connection.close()
 
@@ -974,6 +1002,34 @@ def market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -
     try:
         run_migrations(connection)
         result = run_market_data_job(
+            connection,
+            symbol_names=body.symbols,
+            timeframes=body.timeframes,
+            limit=body.limit,
+            start_ms=start_ms,
+        )
+        return {"status": "ok", "start_date": body.start_date, **result}
+    finally:
+        connection.close()
+
+
+@app.post("/market-data/futures/fetch")
+def futures_market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
+    """Trigger an independent futures market data fetch without running the full pipeline."""
+    from datetime import datetime, timezone
+
+    start_ms: Optional[int] = None
+    if body.start_date:
+        try:
+            dt = datetime.strptime(body.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD.")
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        result = run_futures_market_data_job(
             connection,
             symbol_names=body.symbols,
             timeframes=body.timeframes,

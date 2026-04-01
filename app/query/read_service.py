@@ -244,6 +244,18 @@ def get_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] 
     return _fetch_all(connection, SELECT_CANDLES_SQL, limit)
 
 
+def get_futures_candles(connection: DBConnection, limit: int = 5, symbol: Optional[str] = None, timeframes: Optional[list] = None) -> list[dict[str, Any]]:
+    if symbol and timeframes:
+        placeholders = ",".join("?" * len(timeframes))
+        sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nWHERE symbol = ? AND timeframe IN ({placeholders})\nORDER BY open_time DESC\nLIMIT ?;"
+        return fetch_all_as_dicts(connection, sql, (symbol, *timeframes, limit))
+    if symbol:
+        sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nWHERE symbol = ?\nORDER BY open_time DESC\nLIMIT ?;"
+        return fetch_all_as_dicts(connection, sql, (symbol, limit))
+    sql = f"SELECT{_CANDLES_COLUMNS}\nFROM futures_candles\nORDER BY open_time DESC\nLIMIT ?;"
+    return _fetch_all(connection, sql, limit)
+
+
 def get_signals(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_SIGNALS_SQL, limit)
 

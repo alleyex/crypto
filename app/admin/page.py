@@ -2195,13 +2195,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <div class="section-kicker">Data Layer</div>
             <h2>Market Data</h2>
           </div>
-          <p>Manage candle fetching, freshness, and storage status.</p>
+          <p>Manage futures candle fetching, freshness, and storage status.</p>
         </div>
       <section class="grid">
 
         <article class="panel data-card">
-          <h2>Data Status</h2>
-          <p>Candle count, freshness, and gap estimate per symbol.</p>
+          <h2>Futures Data Status</h2>
+          <p>Perpetual futures candle count, freshness, and gap estimate per symbol.</p>
           <div class="button-row" style="gap:8px">
             <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
             <button class="secondary" id="market-status-view-toggle" data-view="cards">Coverage Matrix</button>
@@ -2215,8 +2215,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         <article class="panel data-card fetch-panel">
           <div class="fetch-panel-header">
             <div>
-              <h2>Fetch Market Data</h2>
-              <p class="fetch-panel-desc">Trigger market data fetch independently without running the full pipeline. Binance limit: 1000 candles per request.</p>
+              <h2>Fetch Futures Market Data</h2>
+              <p class="fetch-panel-desc">Trigger Binance USDT perpetual kline fetch independently without running the full pipeline. Binance limit: 1000 candles per request.</p>
             </div>
           </div>
           <div class="fetch-field">
@@ -2259,8 +2259,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       </section>
 
       <article class="panel data-card" id="market-candles-panel" style="display:none; margin-top:20px">
-        <h2 id="market-candles-title">Latest Candles</h2>
-        <p>Last 10 candles per symbol from the most recent fetch.</p>
+        <h2 id="market-candles-title">Latest Futures Candles</h2>
+        <p>Last 10 perpetual futures candles per symbol from the most recent fetch.</p>
         <div id="market-fetch-candles" style="overflow-x:auto"></div>
       </article>
 
@@ -5806,11 +5806,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       // ---- Market Data actions ----
       async function refreshMarketStatus() {
         try {
-          const rows = await api("/candles/status");
+          const rows = await api("/candles/futures/status");
           const board = el("market-status-board");
           if (!board) return;
           if (!rows || rows.length === 0) {
-            board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No candle data found.</span>';
+            board.innerHTML = '<span style="color:var(--muted);font-size:13px;">No futures candle data found.</span>';
             return;
           }
 
@@ -6349,13 +6349,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const startDate = el("market-fetch-start-date")?.value || null;
           const body = startDate ? { symbols, timeframes, start_date: startDate } : { symbols, timeframes, limit: 100 };
           try {
-            const r = await api("/market-data/fetch", { method: "POST", body: JSON.stringify(body) });
+            const r = await api("/market-data/futures/fetch", { method: "POST", body: JSON.stringify(body) });
             const result = el("market-fetch-result");
             const msg = el("market-fetch-message");
             if (msg) { msg.textContent = ""; }
             if (result) {
               const summary = el("market-fetch-summary");
-              if (summary) summary.textContent = `${r.saved_klines ?? 0} new candles saved`;
+              if (summary) summary.textContent = `${r.saved_klines ?? 0} new futures candles saved`;
               const modeLabel = { incremental: "incremental", seed: "seed", backfill: "backfill" };
               const rows = (r.symbol_results || []).map((s) => {
                 const isNew = s.saved_klines > 0;
@@ -6382,7 +6382,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 for (const sym of fetchedSymbols) {
                   const tfQueryStr = [...activeTimeframeFilter].map((tf) => `timeframe=${encodeURIComponent(tf)}`).join("&");
                   const tfSuffix = tfQueryStr ? `&${tfQueryStr}` : "";
-                  const candles = await api(`/candles?symbol=${encodeURIComponent(sym)}&limit=10${tfSuffix}`);
+                  const candles = await api(`/candles/futures?symbol=${encodeURIComponent(sym)}&limit=10${tfSuffix}`);
                   if (!candles || !candles.length) continue;
                   const headers = cols.map((c) => `<th>${colLabels[c] || c}</th>`).join("");
                   const dataRows = candles.map((row) => {

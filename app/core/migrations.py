@@ -899,6 +899,37 @@ def _create_futures_liquidation_minutes(connection: DBConnection) -> None:
     )
 
 
+def _create_futures_candles_table(connection: DBConnection) -> None:
+    backend = get_backend_name(connection)
+    epoch_t = _epoch_millis_column_sql(backend)
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS futures_candles (
+            {_auto_id_column_sql(backend)},
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            open_time {epoch_t} NOT NULL,
+            open NUMERIC(20,8) NOT NULL,
+            high NUMERIC(20,8) NOT NULL,
+            low NUMERIC(20,8) NOT NULL,
+            close NUMERIC(20,8) NOT NULL,
+            volume NUMERIC(20,8) NOT NULL,
+            close_time {epoch_t} NOT NULL,
+            quote_asset_volume NUMERIC(20,8),
+            number_of_trades INTEGER,
+            taker_buy_base_volume NUMERIC(20,8),
+            taker_buy_quote_volume NUMERIC(20,8),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, timeframe, open_time)
+        );
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_futures_candles_symbol_tf_open_time"
+        " ON futures_candles(symbol, timeframe, open_time);"
+    )
+
+
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -1014,6 +1045,7 @@ MIGRATIONS: list[Migration] = [
     ("047_create_futures_premium_metrics", _create_futures_premium_metrics),
     ("048_create_futures_open_interest_metrics", _create_futures_open_interest_metrics),
     ("049_create_futures_liquidation_minutes", _create_futures_liquidation_minutes),
+    ("050_create_futures_candles_table", _create_futures_candles_table),
 ]
 
 
