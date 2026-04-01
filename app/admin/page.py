@@ -2228,6 +2228,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             <button class="secondary" data-action="market-status-refresh">Refresh Status</button>
             <button class="secondary" id="market-status-view-toggle" data-view="cards">Coverage Matrix</button>
           </div>
+          <div id="market-status-collector-meta" style="margin-top:10px;font-size:12px;color:var(--muted)">Loading collector status...</div>
           <div id="market-status-board" style="margin-top:12px;">
             <span style="color:var(--muted);font-size:13px;">Loading...</span>
           </div>
@@ -5846,8 +5847,32 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       // ---- Market Data actions ----
       async function refreshMarketStatus() {
         try {
+          const collector = await api("/candles/futures/collector/status");
           const rows = await api("/candles/futures/status");
           window.__futuresCandleStatusRows = rows || [];
+          const collectorMeta = el("market-status-collector-meta");
+          if (collectorMeta) {
+            const age = collector.age_seconds == null
+              ? "n/a"
+              : (collector.age_seconds < 60
+                ? `${collector.age_seconds}s ago`
+                : `${Math.round(collector.age_seconds / 60)}m ago`);
+            const runCount = collector.payload?.run_count ?? "—";
+            const interval = collector.payload?.interval_seconds ?? "—";
+            const saved = collector.payload?.saved_klines ?? "—";
+            const tone = collector.stale || collector.status === "failed"
+              ? "var(--bad)"
+              : collector.status === "running"
+                ? "var(--warn)"
+                : "var(--ok)";
+            const statusLabel = String(collector.status || "unknown").toUpperCase();
+            collectorMeta.innerHTML =
+              `<strong style="color:${tone}">Collector ${statusLabel}</strong>`
+              + ` · heartbeat ${age}`
+              + ` · run #${runCount}`
+              + ` · interval ${interval}s`
+              + ` · last saved ${saved}`;
+          }
           const board = el("market-status-board");
           if (!board) return;
           if (!rows || rows.length === 0) {
@@ -5936,7 +5961,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               if (matrix) matrix.style.display = isCards ? "" : "none";
             };
           }
-        } catch (e) { if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`; }
+        } catch (e) {
+          if (el("market-status-board")) el("market-status-board").innerHTML = `<span style="color:var(--bad)">${e}</span>`;
+          const collectorMeta = el("market-status-collector-meta");
+          if (collectorMeta) collectorMeta.textContent = `Collector status refresh failed: ${e}`;
+        }
       }
 
       function updateMarketFetchSelectionSummary() {

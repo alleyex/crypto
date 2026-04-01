@@ -975,6 +975,45 @@ def futures_candles_status() -> list[dict]:
         connection.close()
 
 
+@app.get("/candles/futures/collector/status")
+def futures_candles_collector_status() -> Dict[str, Any]:
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        heartbeat_row = connection.execute(
+            """
+            SELECT status, message, payload_json, last_seen_at
+            FROM runtime_heartbeats
+            WHERE component = 'futures_candles_collector'
+            """
+        ).fetchone()
+        if heartbeat_row is None:
+            return {
+                "enabled": True,
+                "status": "unknown",
+                "message": "No futures candles collector heartbeat recorded yet.",
+                "last_seen_at": None,
+                "age_seconds": None,
+                "staleness_threshold_seconds": WORKER_HEARTBEAT_STALENESS_SECONDS,
+                "stale": True,
+                "payload": {},
+            }
+        payload = json.loads(heartbeat_row[2]) if heartbeat_row[2] else {}
+        age_seconds = int((_utc_now() - parse_db_timestamp(heartbeat_row[3])).total_seconds())
+        return {
+            "enabled": True,
+            "status": heartbeat_row[0],
+            "message": heartbeat_row[1],
+            "last_seen_at": heartbeat_row[3],
+            "age_seconds": age_seconds,
+            "staleness_threshold_seconds": WORKER_HEARTBEAT_STALENESS_SECONDS,
+            "stale": age_seconds > WORKER_HEARTBEAT_STALENESS_SECONDS,
+            "payload": payload,
+        }
+    finally:
+        connection.close()
+
+
 class MarketDataFetchRequest(BaseModel):
     symbols: Optional[List[str]] = None
     timeframes: Optional[List[str]] = None  # e.g. ["1m", "5m", "1h"]
