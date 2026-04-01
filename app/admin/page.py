@@ -2220,7 +2220,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             </div>
           </div>
           <div class="fetch-field">
-            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use active symbols</span></div>
+            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use configured futures symbols</span></div>
             <div id="market-fetch-symbol-checkboxes" class="toggle-pill-group"></div>
           </div>
           <div class="fetch-field">
@@ -4563,16 +4563,20 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           });
         }
         const marketFetchPills = el("market-fetch-symbol-checkboxes");
-        if (marketFetchPills && schedulerSymbols?.available_symbols) {
-          const prevSelected = new Set(
-            Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
-          );
-          marketFetchPills.innerHTML = schedulerSymbols.available_symbols
-            .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
-            .join("");
-          marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
-            pill.addEventListener("click", () => pill.classList.toggle("selected"));
-          });
+        if (marketFetchPills) {
+          try {
+            const futuresConfig = await api("/market-data/futures/config");
+            const futuresSymbols = futuresConfig?.symbol_names || [];
+            const prevSelected = new Set(
+              Array.from(marketFetchPills.querySelectorAll(".toggle-pill.selected")).map((p) => p.dataset.symbol)
+            );
+            marketFetchPills.innerHTML = futuresSymbols
+              .map((symbol) => `<button type="button" class="toggle-pill${prevSelected.has(symbol) ? " selected" : ""}" data-symbol="${symbol}">${symbol}</button>`)
+              .join("");
+            marketFetchPills.querySelectorAll(".toggle-pill").forEach((pill) => {
+              pill.addEventListener("click", () => pill.classList.toggle("selected"));
+            });
+          } catch (_) {}
         }
         const marketFetchTimeframePills = el("market-fetch-timeframe-pills");
         if (marketFetchTimeframePills) {

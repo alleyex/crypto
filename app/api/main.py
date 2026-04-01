@@ -59,6 +59,7 @@ from app.execution.runtime import set_execution_backend
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import WORKER_HEARTBEAT_STALENESS_SECONDS
 from app.core.settings import MAX_POSITION_QTY
+from app.core.settings import FUTURES_CANDLE_SYMBOLS
 from app.execution.adapter import get_execution_adapter
 from app.pipeline.execution_job import reconcile_orphan_orders
 from app.pipeline.futures_market_data_job import run_futures_market_data_job
@@ -1039,6 +1040,16 @@ def futures_market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequ
         return {"status": "ok", "start_date": body.start_date, **result}
     finally:
         connection.close()
+
+
+@app.get("/market-data/futures/config")
+def futures_market_data_config() -> Dict[str, Any]:
+    from app.data.candles_service import TIMEFRAME_INTERVAL_MS
+
+    return {
+        "symbol_names": list(FUTURES_CANDLE_SYMBOLS),
+        "supported_timeframes": sorted(TIMEFRAME_INTERVAL_MS.keys()),
+    }
 
 
 @app.get("/audit-events")

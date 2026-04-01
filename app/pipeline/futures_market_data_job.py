@@ -7,6 +7,7 @@ from app.data.fetch_history import record_fetch
 from app.data.futures_candles_service import ensure_table as ensure_futures_candles_table
 from app.data.futures_candles_service import get_latest_open_time
 from app.data.futures_candles_service import save_klines
+from app.core.settings import FUTURES_CANDLE_SYMBOLS
 
 PAGE_SIZE = 1000
 SEED_LIMIT = 100
@@ -47,8 +48,7 @@ def run_futures_market_data_job(
     ensure_futures_candles_table(connection)
 
     if symbol_names is None:
-        from app.scheduler.control import read_active_symbols
-        symbol_names = read_active_symbols()
+        symbol_names = list(FUTURES_CANDLE_SYMBOLS)
     if timeframes is None:
         from app.scheduler.control import read_active_timeframes
         timeframes = read_active_timeframes()
@@ -124,4 +124,3 @@ def run_futures_market_data_job(
     }
     record_fetch(job_result)
     return job_result
-
