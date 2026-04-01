@@ -585,6 +585,15 @@ def render_admin_page() -> str:
         color: var(--accent);
       }
 
+      .toggle-pill:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 35%);
+        outline-offset: 2px;
+        border-color: color-mix(in srgb, var(--accent) 55%, white 45%);
+        color: var(--fg);
+        background: transparent;
+        box-shadow: none;
+      }
+
       .toggle-pill.selected {
         background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, #fff 18%), var(--accent-2));
         border-color: color-mix(in srgb, var(--accent) 78%, #fff 22%);
@@ -5978,12 +5987,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         const symbolSummary = el("market-fetch-symbol-summary");
         if (symbolSummary) {
-          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.map(symbolLabel).join(", ") : "none"}`;
+          symbolSummary.innerHTML = `<strong>Selected symbols:</strong> ${selectedSymbols.length ? selectedSymbols.map(symbolLabel).join(", ") : "all configured futures symbols"}`;
         }
 
         const timeframeSummary = el("market-fetch-timeframe-summary");
         if (timeframeSummary) {
-          timeframeSummary.innerHTML = `<strong>Selected timeframes:</strong> ${selectedTimeframes.length ? selectedTimeframes.join(", ") : "none"}`;
+          timeframeSummary.innerHTML = `<strong>Selected timeframes:</strong> ${selectedTimeframes.length ? selectedTimeframes.join(", ") : "active timeframes"}`;
         }
       }
 
@@ -6555,8 +6564,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           }
           const scopeBits = [];
-          if (symbols?.length) scopeBits.push(`symbols: ${symbols.join(", ")}`);
-          if (timeframes?.length) scopeBits.push(`timeframes: ${timeframes.join(", ")}`);
+          scopeBits.push(`symbols: ${symbols?.length ? symbols.map((symbol) => symbol === "1000PEPEUSDT" ? "PEPEUSDT" : symbol).join(", ") : "all configured futures symbols"}`);
+          scopeBits.push(`timeframes: ${timeframes?.length ? timeframes.join(", ") : "active timeframes"}`);
           const confirmed = window.confirm(`Clear ${matches.length} futures candle row groups for ${scopeBits.join(" | ")}?`);
           if (!confirmed) return;
           try {
