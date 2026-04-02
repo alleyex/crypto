@@ -286,9 +286,10 @@ def run_ppo_training(
     cols = ["open_time", "open", "high", "low", "close", "volume",
             "quote_asset_volume", "number_of_trades",
             "taker_buy_base_volume", "taker_buy_quote_volume"]
-    df = build_crypto_features(
-        pd.DataFrame(rows, columns=cols)
-    ).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
+    df_raw = pd.DataFrame(rows, columns=cols)
+    numeric_cols = [c for c in cols if c != "open_time"]
+    df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
+    df = build_crypto_features(df_raw).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
 
     n_total   = len(df)
     train_ep_len, eval_ep_len = resolve_episode_lengths(timeframe)
