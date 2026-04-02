@@ -1,3 +1,9 @@
+# Production overrides.
+# Credentials are read from the .env file (never commit secrets to git).
+# Required .env keys: CRYPTO_DATABASE_URL, CRYPTO_BINANCE_API_KEY,
+#                     CRYPTO_BINANCE_API_SECRET, TELEGRAM_BOT_TOKEN,
+#                     TELEGRAM_CHAT_ID, CRYPTO_POSTGRES_PASSWORD
+
 services:
   api:
     build:
@@ -5,10 +11,7 @@ services:
         REQUIREMENTS_FILE: requirements.txt
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
-      CRYPTO_EXECUTION_BACKEND: paper
-      CRYPTO_BINANCE_API_KEY: ""
-      CRYPTO_BINANCE_API_SECRET: ""
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   scheduler:
     build:
@@ -16,37 +19,34 @@ services:
         REQUIREMENTS_FILE: requirements.txt
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
-      CRYPTO_EXECUTION_BACKEND: paper
-      CRYPTO_BINANCE_API_KEY: ""
-      CRYPTO_BINANCE_API_SECRET: ""
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-candles:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-orderbook:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-aggtrade:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-premium:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-open-interest:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-liquidation:
     environment:
       CRYPTO_DB_BACKEND: postgres
-      CRYPTO_DATABASE_URL: postgresql://crypto:crypto@postgres:5432/crypto
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
