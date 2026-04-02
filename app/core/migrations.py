@@ -525,6 +525,39 @@ def _add_risk_events_signal_id_index(connection: DBConnection) -> None:
     )
 
 
+def _add_risk_events_symbol_strategy_decision_index(connection: DBConnection) -> None:
+    """Composite index for broker-protection rejection-streak queries.
+
+    The hot-path query in _broker_protection_check filters:
+        WHERE symbol = ? AND strategy_name = ? AND decision = 'REJECTED' ORDER BY id DESC LIMIT 5
+    The existing idx_risk_events_decision_id(decision, id) scans all REJECTED rows
+    before filtering by symbol/strategy.  This composite index makes the lookup O(log N).
+    """
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_risk_events_symbol_strategy_decision"
+        " ON risk_events(symbol, strategy_name, decision, id);"
+    )
+
+
+def _migrate_pnl_snapshots_to_numeric(connection: DBConnection) -> None:
+    """Migrate pnl_snapshots financial columns from REAL to NUMERIC(20,8).
+
+    REAL (IEEE 754 float) can accumulate rounding errors for financial values.
+    NUMERIC provides exact decimal storage consistent with other financial tables.
+    SQLite does not enforce column types, so this only applies to PostgreSQL.
+    """
+    if not table_exists(connection, "pnl_snapshots"):
+        return
+    backend = get_backend_name(connection)
+    if backend != "postgres":
+        return
+    for col in ("qty", "avg_price", "market_price", "unrealized_pnl"):
+        connection.execute(
+            f"ALTER TABLE pnl_snapshots ALTER COLUMN {col}"
+            f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
+        )
+
+
 _CANDLES_NUMERIC_COLS = [
     "open", "high", "low", "close", "volume",
     "quote_asset_volume", "taker_buy_base_volume", "taker_buy_quote_volume",
@@ -1147,6 +1180,8 @@ MIGRATIONS: list[Migration] = [
     ("052_widen_fills_transact_time", _widen_fills_transact_time),
     ("053_ensure_postgres_training_model_identity_columns", _ensure_postgres_training_model_identity_columns),
     ("054_add_risk_events_signal_id_index", _add_risk_events_signal_id_index),
+    ("055_add_risk_events_symbol_strategy_decision_index", _add_risk_events_symbol_strategy_decision_index),
+    ("056_migrate_pnl_snapshots_to_numeric", _migrate_pnl_snapshots_to_numeric),
 ]
 
 
