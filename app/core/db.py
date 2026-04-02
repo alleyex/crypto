@@ -90,10 +90,11 @@ class PostgresConnectionAdapter:
         return _materialize_postgres_cursor(rows, description, None)
 
     def executemany(self, query: str, seq_of_params: list[tuple[Any, ...]]) -> None:
+        if not seq_of_params:
+            return
         rewritten_query = _rewrite_query_params(query)
         with self._connection.cursor() as cursor:
-            for params in seq_of_params:
-                cursor.execute(rewritten_query, params)
+            cursor.executemany(rewritten_query, seq_of_params)
 
     def commit(self) -> None:
         self._connection.commit()

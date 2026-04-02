@@ -512,6 +512,19 @@ def _ensure_postgres_training_model_identity_columns(connection: DBConnection) -
     _ensure_postgres_identity_pk(connection, "model_registry")
 
 
+def _add_risk_events_signal_id_index(connection: DBConnection) -> None:
+    """Index risk_events(signal_id) to speed up the fill-replay JOIN chain.
+
+    SELECT_STRATEGY_FILLS_SQL joins fills → orders → risk_events → signals.
+    Without this index, the join ``signals s ON s.id = re.signal_id`` requires
+    a full scan of risk_events when the planner starts from the signals side.
+    """
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_risk_events_signal_id"
+        " ON risk_events(signal_id);"
+    )
+
+
 _CANDLES_NUMERIC_COLS = [
     "open", "high", "low", "close", "volume",
     "quote_asset_volume", "taker_buy_base_volume", "taker_buy_quote_volume",
@@ -1133,6 +1146,7 @@ MIGRATIONS: list[Migration] = [
     ("051_widen_futures_open_interest_numeric_columns", _widen_futures_open_interest_numeric_columns),
     ("052_widen_fills_transact_time", _widen_fills_transact_time),
     ("053_ensure_postgres_training_model_identity_columns", _ensure_postgres_training_model_identity_columns),
+    ("054_add_risk_events_signal_id_index", _add_risk_events_signal_id_index),
 ]
 
 

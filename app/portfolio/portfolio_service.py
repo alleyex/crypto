@@ -189,6 +189,26 @@ def _get_latest_price(connection: DBConnection, symbol: str) -> Optional[float]:
     return float(row[0]) if row is not None else None
 
 
+def _get_latest_prices(connection: DBConnection, symbols: list[str]) -> dict[str, float]:
+    """Batch fetch latest close prices for multiple symbols in a single query."""
+    if not symbols or not table_exists(connection, "candles"):
+        return {}
+    placeholders = ",".join(["?" for _ in symbols])
+    rows = connection.execute(
+        f"""
+        SELECT c.symbol, c.close
+        FROM candles c
+        WHERE c.id IN (
+            SELECT MAX(id) FROM candles
+            WHERE symbol IN ({placeholders})
+            GROUP BY symbol
+        );
+        """,
+        tuple(symbols),
+    ).fetchall()
+    return {row[0]: float(row[1]) for row in rows}
+
+
 def _compute_pending_approved_notional(
     connection: DBConnection,
     order_qty: float,
@@ -205,8 +225,12 @@ def _compute_pending_approved_notional(
     rows = connection.execute(SELECT_PENDING_APPROVED_BUYS_SQL).fetchall()
     total = 0.0
     per_strategy: dict[str, float] = {}
+    if not rows:
+        return total, per_strategy
+    symbols = list({row[0] for row in rows})
+    prices = _get_latest_prices(connection, symbols)
     for symbol, strategy_name in rows:
-        price = _get_latest_price(connection, symbol)
+        price = prices.get(symbol)
         if price is None or price <= 0:
             continue
         notional = order_qty * price
@@ -252,13 +276,14 @@ def get_portfolio_summary(connection: DBConnection) -> dict:
 
     if table_exists(connection, "positions"):
         rows = connection.execute(SELECT_OPEN_POSITIONS_SQL).fetchall()
+        prices = _get_latest_prices(connection, [r[0] for r in rows])
         for symbol, qty, avg_price, realized_pnl, updated_at in rows:
             qty = float(qty)
             avg_price = float(avg_price)
             realized_pnl = float(realized_pnl)
             total_realized_pnl += realized_pnl
 
-            latest_price = _get_latest_price(connection, symbol)
+            latest_price = prices.get(symbol)
             notional = round(qty * latest_price, 4) if latest_price is not None else None
             unrealized_pnl = (
                 round((latest_price - avg_price) * qty, 4)
@@ -281,11 +306,13 @@ def get_portfolio_summary(connection: DBConnection) -> dict:
 
     # Per-strategy exposure
     strategy_open_qty = _compute_per_strategy_open_qty(connection)
+    all_open_symbols = list({sym for syms in strategy_open_qty.values() for sym in syms})
+    strategy_prices = _get_latest_prices(connection, all_open_symbols)
     per_strategy: list[dict] = []
     for strategy_name, symbols in sorted(strategy_open_qty.items()):
         strategy_notional = 0.0
         for symbol, qty in symbols.items():
-            price = _get_latest_price(connection, symbol)
+            price = strategy_prices.get(symbol)
             if price is not None:
                 strategy_notional += qty * price
         entry: dict = {
@@ -362,11 +389,11 @@ def check_portfolio_limits(
     if config.max_total_notional is not None:
         if table_exists(connection, "positions"):
             rows = connection.execute(SELECT_OPEN_POSITIONS_SQL).fetchall()
+            batch_prices = _get_latest_prices(connection, [r[0] for r in rows])
             filled_total = sum(
-                float(r[1]) * (p or 0.0)
+                float(r[1]) * batch_prices[r[0]]
                 for r in rows
-                for p in [_get_latest_price(connection, r[0])]
-                if p is not None
+                if r[0] in batch_prices
             )
             current_total = filled_total + pending_total_notional
             if current_total + proposed_notional > config.max_total_notional:
@@ -380,11 +407,11 @@ def check_portfolio_limits(
     if config.max_strategy_notional is not None:
         strategy_open = _compute_per_strategy_open_qty(connection)
         strategy_symbols = strategy_open.get(strategy_name, {})
+        limit_prices = _get_latest_prices(connection, list(strategy_symbols.keys()))
         filled_strategy_notional = sum(
-            qty * (p or 0.0)
+            qty * limit_prices[sym]
             for sym, qty in strategy_symbols.items()
-            for p in [_get_latest_price(connection, sym)]
-            if p is not None
+            if sym in limit_prices
         )
         current_strategy_notional = filled_strategy_notional + pending_per_strategy.get(strategy_name, 0.0)
         if current_strategy_notional + proposed_notional > config.max_strategy_notional:
