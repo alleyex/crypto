@@ -7,14 +7,15 @@ a BUY / SELL / HOLD signal compatible with the existing strategy pipeline.
 Position state (bars_held, entry_price) is persisted to a small JSON file
 in runtime/ because the DB only tracks qty, not entry bar or unrealised PnL.
 
-The current PPO environment is long/flat only:
+PPO environment supports long / flat / short (futures):
   action=0 -> flat
   action=1 -> long
+  action=2 -> short
 
 Signals are derived from the desired position versus the current DB position:
-  flat -> long  => BUY
-  long -> flat  => SELL
-  no change     => HOLD
+  * → more long  (flat→long, short→flat, short→long)  => BUY
+  * → more short (long→flat, flat→short, long→short)  => SELL
+  no change                                            => HOLD
 """
 
 from __future__ import annotations
@@ -54,8 +55,10 @@ INSERT INTO signals (
 ) VALUES (?, ?, ?, ?, ?, ?);
 """
 
-_OPEN_LONG_THRESHOLD = 0.55
-_CLOSE_LONG_THRESHOLD = 0.45
+# With 3 actions, random baseline ≈ 0.33 each.
+# Use 0.40 to open a new directional position, 0.35 to close/reduce.
+_OPEN_THRESHOLD  = 0.40
+_CLOSE_THRESHOLD = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +148,37 @@ def _build_observation(
     df = pd.DataFrame(reversed(rows), columns=cols)
     numeric_cols = [col for col in cols if col != "open_time"]
     df[numeric_cols] = df[numeric_cols].astype(float)
-    df = build_crypto_features(df)
+
+    # Load aggtrade microstructure data for the same window (1m only)
+    aggtrade_df = None
+    if timeframe == "1m":
+        at_cols = ["timestamp_ms", "trade_count",
+                   "qty_total", "qty_taker_buy", "qty_taker_sell",
+                   "quote_total", "quote_taker_buy", "quote_taker_sell",
+                   "vwap", "coverage_ratio"]
+        min_ts = int(df["open_time"].min())
+        max_ts = int(df["open_time"].max())
+        try:
+            at_rows = connection.execute(
+                """
+                SELECT timestamp_ms, trade_count,
+                       qty_total, qty_taker_buy, qty_taker_sell,
+                       quote_total, quote_taker_buy, quote_taker_sell,
+                       vwap, coverage_ratio
+                FROM futures_aggtrade_minutes
+                WHERE symbol = ? AND timestamp_ms BETWEEN ? AND ?
+                ORDER BY timestamp_ms ASC
+                """,
+                (symbol, min_ts, max_ts),
+            ).fetchall()
+            if at_rows:
+                aggtrade_df = pd.DataFrame(at_rows, columns=at_cols)
+                for c in at_cols:
+                    aggtrade_df[c] = pd.to_numeric(aggtrade_df[c], errors="coerce")
+        except Exception:
+            pass  # aggtrade table might not exist; fall back to neutral defaults
+
+    df = build_crypto_features(df, aggtrade_df=aggtrade_df)
 
     # Take the last row (most recent bar)
     latest = df[_FEAT_COLS].iloc[-1].to_numpy(dtype=np.float32)
@@ -240,35 +273,46 @@ def generate_signal(
 
     action, _ = model.predict(obs, deterministic=True)
     action = int(action)
-    target_position = _ACTION_TO_POS[action]
+    target_position = _ACTION_TO_POS[action]   # 0, +1, or -1
     current_position = state.get("position", 0)
 
-    prob_flat = float(probs[0]) if len(probs) > 0 else 0.0
-    prob_long = float(probs[1]) if len(probs) > 1 else 0.0
+    prob_flat  = float(probs[0]) if len(probs) > 0 else 0.0
+    prob_long  = float(probs[1]) if len(probs) > 1 else 0.0
+    prob_short = float(probs[2]) if len(probs) > 2 else 0.0
 
-    signal_type = "HOLD"
-    top_prob = prob_flat if target_position == 0 else prob_long
+    # Resolve signal type and whether to execute the position change.
+    # target > current → BUY (need to buy contracts to move in that direction)
+    # target < current → SELL (need to sell contracts)
+    signal_type  = "HOLD"
+    new_position = current_position
 
-    if current_position == 0 and target_position == 1:
-        if top_prob >= _OPEN_LONG_THRESHOLD:
-            signal_type = "BUY"
-            new_position = 1
-        else:
-            new_position = 0
-    elif current_position == 1 and target_position == 0:
-        if top_prob >= _CLOSE_LONG_THRESHOLD:
-            signal_type = "SELL"
-            new_position = 0
-        else:
-            new_position = 1
+    if target_position > current_position:
+        # Moving more long: flat→long or short→flat or short→long
+        top_prob  = prob_long
+        threshold = _OPEN_THRESHOLD if current_position == 0 else _CLOSE_THRESHOLD
+        if top_prob >= threshold:
+            signal_type  = "BUY"
+            new_position = target_position
+    elif target_position < current_position:
+        # Moving more short: long→flat or flat→short or long→short
+        top_prob  = prob_short if target_position == -1 else prob_flat
+        threshold = _OPEN_THRESHOLD if current_position == 0 else _CLOSE_THRESHOLD
+        if top_prob >= threshold:
+            signal_type  = "SELL"
+            new_position = target_position
+
+    # Confidence: probability of the resolved position's action
+    if new_position == 1:
+        top_prob = prob_long
+    elif new_position == -1:
+        top_prob = prob_short
     else:
-        new_position = current_position
+        top_prob = prob_flat
 
-    # Expose probabilities in legacy signal fields for existing UI/reporting.
-    # "buy" means opening/maintaining long; "sell" means flattening the long.
-    prob_hold = round(float(prob_flat if current_position == 0 else prob_long), 4)
-    prob_buy = round(float(prob_long), 4)
-    prob_sell = round(float(prob_flat if current_position == 1 else 0.0), 4)
+    # Expose probabilities for UI / reporting
+    prob_hold = round(prob_flat,  4)
+    prob_buy  = round(prob_long,  4)
+    prob_sell = round(prob_short, 4)
 
     # Update state
     current_close_row = connection.execute(
@@ -307,4 +351,5 @@ def generate_signal(
         "prob_hold":     prob_hold,
         "prob_buy":      prob_buy,
         "prob_sell":     prob_sell,
+        "prob_short":    round(prob_short, 4),
     }

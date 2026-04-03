@@ -1,20 +1,22 @@
-"""Gymnasium-compatible crypto trading environment — Phase 9.
+"""Gymnasium-compatible crypto trading environment — Phase 10.
 
 Uses V2 features from crypto_features.py as the observation space.
 
 Observation space  (Box float32, shape=(N_FEAT + 3,)):
-  [0 : N_FEAT]  normalised V2 features  (currently 19)
+  [0 : N_FEAT]  normalised V2 features  (currently 15)
   [N_FEAT]      current position  –1=short  0=flat  +1=long
   [N_FEAT+1]    unrealised log-return since entry, clipped ±0.10
   [N_FEAT+2]    bars held in current position / episode_length  [0, 1]
 
-Action space  (Discrete 2):
+Action space  (Discrete 3):
   0  →  flat   (close open position)
   1  →  long
+  2  →  short
 
 Reward:
   step_pnl      = position * log_ret_1_t
   fee           = |Δposition| * FEE_PER_SIDE   (charged once on change)
+                  long→short or short→long costs 2× fee (close + open)
   holding_bonus = holding_bonus_rate  if position == 1 (long only) else 0
   reward        = step_pnl − fee + holding_bonus
 
@@ -39,7 +41,7 @@ from app.features.crypto_features import get_feature_columns
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-FEE_PER_SIDE  = 0.0004   # Binance taker fee (0.04 %)
+FEE_PER_SIDE  = 0.0005   # Binance futures taker fee (0.05 %)
 UPNL_CLIP     = 0.10     # clip unrealised PnL at ±10 %
 DEFAULT_EP_LEN = 1440    # 1 day of 1-minute candles
 
@@ -47,8 +49,8 @@ _FEAT_COLS = get_feature_columns()
 N_FEAT     = len(_FEAT_COLS)
 OBS_DIM    = N_FEAT + 3   # features + position + upnl + bars_held_norm
 
-# Map discrete action → signed position (long/flat only, no short)
-_ACTION_TO_POS = {0: 0, 1: 1}
+# Map discrete action → signed position
+_ACTION_TO_POS = {0: 0, 1: 1, 2: -1}
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +121,7 @@ class CryptoTradingEnv(gym.Env):
             high = np.full(obs_dim_total,  10.0, dtype=np.float32),
             dtype=np.float32,
         )
-        self.action_space = spaces.Discrete(2)
+        self.action_space = spaces.Discrete(3)
 
         # Frame buffer (pre-filled with zeros)
         self._frame_buffer: deque = deque(
