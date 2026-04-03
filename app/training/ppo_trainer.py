@@ -277,6 +277,24 @@ def run_ppo_training(
             """,
             (symbol, timeframe),
         ).fetchall()
+
+        # --- Load aggtrade microstructure data (optional, 1m only) ---
+        aggtrade_rows = []
+        if timeframe == "1m" and rows:
+            min_ts = int(rows[0][0])
+            max_ts = int(rows[-1][0])
+            aggtrade_rows = conn.execute(
+                """
+                SELECT timestamp_ms, trade_count,
+                       qty_total, qty_taker_buy, qty_taker_sell,
+                       quote_total, quote_taker_buy, quote_taker_sell,
+                       vwap, coverage_ratio
+                FROM futures_aggtrade_minutes
+                WHERE symbol=? AND timestamp_ms BETWEEN ? AND ?
+                ORDER BY timestamp_ms ASC
+                """,
+                (symbol, min_ts, max_ts),
+            ).fetchall()
     finally:
         conn.close()
 
@@ -289,7 +307,18 @@ def run_ppo_training(
     df_raw = pd.DataFrame(rows, columns=cols)
     numeric_cols = [c for c in cols if c != "open_time"]
     df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
-    df = build_crypto_features(df_raw).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
+
+    aggtrade_df = None
+    if aggtrade_rows:
+        at_cols = ["timestamp_ms", "trade_count",
+                   "qty_total", "qty_taker_buy", "qty_taker_sell",
+                   "quote_total", "quote_taker_buy", "quote_taker_sell",
+                   "vwap", "coverage_ratio"]
+        aggtrade_df = pd.DataFrame(aggtrade_rows, columns=at_cols)
+        for c in at_cols:
+            aggtrade_df[c] = pd.to_numeric(aggtrade_df[c], errors="coerce")
+
+    df = build_crypto_features(df_raw, aggtrade_df=aggtrade_df).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
 
     n_total   = len(df)
     train_ep_len, eval_ep_len = resolve_episode_lengths(timeframe)

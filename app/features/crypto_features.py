@@ -101,6 +101,7 @@ def build_crypto_features(
     df: pd.DataFrame,
     funding_df: "pd.DataFrame | None" = None,
     orderbook_df: "pd.DataFrame | None" = None,
+    aggtrade_df: "pd.DataFrame | None" = None,
 ) -> pd.DataFrame:
     """Compute feature set for a candle DataFrame.
 
@@ -120,6 +121,13 @@ def build_crypto_features(
           spread_pct (float), mid_price (float).
         When provided, snapshots are merged as-of using the most recent
         snapshot at or before each candle open_time.
+    aggtrade_df:
+        Optional aggTrade minute DataFrame from futures_aggtrade_minutes with
+        columns: timestamp_ms, qty_total, qty_taker_buy, qty_taker_sell,
+        quote_total, quote_taker_buy, quote_taker_sell, vwap, trade_count,
+        coverage_ratio.
+        Rows with coverage_ratio < 0.3 or trade_count < 30 are discarded.
+        When None, aggtrade feature columns are filled with neutral constants.
 
     Returns
     -------
@@ -420,6 +428,58 @@ def build_crypto_features(
         df["funding_cos"] = np.cos(2 * np.pi * hours_to_next / 8.0)
         df["funding_sin"] = np.sin(2 * np.pi * hours_to_next / 8.0)
 
+    # ── AggTrade microstructure features (optional) ───────────────────────
+    # Neutral defaults — used when aggtrade_df is None or has no valid rows.
+    # taker_buy_ratio=0.5 (neutral), quote_flow_imb=0.0 (neutral),
+    # taker_buy_ratio_5=0.5 (neutral), vwap_dev=0.0 (neutral).
+    _at_taker = pd.Series(0.5, index=df.index, dtype=np.float32)
+    _at_qflow = pd.Series(0.0, index=df.index, dtype=np.float32)
+    _at_vwap  = pd.Series(0.0, index=df.index, dtype=np.float32)
+
+    if aggtrade_df is not None and len(aggtrade_df) > 0:
+        at = aggtrade_df.copy()
+        at["coverage_ratio"] = pd.to_numeric(at["coverage_ratio"], errors="coerce").fillna(0.0)
+        at["trade_count"]    = pd.to_numeric(at["trade_count"],    errors="coerce").fillna(0)
+        at = at[(at["coverage_ratio"] >= 0.3) & (at["trade_count"] >= 30)]
+
+        if len(at) > 0:
+            at = at.sort_values("timestamp_ms").reset_index(drop=True)
+            at_ms        = at["timestamp_ms"].values.astype(np.int64)
+            at_qty       = at["qty_total"].astype(float).values
+            at_buy_qty   = at["qty_taker_buy"].astype(float).values
+            at_quote     = at["quote_total"].astype(float).values
+            at_buy_quote = at["quote_taker_buy"].astype(float).values
+            at_sel_quote = at["quote_taker_sell"].astype(float).values
+            at_vwap_arr  = at["vwap"].astype(float).values
+
+            candle_ms = df["open_time"].values.astype(np.int64)
+            idx = np.searchsorted(at_ms, candle_ms, side="right") - 1
+            valid = idx >= 0
+
+            safe_qty   = np.where(at_qty   > 0, at_qty,   np.nan)
+            safe_quote = np.where(at_quote > 0, at_quote, np.nan)
+
+            taker_raw = at_buy_qty / safe_qty                                # [0, 1]
+            qflow_raw = (at_buy_quote - at_sel_quote) / safe_quote           # [-1, 1]
+
+            taker_vals = np.full(len(df), 0.5)
+            qflow_vals = np.full(len(df), 0.0)
+            vwap_vals  = np.full(len(df), np.nan)
+
+            taker_vals[valid] = taker_raw[idx[valid]]
+            qflow_vals[valid] = qflow_raw[idx[valid]]
+            vwap_vals[valid]  = at_vwap_arr[idx[valid]]
+
+            _at_taker = pd.Series(taker_vals, index=df.index, dtype=np.float32)
+            _at_qflow = pd.Series(qflow_vals, index=df.index, dtype=np.float32)
+            vwap_s    = pd.Series(vwap_vals,  index=df.index, dtype=np.float32)
+            _at_vwap  = ((close - vwap_s) / safe_close).clip(-0.01, 0.01).fillna(0.0).astype(np.float32)
+
+    df["taker_buy_ratio"]   = _at_taker.clip(0.0, 1.0)
+    df["quote_flow_imb"]    = _at_qflow.clip(-1.0, 1.0)
+    df["taker_buy_ratio_5"] = df["taker_buy_ratio"].rolling(5, min_periods=3).mean().clip(0.0, 1.0).fillna(0.5)
+    df["vwap_dev"]          = _at_vwap
+
     # ── Order book features (optional) ───────────────────────────────────
     if orderbook_df is not None and len(orderbook_df) > 0:
         ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
@@ -478,4 +538,9 @@ def get_feature_columns() -> list:
         "flow_imbalance_20",  # Δ+0.0016 — 20-bar taker flow imbalance
         "upper_wick_ratio",   # Δ+0.0010 — upper wick selling pressure
         "dist_prev_day_low",  # Δ+0.0020 — distance from prev-day low
+        # V6: futures microstructure (neutral=0.5/0.0 when no aggtrade data)
+        "taker_buy_ratio",    # qty-weighted taker buy pressure [0,1]
+        "quote_flow_imb",     # dollar-weighted buy/sell imbalance [-1,1]
+        "taker_buy_ratio_5",  # 5-bar smoothed taker ratio [0,1]
+        "vwap_dev",           # futures VWAP deviation from close [-0.01,0.01]
     ]
