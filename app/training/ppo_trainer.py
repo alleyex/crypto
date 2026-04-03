@@ -352,8 +352,13 @@ def run_ppo_training(
                       "seed": seed}
 
         tb_log_name = f"ppo_{symbol}_{timeframe}" + (f"_job{job_id}" if job_id else "")
-        TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        model = PPO("MlpPolicy", train_env, tensorboard_log=str(TB_LOGS_DIR), **ppo_kwargs)
+        try:
+            from torch.utils.tensorboard import SummaryWriter as _SW  # noqa: F401
+            TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            _tb_log = str(TB_LOGS_DIR)
+        except Exception:
+            _tb_log = None  # tensorboard unavailable — skip logging
+        model = PPO("MlpPolicy", train_env, tensorboard_log=_tb_log, **ppo_kwargs)
 
         cb = _make_progress_callback(total_steps, on_progress)
         model.learn(total_timesteps=total_steps, callback=cb, tb_log_name=tb_log_name)
