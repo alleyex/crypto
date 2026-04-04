@@ -558,9 +558,10 @@ def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
         monkeypatch.setattr(
             "app.strategy.registry.STRATEGY_REGISTRY",
             {
-                "ma_cross": lambda conn, symbol="BTCUSDT": {
+                "ma_cross": lambda conn, symbol="BTCUSDT", timeframe="1m": {
                     "strategy_name": "ma_cross",
                     "symbol": symbol,
+                    "timeframe": timeframe,
                     "signal_type": "BUY",
                     "short_ma": 3.0,
                     "long_ma": 2.0,
@@ -573,6 +574,7 @@ def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
         assert result == {
             "strategy_name": "ma_cross",
             "symbol": "BTCUSDT",
+            "timeframe": "1m",
             "signal_type": "BUY",
             "short_ma": 3.0,
             "long_ma": 2.0,

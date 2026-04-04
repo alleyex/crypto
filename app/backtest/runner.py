@@ -25,7 +25,7 @@ from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
 from app.portfolio.positions_service import update_positions
 from app.risk.risk_config import set_risk_config
 from app.risk.risk_service import evaluate_signal_id
-from app.strategy.registry import get_strategy
+from app.strategy.registry import generate_registered_signal
 
 
 _INSERT_CANDLE_SQL = """
@@ -184,7 +184,6 @@ def run_backtest(
         }
 
     connection = _make_connection()
-    strategy_fn = get_strategy(strategy_name)
     set_risk_config(
         connection,
         strategy_name=strategy_name,
@@ -232,7 +231,12 @@ def run_backtest(
         _insert_candle(connection, candle, symbol, timeframe, iso_ts)
         connection.commit()
 
-        signal_result = strategy_fn(connection, symbol)
+        signal_result = generate_registered_signal(
+            connection,
+            strategy_name=strategy_name,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
         if signal_result is None or str(signal_result.get("signal_type", "HOLD")) == "HOLD":
             _record_equity(equity_curve, candle, connection, symbol, initial_capital, iso_ts)
             continue

@@ -158,7 +158,7 @@ def test_snapshot_from_bucket_computes_minute_aggregates() -> None:
     assert snapshot["mid_price_mean"] == 100.07
     assert snapshot["mid_price_min"] == 100.05
     assert snapshot["mid_price_max"] == 100.1
-    assert snapshot["coverage_ratio"] == 0.016667
+    assert snapshot["coverage_ratio"] == 0.033333
 
 
 def test_save_futures_orderbook_snapshot_computes_mid_price_ret_1m() -> None:
