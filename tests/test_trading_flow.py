@@ -7548,7 +7548,7 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
     try:
         monkeypatch.setattr(
             "app.pipeline.strategy_job.run_strategy_job",
-            lambda conn, strategy_name="ma_cross", symbol_names=None: {
+            lambda conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None: {
                 "status": "ok",
                 "signal_ids": [1],
                 "steps": [
@@ -7575,7 +7575,7 @@ def test_run_strategy_jobs_continues_after_one_strategy_crashes(monkeypatch) -> 
     connection = make_connection()
     try:
 
-        def fake_run_strategy_job(conn, strategy_name="ma_cross", symbol_names=None):
+        def fake_run_strategy_job(conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None):
             if strategy_name == "bad_strategy":
                 raise RuntimeError("simulated strategy crash")
             return {
@@ -7607,7 +7607,7 @@ def test_run_strategy_jobs_all_errors_returns_partial_error(monkeypatch) -> None
     try:
         call_count = {"n": 0}
 
-        def always_crash(conn, strategy_name="ma_cross", symbol_names=None):
+        def always_crash(conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None):
             call_count["n"] += 1
             raise ValueError(f"crash in {strategy_name}")
 
@@ -9014,9 +9014,9 @@ def test_metrics_service_queue_summary_handles_backend_neutral_timestamps() -> N
             (
                 "pipeline",
                 "{}",
-                "2026-04-01 10:00:00",
-                "2026-04-01 10:00:05",
-                "2026-04-01 10:00:08",
+                "2099-04-01 10:00:00",
+                "2099-04-01 10:00:05",
+                "2099-04-01 10:00:08",
             ),
         )
         connection.commit()
