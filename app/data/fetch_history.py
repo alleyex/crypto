@@ -10,7 +10,6 @@ MAX_HISTORY_ENTRIES = 200
 
 def record_fetch(result: Dict[str, Any]) -> None:
     """Append a fetch job result to the history log."""
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     entry = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "saved_klines": result.get("saved_klines", 0),
@@ -18,8 +17,14 @@ def record_fetch(result: Dict[str, Any]) -> None:
         "timeframes": result.get("timeframes", []),
         "symbol_results": result.get("symbol_results", []),
     }
-    with open(FETCH_HISTORY_FILE, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        with open(FETCH_HISTORY_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        # Fetch history is diagnostic only; failing to write it should not fail
+        # the market-data job in read-only or mismatched-volume environments.
+        return
 
     # Trim to last MAX_HISTORY_ENTRIES
     try:

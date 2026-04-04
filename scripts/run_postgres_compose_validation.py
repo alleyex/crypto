@@ -249,7 +249,9 @@ def validate_compose_runtime(
 ) -> dict[str, Any]:
     work_dir = Path(tempfile.mkdtemp(prefix="crypto-pg-validate-"))
     for name in ("storage", "logs", "runtime"):
-        (work_dir / name).mkdir(parents=True, exist_ok=True)
+        path = work_dir / name
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, 0o777)
 
     override_file = work_dir / "docker-compose.override.yml"
     override_file.write_text(build_override_compose(api_port, work_dir), encoding="utf-8")

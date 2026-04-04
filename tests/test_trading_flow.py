@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 import contextlib
+import os
 
 from fastapi.testclient import TestClient
 
@@ -50,6 +51,7 @@ from scripts.run_postgres_compose_validation import assert_pipeline_validation_s
 from scripts.run_postgres_compose_validation import make_env
 from scripts.run_postgres_compose_validation import request_json_with_retry
 from scripts.run_postgres_compose_validation import run_validation_mode
+from scripts.run_postgres_compose_validation import validate_compose_runtime
 from scripts.run_postgres_compose_validation import wait_for_api
 from scripts.write_postgres_validation_artifact import build_artifact_manifest
 from scripts.write_postgres_validation_artifact import build_summary_markdown
@@ -65,6 +67,7 @@ from scripts.write_test_artifact import get_outcome
 from scripts.write_test_artifact import read_junit_counts
 from scripts.write_test_artifact import write_test_artifact
 from app.data.binance_client import fetch_klines
+from app.data import fetch_history as fetch_history_module
 from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import save_klines
 from app.execution.paper_broker import ensure_tables as ensure_execution_tables
@@ -1733,6 +1736,57 @@ def test_run_validation_mode_dispatches_compose_soak(monkeypatch) -> None:
     assert result["postgres_logs"] == "postgres-1 | healthy\n"
     compose_call = next(c for c in calls if c[0] == "compose")
     assert compose_call[1].get("include_soak") is True
+
+
+def test_record_fetch_ignores_permission_error(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    history_file = runtime_dir / "market_fetch_history.jsonl"
+    monkeypatch.setattr(fetch_history_module, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(fetch_history_module, "FETCH_HISTORY_FILE", history_file)
+
+    def fake_open(*args, **kwargs):
+        raise PermissionError("read-only runtime")
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    fetch_history_module.record_fetch(
+        {
+            "saved_klines": 1,
+            "symbol_names": ["BTCUSDT"],
+            "timeframes": ["1m"],
+            "symbol_results": [{"symbol": "BTCUSDT", "timeframe": "1m", "saved": 1}],
+        }
+    )
+
+    assert not history_file.exists()
+
+
+def test_validate_compose_runtime_sets_world_writable_bind_mounts(monkeypatch, tmp_path: Path) -> None:
+    work_dir = tmp_path / "pg-validate"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.tempfile.mkdtemp",
+        lambda prefix: str(work_dir),
+    )
+    monkeypatch.setattr(
+        "scripts.run_postgres_compose_validation.run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("stop after setup")),
+    )
+    monkeypatch.setattr("scripts.run_postgres_compose_validation.shutil.rmtree", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="stop after setup"):
+        validate_compose_runtime(
+            api_port=8012,
+            project_name="crypto_pg_validation",
+            database_url="postgresql://crypto:crypto@postgres:5432/crypto",
+            startup_timeout=1.0,
+            keep_up=False,
+        )
+
+    for name in ("storage", "logs", "runtime"):
+        mode = os.stat(work_dir / name).st_mode & 0o777
+        assert mode == 0o777
 
 
 def test_auto_id_column_sql_supports_sqlite_and_postgres() -> None:
