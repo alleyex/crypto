@@ -22,9 +22,12 @@ from app.core.settings import FUTURES_PREMIUM_SYMBOLS
 
 _PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 _PREMIUM_TESTNET_URL = "https://testnet.binancefuture.com/fapi/v1/premiumIndex"
+_MARK_KLINES_URL = "https://fapi.binance.com/fapi/v1/markPriceKlines"
+_INDEX_KLINES_URL = "https://fapi.binance.com/fapi/v1/indexPriceKlines"
 _TIMEOUT = 8
 _RETRIES = 2
 _BACKOFF = 1.0
+_KLINES_LIMIT = 1500
 
 FUTURES_PREMIUM_PAUSED_FILE = Path("runtime/futures_premium.paused")
 
@@ -60,7 +63,76 @@ def _minute_ms(now_ms: Optional[int] = None) -> int:
     return (now_ms // 60_000) * 60_000
 
 
-def fetch_futures_premium_metrics(symbols: Optional[list[str]] = None) -> list[dict[str, Any]]:
+def _previous_closed_minute_ms(now_ms: Optional[int] = None) -> int:
+    return _minute_ms(now_ms) - 60_000
+
+
+def _pair_for_symbol(symbol: str) -> str:
+    normalized = symbol.upper()
+    if normalized == "1000PEPEUSDT":
+        return "PEPEUSDT"
+    return normalized
+
+
+def _fetch_klines(url: str, params: dict[str, Any], timeout: int) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    cursor = int(params["startTime"])
+    end_time = int(params["endTime"])
+    while cursor <= end_time:
+        local_params = dict(params)
+        local_params["startTime"] = cursor
+        batch: list[list[Any]] = []
+        last_exc: Exception | None = None
+        for attempt in range(_RETRIES + 1):
+            try:
+                response = requests.get(url, params=local_params, timeout=timeout)
+                response.raise_for_status()
+                batch = response.json() or []
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _RETRIES:
+                    time.sleep(_BACKOFF * (2 ** attempt))
+                    continue
+                raise last_exc
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < _KLINES_LIMIT:
+            break
+        cursor = int(batch[-1][0]) + 60_000
+    return rows
+
+
+def _fetch_mark_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> dict[int, float]:
+    params = {
+        "symbol": symbol.upper(),
+        "interval": "1m",
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": _KLINES_LIMIT,
+    }
+    rows = _fetch_klines(_MARK_KLINES_URL, params, timeout)
+    return {int(row[0]): float(row[4]) for row in rows}
+
+
+def _fetch_index_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> dict[int, float]:
+    params = {
+        "pair": _pair_for_symbol(symbol),
+        "interval": "1m",
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": _KLINES_LIMIT,
+    }
+    rows = _fetch_klines(_INDEX_KLINES_URL, params, timeout)
+    return {int(row[0]): float(row[4]) for row in rows}
+
+
+def fetch_futures_premium_metrics(
+    symbols: Optional[list[str]] = None,
+    now_ms: Optional[int] = None,
+) -> list[dict[str, Any]]:
     symbol_filter = {s.upper() for s in (symbols or configured_futures_premium_symbols())}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
     last_exc: Exception = RuntimeError("fetch_futures_premium_metrics: no attempts made")
@@ -79,7 +151,7 @@ def fetch_futures_premium_metrics(symbols: Optional[list[str]] = None) -> list[d
                 time.sleep(_BACKOFF * (2 ** attempt))
                 continue
             raise last_exc
-    minute_ms = _minute_ms()
+    minute_ms = _minute_ms(now_ms)
     result: list[dict[str, Any]] = []
     for row in data:
         symbol = str(row.get("symbol") or "").upper()
@@ -105,6 +177,43 @@ def fetch_futures_premium_metrics(symbols: Optional[list[str]] = None) -> list[d
                 "mark_index_basis_pct": round(basis_pct, 10) if basis_pct is not None else None,
                 "mark_index_spread_bps": round(spread_bps, 6) if spread_bps is not None else None,
                 "source": "rest",
+            }
+        )
+    return result
+
+
+def fetch_futures_premium_history(
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+    timeout: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    if start_ms > end_ms:
+        return []
+    timeout = int(timeout or os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
+    mark_rows = _fetch_mark_rows(symbol, start_ms, end_ms, timeout)
+    index_rows = _fetch_index_rows(symbol, start_ms, end_ms, timeout)
+    result: list[dict[str, Any]] = []
+    for timestamp_ms in sorted(set(mark_rows) & set(index_rows)):
+        mark_price = mark_rows[timestamp_ms]
+        index_price = index_rows[timestamp_ms]
+        basis_pct = None
+        spread_bps = None
+        if index_price and index_price > 0:
+            basis_pct = (mark_price / index_price) - 1.0
+            spread_bps = basis_pct * 10_000.0
+        result.append(
+            {
+                "symbol": symbol.upper(),
+                "timestamp_ms": timestamp_ms,
+                "mark_price": round(mark_price, 8),
+                "index_price": round(index_price, 8),
+                "estimated_settle_price": None,
+                "last_funding_rate": None,
+                "next_funding_time_ms": None,
+                "mark_index_basis_pct": round(basis_pct, 10) if basis_pct is not None else None,
+                "mark_index_spread_bps": round(spread_bps, 6) if spread_bps is not None else None,
+                "source": "archive",
             }
         )
     return result
@@ -151,14 +260,55 @@ def save_futures_premium_metrics(connection: DBConnection, rows: list[dict[str, 
     return saved
 
 
-def collect_futures_premium_metrics(connection: DBConnection, symbol_names: Optional[list[str]] = None) -> dict[str, Any]:
+def _latest_symbol_timestamps(connection: DBConnection, symbols: list[str]) -> dict[str, int]:
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" for _ in symbols)
+    rows = connection.execute(
+        f"""
+        SELECT symbol, MAX(timestamp_ms) AS latest_ms
+        FROM futures_premium_metrics
+        WHERE symbol IN ({placeholders})
+        GROUP BY symbol
+        """,
+        tuple(symbols),
+    ).fetchall()
+    return {str(symbol): int(latest_ms) for symbol, latest_ms in rows if latest_ms is not None}
+
+
+def backfill_missing_futures_premium_metrics(
+    connection: DBConnection,
+    symbols: list[str],
+    now_ms: Optional[int] = None,
+) -> int:
+    latest_by_symbol = _latest_symbol_timestamps(connection, symbols)
+    previous_closed_minute_ms = _previous_closed_minute_ms(now_ms)
+    saved = 0
+    for symbol in symbols:
+        latest_ms = latest_by_symbol.get(symbol.upper())
+        if latest_ms is None:
+            continue
+        start_ms = latest_ms + 60_000
+        if start_ms > previous_closed_minute_ms:
+            continue
+        rows = fetch_futures_premium_history(symbol, start_ms, previous_closed_minute_ms)
+        saved += save_futures_premium_metrics(connection, rows)
+    return saved
+
+
+def collect_futures_premium_metrics(
+    connection: DBConnection,
+    symbol_names: Optional[list[str]] = None,
+    now_ms: Optional[int] = None,
+) -> dict[str, Any]:
     symbols = list(symbol_names or configured_futures_premium_symbols())
-    rows = fetch_futures_premium_metrics(symbols)
-    saved = save_futures_premium_metrics(connection, rows)
+    archive_saved = backfill_missing_futures_premium_metrics(connection, symbols, now_ms=now_ms)
+    rows = fetch_futures_premium_metrics(symbols, now_ms=now_ms)
+    rest_saved = save_futures_premium_metrics(connection, rows)
     return {
-        "saved": saved,
+        "saved": archive_saved + rest_saved,
         "errors": [],
-        "source_counts": {"rest": saved},
+        "source_counts": {"archive": archive_saved, "rest": rest_saved},
         "symbols": symbols,
     }
 
