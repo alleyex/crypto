@@ -6670,10 +6670,10 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         )
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
                 "id": 1,
                 "symbol": symbol,
-                "timeframe": "1m",
+                "timeframe": timeframe,
                 "strategy_name": strategy_name,
                 "signal_type": "BUY",
                 "short_ma": 13.0,
@@ -7521,10 +7521,10 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
         monkeypatch.setattr("app.pipeline.strategy_job.ensure_signals_table", lambda conn: None)
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
                 "id": 11,
                 "symbol": symbol,
-                "timeframe": "1m",
+                "timeframe": timeframe,
                 "strategy_name": strategy_name,
                 "signal_type": "BUY",
                 "short_ma": 4.0,
@@ -7629,10 +7629,10 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
         monkeypatch.setattr("app.pipeline.strategy_job.ensure_signals_table", lambda conn: None)
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT": {
+            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
                 "id": 11 if symbol == "BTCUSDT" else 12,
                 "symbol": symbol,
-                "timeframe": "1m",
+                "timeframe": timeframe,
                 "strategy_name": strategy_name,
                 "signal_type": "BUY",
                 "short_ma": 4.0,
