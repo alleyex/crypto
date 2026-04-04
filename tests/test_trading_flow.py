@@ -2785,6 +2785,7 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
 
 def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "market_data_strategy.db"
+    captured: dict[str, object] = {}
 
     def fake_connection() -> sqlite3.Connection:
         return sqlite3.connect(db_path)
@@ -2798,9 +2799,75 @@ def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> N
             make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
         ],
     )
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_migrations", lambda connection: None)
+
+    def fake_run_job(connection, job_type, payload=None):
+        payload = payload or {}
+        if job_type == "market_data":
+            return {
+                "step": "save_klines",
+                "saved_klines": 5,
+                "symbol_names": payload.get("symbol_names") or ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "symbol_results": [{"symbol": "BTCUSDT", "timeframe": "1m", "saved_klines": 5, "mode": "seed"}],
+            }
+        if job_type == "strategy":
+            captured["strategy_name"] = payload.get("strategy_name")
+            return {
+                "status": "ok",
+                "signal_ids": [1],
+                "steps": [
+                    {
+                        "step": "generate_signal",
+                        "id": 1,
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1m",
+                        "strategy_name": payload.get("strategy_name"),
+                        "signal_type": "BUY",
+                        "short_ma": 13.0,
+                        "long_ma": 12.0,
+                    }
+                ],
+            }
+        if job_type == "risk":
+            return {
+                "status": "ok",
+                "risk_event_ids": [1],
+                "steps": [
+                    {
+                        "step": "evaluate_risk",
+                        "id": 1,
+                        "signal_id": 1,
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1m",
+                        "strategy_name": payload.get("strategy_name", "ppo"),
+                        "signal_type": "BUY",
+                        "decision": "APPROVED",
+                        "reason": "Passed basic risk checks.",
+                    }
+                ],
+            }
+        if job_type == "execution":
+            return {
+                "status": "ok",
+                "steps": [
+                    {
+                        "step": "paper_execute",
+                        "status": "FILLED",
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "qty": 0.001,
+                        "price": 14.0,
+                    }
+                ],
+            }
+        raise AssertionError(f"unexpected job_type: {job_type}")
+
+    monkeypatch.setattr("app.pipeline.run_pipeline.run_job", fake_run_job)
 
     result = run_pipeline_collect(strategy_name="ppo")
 
+    assert captured["strategy_name"] == "ppo"
     assert result["strategy_name"] == "ppo"
     assert result["steps"][1]["strategy_name"] == "ppo"
 
