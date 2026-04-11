@@ -7,25 +7,52 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
-_PID_FILE = PROJECT_ROOT / "runtime" / "scheduler.pid"
 
 
-def _acquire_singleton() -> None:
-    """Ensure only one scheduler instance runs. Exit immediately if another is alive."""
-    if _PID_FILE.exists():
-        try:
-            existing_pid = int(_PID_FILE.read_text().strip())
-            os.kill(existing_pid, 0)  # signal 0 = just check existence
-            print(f"[scheduler] Already running (PID {existing_pid}). Exiting.", flush=True)
-            sys.exit(0)
-        except (ProcessLookupError, PermissionError):
-            pass  # stale PID file — overwrite it
-    _PID_FILE.write_text(str(os.getpid()))
+def _pid_file_for_mode(mode: str) -> Path:
+    """Return a mode-specific PID file so different scheduler modes don't collide."""
+    safe_mode = mode.replace("-", "_")
+    return PROJECT_ROOT / "runtime" / f"scheduler_{safe_mode}.pid"
 
 
-def _release_singleton() -> None:
+# Resolved after args are parsed; placeholder until then.
+_pid_file: Path = PROJECT_ROOT / "runtime" / "scheduler.pid"
+
+
+def _is_scheduler_process(pid: int) -> bool:
+    """Return True only if the given PID is actually running this scheduler script."""
     try:
-        _PID_FILE.unlink(missing_ok=True)
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    # Verify the process is actually our scheduler (not a reused PID)
+    cmdline_file = Path(f"/proc/{pid}/cmdline")
+    if cmdline_file.exists():
+        try:
+            cmdline = cmdline_file.read_bytes().replace(b"\x00", b" ").decode(errors="replace")
+            return "run_scheduler.py" in cmdline
+        except OSError:
+            pass
+    # On non-Linux (no /proc), fall back to just pid-exists check
+    return True
+
+
+def _acquire_singleton(pid_file: Path) -> None:
+    """Ensure only one scheduler instance of this mode runs. Exit immediately if another is alive."""
+    if pid_file.exists():
+        try:
+            existing_pid = int(pid_file.read_text().strip())
+            if _is_scheduler_process(existing_pid):
+                print(f"[scheduler] Already running (PID {existing_pid}). Exiting.", flush=True)
+                sys.exit(0)
+        except (ValueError, OSError):
+            pass  # unreadable or stale PID file — overwrite it
+    pid_file.write_text(str(os.getpid()))
+
+
+def _release_singleton(pid_file: Path) -> None:
+    try:
+        pid_file.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -105,9 +132,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    _acquire_singleton()
+    args = parse_args()
+    pid_file = _pid_file_for_mode(args.mode)
+    _acquire_singleton(pid_file)
     try:
-        args = parse_args()
         queue_dispatch = args.queue_dispatch
         queue_drain = args.queue_drain
         pipeline_orchestration_override = None if args.orchestration == "default" else args.orchestration
@@ -124,7 +152,7 @@ def main() -> None:
             pipeline_orchestration_override=pipeline_orchestration_override,
         )
     finally:
-        _release_singleton()
+        _release_singleton(pid_file)
 
 
 if __name__ == "__main__":

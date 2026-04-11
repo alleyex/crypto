@@ -10,7 +10,7 @@ services:
       args:
         REQUIREMENTS_FILE: requirements.txt
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   scheduler:
@@ -18,35 +18,43 @@ services:
       args:
         REQUIREMENTS_FILE: requirements.txt
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
+      CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
+
+  training-worker:
+    build:
+      args:
+        REQUIREMENTS_FILE: requirements.txt
+    environment:
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-candles:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-orderbook:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-aggtrade:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-premium:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-open-interest:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}
 
   futures-liquidation:
     environment:
-      CRYPTO_DB_BACKEND: postgres
+      CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
       CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL}

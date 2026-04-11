@@ -15,8 +15,7 @@ x-base-service: &base-service
     - ./runtime:/app/runtime
 
 x-db-env: &db-env
-  CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-sqlite}
-  CRYPTO_SQLITE_PATH: ${CRYPTO_SQLITE_PATH:-storage/market_data.db}
+  CRYPTO_DB_BACKEND: ${CRYPTO_DB_BACKEND:-postgres}
   CRYPTO_DATABASE_URL: ${CRYPTO_DATABASE_URL:-}
   CRYPTO_POSTGRES_CONNECT_RETRIES: ${CRYPTO_POSTGRES_CONNECT_RETRIES:-15}
   CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS: ${CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS:-1}
@@ -35,6 +34,9 @@ x-binance-env: &binance-env
   CRYPTO_BINANCE_API_SECRET: ${CRYPTO_BINANCE_API_SECRET:-}
   CRYPTO_BINANCE_TESTNET: ${CRYPTO_BINANCE_TESTNET:-true}
   CRYPTO_EXECUTION_BACKEND: ${CRYPTO_EXECUTION_BACKEND:-paper}
+  CRYPTO_BINANCE_FUTURES: ${CRYPTO_BINANCE_FUTURES:-false}
+  CRYPTO_BINANCE_FUTURES_API_KEY: ${CRYPTO_BINANCE_FUTURES_API_KEY:-}
+  CRYPTO_BINANCE_FUTURES_API_SECRET: ${CRYPTO_BINANCE_FUTURES_API_SECRET:-}
 
 x-alert-env: &alert-env
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -44,7 +46,6 @@ x-alert-env: &alert-env
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["postgres"]
     environment:
       POSTGRES_DB: ${CRYPTO_POSTGRES_DB:-crypto}
       POSTGRES_USER: ${CRYPTO_POSTGRES_USER:-crypto}
@@ -69,7 +70,7 @@ services:
     ports:
       - "${CRYPTO_API_PUBLISHED_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -82,14 +83,14 @@ services:
     <<: *base-service
     # When running with split-workers profile, set CRYPTO_PIPELINE_ORCHESTRATION=queue_dispatch
     # so the scheduler only enqueues jobs and workers drain them independently.
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
+    command: sh -c "rm -f runtime/scheduler.pid && python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
     depends_on:
       api:
         condition: service_healthy
     environment:
       <<: [*db-env, *trading-env, *binance-env, *alert-env]
       CRYPTO_SCHEDULER_INTERVAL: ${CRYPTO_SCHEDULER_INTERVAL:-60}
-      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ma_cross}
+      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ppo}
       CRYPTO_PIPELINE_ORCHESTRATION: ${CRYPTO_PIPELINE_ORCHESTRATION:-queue_batch}
       CRYPTO_JOB_LEASE_TIMEOUT_SECONDS: ${CRYPTO_JOB_LEASE_TIMEOUT_SECONDS:-300}
 
@@ -107,11 +108,11 @@ services:
     <<: *base-service
     profiles: ["split-workers"]
     # Drains strategy jobs enqueued by the scheduler (queue_dispatch mode).
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --queue-drain --strategy ${CRYPTO_STRATEGY_NAME:-ma_cross}"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --queue-drain --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
     environment:
       <<: [*db-env, *trading-env, *alert-env]
       CRYPTO_STRATEGY_INTERVAL: ${CRYPTO_STRATEGY_INTERVAL:-60}
-      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ma_cross}
+      CRYPTO_STRATEGY_NAME: ${CRYPTO_STRATEGY_NAME:-ppo}
       CRYPTO_JOB_LEASE_TIMEOUT_SECONDS: ${CRYPTO_JOB_LEASE_TIMEOUT_SECONDS:-300}
 
   risk-worker:
@@ -134,10 +135,23 @@ services:
       CRYPTO_EXECUTION_INTERVAL: ${CRYPTO_EXECUTION_INTERVAL:-60}
       CRYPTO_JOB_LEASE_TIMEOUT_SECONDS: ${CRYPTO_JOB_LEASE_TIMEOUT_SECONDS:-300}
 
+  training-worker:
+    <<: *base-service
+    command: sh -c "rm -f runtime/scheduler_training_only.pid && python scripts/run_scheduler.py --interval ${CRYPTO_TRAINING_INTERVAL:-60} --mode training-only --queue-drain"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${CRYPTO_TENSORBOARD_PORT:-6006}:6006"
+    environment:
+      <<: [*db-env, *alert-env]
+      CRYPTO_TRAINING_INTERVAL: ${CRYPTO_TRAINING_INTERVAL:-60}
+      CRYPTO_JOB_LEASE_TIMEOUT_SECONDS: ${CRYPTO_JOB_LEASE_TIMEOUT_SECONDS:-300}
+
   futures-orderbook:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_orderbook_collector.py --interval ${CRYPTO_FUTURES_ORDERBOOK_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_orderbook.pid && python scripts/run_futures_orderbook_collector.py --interval ${CRYPTO_FUTURES_ORDERBOOK_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,7 +163,7 @@ services:
   futures-candles:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_candles_collector.py --interval ${CRYPTO_FUTURES_CANDLES_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_candles.pid && python scripts/run_futures_candles_collector.py --interval ${CRYPTO_FUTURES_CANDLES_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,7 +175,7 @@ services:
   futures-aggtrade:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_aggtrade_collector.py --interval ${CRYPTO_FUTURES_AGGTRADE_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_aggtrade.pid && python scripts/run_futures_aggtrade_collector.py --interval ${CRYPTO_FUTURES_AGGTRADE_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,7 +187,7 @@ services:
   futures-premium:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_premium_collector.py --interval ${CRYPTO_FUTURES_PREMIUM_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_premium.pid && python scripts/run_futures_premium_collector.py --interval ${CRYPTO_FUTURES_PREMIUM_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,7 +199,7 @@ services:
   futures-open-interest:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_open_interest_collector.py --interval ${CRYPTO_FUTURES_OPEN_INTEREST_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_open_interest.pid && python scripts/run_futures_open_interest_collector.py --interval ${CRYPTO_FUTURES_OPEN_INTEREST_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -197,7 +211,7 @@ services:
   futures-liquidation:
     <<: *base-service
     profiles: ["futures-collectors"]
-    command: sh -c "python scripts/run_futures_liquidation_collector.py --interval ${CRYPTO_FUTURES_LIQUIDATION_INTERVAL:-60}"
+    command: sh -c "rm -f runtime/futures_liquidation.pid && python scripts/run_futures_liquidation_collector.py --interval ${CRYPTO_FUTURES_LIQUIDATION_INTERVAL:-60}"
     depends_on:
       postgres:
         condition: service_healthy
