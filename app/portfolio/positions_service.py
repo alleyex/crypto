@@ -97,6 +97,11 @@ def update_positions(connection: DBConnection) -> int:
     for row in connection.execute("SELECT symbol, qty FROM positions;").fetchall():
         existing[row[0]] = float(row[1])
 
+    # Compute final values for every symbol, then upsert all in one round-trip.
+    now = utc_now_iso()
+    upsert_params: list[tuple] = []
+    pending_audits: list[tuple] = []  # (symbol, old_qty, new_qty, avg_price, realized_pnl)
+
     for symbol, position in positions.items():
         qty = position["qty"]
         realized_pnl = position["realized_pnl"]
@@ -106,10 +111,13 @@ def update_positions(connection: DBConnection) -> int:
             qty = 0.0
         else:
             avg_price = cost / abs(qty) if qty != 0 else 0.0
-        connection.execute(UPSERT_POSITION_SQL, (symbol, qty, avg_price, realized_pnl, utc_now_iso()))
+        upsert_params.append((symbol, qty, avg_price, realized_pnl, now))
+        pending_audits.append((symbol, existing.get(symbol, 0.0), qty, avg_price, realized_pnl))
 
-        # Emit audit event when position opens or closes.
-        old_qty = existing.get(symbol, 0.0)
+    connection.executemany(UPSERT_POSITION_SQL, upsert_params)
+
+    # Emit audit events after the batch upsert.
+    for symbol, old_qty, qty, avg_price, realized_pnl in pending_audits:
         if abs(old_qty) < 1e-9 and abs(qty) > 1e-9:
             insert_event(
                 connection,

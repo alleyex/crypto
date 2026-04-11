@@ -83,7 +83,7 @@ services:
     <<: *base-service
     # When running with split-workers profile, set CRYPTO_PIPELINE_ORCHESTRATION=queue_dispatch
     # so the scheduler only enqueues jobs and workers drain them independently.
-    command: sh -c "rm -f runtime/scheduler.pid && python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
+    command: sh -c "rm -f runtime/scheduler_pipeline.pid && python scripts/run_scheduler.py --interval ${CRYPTO_SCHEDULER_INTERVAL:-60} --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
     depends_on:
       api:
         condition: service_healthy

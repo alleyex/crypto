@@ -357,6 +357,27 @@ def _add_risk_configs_stop_loss_pct(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE risk_configs ADD COLUMN stop_loss_pct NUMERIC(20,8) NOT NULL DEFAULT 0;")
 
 
+def _add_signals_lookup_index(connection: DBConnection) -> None:
+    """Composite index for SELECT_PREVIOUS_SIGNAL_SQL in risk_service.
+
+    The query filters on (symbol, timeframe, strategy_name) and sorts by id DESC —
+    without this index every risk evaluation is a full table scan on signals.
+    """
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_signals_symbol_tf_strategy_id
+        ON signals (symbol, timeframe, strategy_name, id DESC);
+        """
+    )
+
+
+def _add_fills_symbol_index(connection: DBConnection) -> None:
+    """Index fills by symbol to speed up per-symbol aggregation in positions_service."""
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fills_symbol ON fills (symbol);"
+    )
+
+
 def _create_portfolio_config_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -1391,6 +1412,8 @@ MIGRATIONS: list[Migration] = [
     ("057_normalize_legacy_utc_timestamp_strings", _normalize_legacy_utc_timestamp_strings),
     ("058_set_postgres_text_timestamp_defaults_to_utc_iso", _set_postgres_text_timestamp_defaults_to_utc_iso),
     ("059_add_risk_configs_stop_loss_pct", _add_risk_configs_stop_loss_pct),
+    ("060_add_signals_lookup_index", _add_signals_lookup_index),
+    ("061_add_fills_symbol_index", _add_fills_symbol_index),
 ]
 
 
