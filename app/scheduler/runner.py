@@ -40,6 +40,15 @@ RUNTIME_DIR = Path("runtime")
 STOP_FILE = RUNTIME_DIR / "scheduler.stop"
 SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only", "training-only")
 
+# Maps scheduler worker mode → job_queue job_type string.
+_MODE_TO_JOB_TYPE: dict[str, str] = {
+    "market-data-only": "market_data",
+    "strategy-only": "strategy",
+    "risk-only": "risk",
+    "execution-only": "execution",
+    "training-only": "training_ppo",
+}
+
 
 def _summarize_result(result: dict) -> str:
     queued_items: list[str] = []
@@ -147,42 +156,104 @@ def _scheduler_component_name(mode: str) -> str:
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
 
-def _run_scheduled_job(
-    mode: str,
-    strategy_name: str = DEFAULT_STRATEGY_NAME,
-    strategy_names: Optional[list[str]] = None,
-    symbol_names: Optional[list[str]] = None,
-    queue_dispatch: bool = False,
-    queue_drain: bool = False,
-    pipeline_orchestration: str = "direct",
+def _run_pipeline_job(
+    orchestration: str,
+    strategy_name: str,
+    strategy_names: Optional[list[str]],
+    symbol_names: Optional[list[str]],
 ) -> dict:
-    if kill_switch_enabled():
-        return {
-            "status": "blocked",
-            "steps": [
-                {
-                    "step": "kill_switch",
-                    "status": "blocked",
-                    **get_kill_switch_status(),
-                    "reason": "Kill switch is enabled.",
-                }
-            ],
-        }
+    """Execute or enqueue a full pipeline tick."""
+    # direct: run_pipeline_collect manages its own connection and migrations.
+    if orchestration == "direct":
+        return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
 
-    if mode == "pipeline":
-        if pipeline_orchestration == "queue_batch":
-            connection = get_connection()
-            try:
-                run_migrations(connection)
-                batch_result = enqueue_and_run_pipeline_batch(
-                    connection,
-                    strategy_name=strategy_name,
-                    strategy_names=strategy_names,
-                    symbol_names=symbol_names,
-                    payload={"source": "scheduler_pipeline", "orchestration": "queue_batch"},
-                )
-                result = dict(batch_result.get("result") or {})
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+
+        if orchestration == "queue_batch":
+            batch_result = enqueue_and_run_pipeline_batch(
+                connection,
+                strategy_name=strategy_name,
+                strategy_names=strategy_names,
+                symbol_names=symbol_names,
+                payload={"source": "scheduler_pipeline", "orchestration": "queue_batch"},
+            )
+            result = dict(batch_result.get("result") or {})
+            result["steps"] = [
+                {
+                    "step": "enqueue_job",
+                    "status": "queued",
+                    "job_id": int(job["job_id"]),
+                    "job_type": str(job["job_type"]),
+                    "batch_id": job["batch_id"],
+                    "execution_backend": get_execution_adapter_name(),
+                    "strategy_names": strategy_names or [strategy_name],
+                    "symbol_names": symbol_names or [],
+                }
+                for job in list(batch_result.get("enqueued_jobs") or [])
+            ] + [
+                {
+                    "step": "drain_queue",
+                    "status": "completed",
+                    "job_id": int(job["id"]),
+                    "job_type": str(job["job_type"]),
+                    "batch_id": batch_result.get("batch_id"),
+                    "remaining_job_types": [],
+                }
+                for job in list(batch_result.get("jobs") or [])
+            ] + list(result.get("steps", []))
+            return result
+
+        if orchestration == "queue_drain":
+            drain_result = run_pipeline_batch(connection)
+            if drain_result["status"] == "completed":
+                result = dict(drain_result.get("result") or {})
                 result["steps"] = [
+                    {
+                        "step": "drain_queue",
+                        "status": "completed",
+                        "job_id": int(job["id"]),
+                        "job_type": str(job["job_type"]),
+                        "batch_id": drain_result.get("batch_id"),
+                        "remaining_job_types": [],
+                    }
+                    for job in list(drain_result.get("jobs") or [])
+                ] + list(result.get("steps", []))
+                return result
+            if drain_result["status"] == "empty":
+                return {
+                    "status": "completed",
+                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": "pipeline"}],
+                }
+            return {
+                "status": "failed",
+                "steps": [
+                    {
+                        "step": "drain_queue",
+                        "status": "failed",
+                        "job_id": int(drain_result["job"]["id"]),
+                        "job_type": str(drain_result["job"]["job_type"]),
+                        "batch_id": drain_result.get("batch_id"),
+                        "remaining_job_types": list(drain_result.get("remaining_job_types") or []),
+                        "error": drain_result["error"],
+                        "error_type": drain_result["error_type"],
+                    }
+                ],
+            }
+
+        if orchestration == "queue_dispatch":
+            jobs = enqueue_pipeline_jobs(
+                connection,
+                strategy_name=strategy_name,
+                strategy_names=strategy_names,
+                symbol_names=symbol_names,
+                payload={"source": "scheduler_pipeline", "orchestration": "queue_dispatch"},
+            )
+            return {
+                "status": "queued",
+                "batch_id": jobs[0]["batch_id"] if jobs else None,
+                "steps": [
                     {
                         "step": "enqueue_job",
                         "status": "queued",
@@ -193,105 +264,30 @@ def _run_scheduled_job(
                         "strategy_names": strategy_names or [strategy_name],
                         "symbol_names": symbol_names or [],
                     }
-                    for job in list(batch_result.get("enqueued_jobs") or [])
-                ] + [
-                    {
-                        "step": "drain_queue",
-                        "status": "completed",
-                        "job_id": int(job["id"]),
-                        "job_type": str(job["job_type"]),
-                        "batch_id": batch_result.get("batch_id"),
-                        "remaining_job_types": [],
-                    }
-                    for job in list(batch_result.get("jobs") or [])
-                ] + list(result.get("steps", []))
-                return result
-            finally:
-                connection.close()
-        connection = get_connection()
-        try:
-            run_migrations(connection)
-            if queue_drain:
-                drain_result = run_pipeline_batch(connection)
-                if drain_result["status"] == "completed":
-                    result = dict(drain_result.get("result") or {})
-                    result["steps"] = [
-                        {
-                            "step": "drain_queue",
-                            "status": "completed",
-                            "job_id": int(job["id"]),
-                            "job_type": str(job["job_type"]),
-                            "batch_id": drain_result.get("batch_id"),
-                            "remaining_job_types": [],
-                        }
-                        for job in list(drain_result.get("jobs") or [])
-                    ] + list(result.get("steps", []))
-                    return result
-                if drain_result["status"] == "empty":
-                    return {
-                        "status": "completed",
-                        "steps": [{"step": "drain_queue", "status": "empty", "job_type": "pipeline"}],
-                    }
-                return {
-                    "status": "failed",
-                    "steps": [
-                        {
-                            "step": "drain_queue",
-                            "status": "failed",
-                            "job_id": int(drain_result["job"]["id"]),
-                            "job_type": str(drain_result["job"]["job_type"]),
-                            "batch_id": drain_result.get("batch_id"),
-                            "remaining_job_types": list(drain_result.get("remaining_job_types") or []),
-                            "error": drain_result["error"],
-                            "error_type": drain_result["error_type"],
-                        }
-                    ],
-                }
-            if queue_dispatch:
-                jobs = enqueue_pipeline_jobs(
-                    connection,
-                    strategy_name=strategy_name,
-                    strategy_names=strategy_names,
-                    symbol_names=symbol_names,
-                    payload={"source": "scheduler_pipeline", "orchestration": "queue_dispatch"},
-                )
-                return {
-                    "status": "queued",
-                    "batch_id": jobs[0]["batch_id"] if jobs else None,
-                    "steps": [
-                        {
-                            "step": "enqueue_job",
-                            "status": "queued",
-                            "job_id": int(job["job_id"]),
-                            "job_type": str(job["job_type"]),
-                            "batch_id": job["batch_id"],
-                            "execution_backend": get_execution_adapter_name(),
-                            "strategy_names": strategy_names or [strategy_name],
-                            "symbol_names": symbol_names or [],
-                        }
-                        for job in jobs
-                    ],
-                }
-        finally:
-            connection.close()
-        return run_pipeline_collect(strategy_name=strategy_name, symbol_names=symbol_names)
+                    for job in jobs
+                ],
+            }
+    finally:
+        connection.close()
 
+    raise ValueError(f"Unsupported pipeline orchestration: {orchestration}")
+
+
+def _run_worker_job(
+    mode: str,
+    strategy_name: str,
+    strategy_names: Optional[list[str]],
+    symbol_names: Optional[list[str]],
+    queue_dispatch: bool,
+    queue_drain: bool,
+) -> dict:
+    """Execute or enqueue a single worker-mode job (non-pipeline modes)."""
+    job_type = _MODE_TO_JOB_TYPE[mode]
     connection = get_connection()
     try:
         run_migrations(connection)
+
         if queue_drain:
-            if mode == "market-data-only":
-                job_type = "market_data"
-            elif mode == "strategy-only":
-                job_type = "strategy"
-            elif mode == "risk-only":
-                job_type = "risk"
-            elif mode == "execution-only":
-                job_type = "execution"
-            elif mode == "training-only":
-                job_type = "training_ppo"
-            else:
-                raise ValueError(f"Unsupported queue-drain mode: {mode}")
             drain_result = run_next_queued_job(connection, job_type=job_type)
             if drain_result["status"] == "completed":
                 result = dict(drain_result.get("result") or {})
@@ -322,28 +318,16 @@ def _run_scheduled_job(
                     }
                 ],
             }
+
         if queue_dispatch:
-            if mode == "market-data-only":
-                job_type = "market_data"
-                payload = build_job_payload(symbol_names=symbol_names)
-            elif mode == "strategy-only":
-                job_type = "strategy"
+            if mode == "strategy-only":
                 payload = build_job_payload(
                     strategy_name=strategy_name,
                     strategy_names=strategy_names,
                     symbol_names=symbol_names,
                 )
-            elif mode == "risk-only":
-                job_type = "risk"
-                payload = build_job_payload(symbol_names=symbol_names)
-            elif mode == "execution-only":
-                job_type = "execution"
-                payload = build_job_payload(symbol_names=symbol_names)
-            elif mode == "training-only":
-                job_type = "training_ppo"
-                payload = build_job_payload()
             else:
-                raise ValueError(f"Unsupported queue-dispatch mode: {mode}")
+                payload = build_job_payload(symbol_names=symbol_names)
             job_id = enqueue_job(connection, job_type, payload=payload or None)
             return {
                 "status": "queued",
@@ -359,6 +343,8 @@ def _run_scheduled_job(
                     }
                 ],
             }
+
+        # direct execution
         if mode == "market-data-only":
             return {"steps": [run_market_data_job(connection, symbol_names=symbol_names)], "symbol_names": symbol_names or []}
         if mode == "strategy-only":
@@ -368,11 +354,39 @@ def _run_scheduled_job(
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
         if mode == "training-only":
-            return {"status": "completed", "steps": [{"step": "drain_queue", "status": "empty", "job_type": "training_ppo"}]}
+            return {"status": "completed", "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}]}
     finally:
         connection.close()
 
-    raise ValueError(f"Unsupported scheduler mode: {mode}")
+    raise ValueError(f"Unsupported worker mode: {mode}")
+
+
+def _run_scheduled_job(
+    mode: str,
+    strategy_name: str = DEFAULT_STRATEGY_NAME,
+    strategy_names: Optional[list[str]] = None,
+    symbol_names: Optional[list[str]] = None,
+    queue_dispatch: bool = False,
+    queue_drain: bool = False,
+    pipeline_orchestration: str = "direct",
+) -> dict:
+    if kill_switch_enabled():
+        return {
+            "status": "blocked",
+            "steps": [
+                {
+                    "step": "kill_switch",
+                    "status": "blocked",
+                    **get_kill_switch_status(),
+                    "reason": "Kill switch is enabled.",
+                }
+            ],
+        }
+
+    if mode == "pipeline":
+        return _run_pipeline_job(pipeline_orchestration, strategy_name, strategy_names, symbol_names)
+
+    return _run_worker_job(mode, strategy_name, strategy_names, symbol_names, queue_dispatch, queue_drain)
 
 
 def _resolve_active_strategy(mode: str, fallback_strategy_name: str) -> str:
@@ -474,6 +488,22 @@ def _record_soak_snapshot() -> None:
         _write_log(error_line, mode="pipeline")
 
 
+def _resolve_pipeline_orchestration(
+    queue_dispatch: bool,
+    queue_drain: bool,
+    pipeline_orchestration_override: Optional[str],
+) -> str:
+    """Derive the canonical pipeline orchestration string for pipeline mode."""
+    effective = pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION
+    # CLI flags take lower precedence than env/override — only apply when no override given.
+    if pipeline_orchestration_override is None:
+        if queue_dispatch:
+            return "queue_dispatch"
+        if queue_drain:
+            return "queue_drain"
+    return effective
+
+
 def run_scheduler(
     interval_seconds: int = 60,
     iterations: Optional[int] = None,
@@ -489,24 +519,25 @@ def run_scheduler(
         )
     if queue_dispatch and queue_drain:
         raise ValueError("queue_dispatch and queue_drain cannot both be enabled.")
-    pipeline_orchestration = "direct"
-    if mode == "pipeline" and not queue_dispatch and not queue_drain:
-        pipeline_orchestration = pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION
-        if DEFAULT_PIPELINE_ORCHESTRATION == "queue_dispatch":
-            queue_dispatch = True
-        elif DEFAULT_PIPELINE_ORCHESTRATION == "queue_drain":
-            queue_drain = True
-        elif (pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION) == "queue_dispatch":
-            queue_dispatch = True
-        elif (pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION) == "queue_drain":
-            queue_drain = True
-    elif mode == "pipeline":
+
+    # Resolve orchestration once at startup.
+    if mode == "pipeline":
+        pipeline_orchestration = _resolve_pipeline_orchestration(
+            queue_dispatch, queue_drain, pipeline_orchestration_override
+        )
+        # Keep flags in sync so _reclaim_stale_leases and heartbeat payloads are accurate.
+        queue_dispatch = pipeline_orchestration == "queue_dispatch"
+        queue_drain = pipeline_orchestration == "queue_drain"
+    else:
+        # Worker modes: orchestration string is informational only.
         if pipeline_orchestration_override is not None:
             pipeline_orchestration = pipeline_orchestration_override
         elif queue_dispatch:
             pipeline_orchestration = "queue_dispatch"
         elif queue_drain:
             pipeline_orchestration = "queue_drain"
+        else:
+            pipeline_orchestration = "direct"
 
     component = _scheduler_component_name(mode)
     run_count = 0
