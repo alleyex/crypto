@@ -88,6 +88,9 @@ class _PersistentConn:
     def execute(self, sql, params=()):
         return self._conn.execute(sql, params)
 
+    def executemany(self, sql, seq_of_params):
+        return self._conn.executemany(sql, seq_of_params)
+
     def commit(self):
         self._conn.commit()
 

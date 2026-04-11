@@ -86,6 +86,9 @@ class _PersistentConn:
     def execute(self, sql, params=()):
         return self._conn.execute(sql, params)
 
+    def executemany(self, sql, seq_of_params):
+        return self._conn.executemany(sql, seq_of_params)
+
     def commit(self):
         self._conn.commit()
 
@@ -852,6 +855,132 @@ def test_queue_backed_ppo_job_runner_marks_job_done(monkeypatch):
     progress_row = pconn.execute("SELECT progress_json FROM training_jobs WHERE id=?;", (job_id,)).fetchone()
     assert progress_row is not None
     assert '"pct": 100' in str(progress_row["progress_json"])
+
+
+def test_api_can_cancel_pending_ppo_job(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    cancel_resp = client.post(f"/training/jobs/{job_id}/cancel")
+    assert cancel_resp.status_code == 200
+    job = cancel_resp.json()["job"]
+    assert job["status"] == "cancelled"
+
+    queue_row = pconn.execute(
+        "SELECT status, result_json FROM job_queue WHERE job_type='training_ppo' ORDER BY id DESC LIMIT 1;"
+    ).fetchone()
+    assert queue_row is not None
+    assert queue_row["status"] == "completed"
+    assert '"cancelled"' in str(queue_row["result_json"])
+
+
+def test_api_delete_ppo_job_removes_training_queue_rows(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    delete_resp = client.delete(f"/training/jobs/{job_id}")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["queue_rows_removed"] == 1
+
+    queue_row = pconn.execute(
+        "SELECT COUNT(*) AS n FROM job_queue WHERE job_type='training_ppo' AND payload_json LIKE ?;",
+        (f'%"training_job_id": {job_id}%',),
+    ).fetchone()
+    assert queue_row is not None
+    assert int(queue_row["n"]) == 0
+
+
+def test_api_can_request_cancel_for_running_ppo_job(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    pconn.execute(
+        "UPDATE training_jobs SET status='running', progress_json=? WHERE id=?;",
+        ('{"pct": 10, "step": 100000, "total": 1000000}', job_id),
+    )
+    pconn.commit()
+
+    cancel_resp = client.post(f"/training/jobs/{job_id}/cancel")
+    assert cancel_resp.status_code == 200
+    job = cancel_resp.json()["job"]
+    assert job["status"] == "running"
+    assert job["progress_json"]["cancel_requested"] is True
+
+
+def test_queue_backed_ppo_job_runner_marks_job_cancelled(monkeypatch):
+    from app.core.job_queue import run_next_queued_job
+
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.training.ppo_queue_job.get_connection", lambda: pconn)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    def _fake_training(**kwargs):
+        pconn.execute(
+            "UPDATE training_jobs SET progress_json=?, error=? WHERE id=?;",
+            ('{"pct": 25, "step": 250000, "total": 1000000, "cancel_requested": true}', "Cancellation requested by user.", job_id),
+        )
+        pconn.commit()
+        kwargs["on_progress"](250_000, 1_000_000)
+        raise AssertionError("training should have been cancelled before continuing")
+
+    monkeypatch.setattr("app.training.ppo_queue_job.run_ppo_training", _fake_training)
+
+    result = run_next_queued_job(pconn, job_type="training_ppo")
+    assert result["status"] == "completed"
+    assert result["result"]["status"] == "cancelled"
+    job = client.get(f"/training/jobs/{job_id}").json()
+    assert job["status"] == "cancelled"
+
+
+def test_queue_backed_ppo_job_runner_completes_deleted_job(monkeypatch):
+    from app.core.job_queue import run_next_queued_job
+
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.training.ppo_queue_job.get_connection", lambda: pconn)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    pconn.execute("DELETE FROM training_jobs WHERE id=?;", (job_id,))
+    pconn.commit()
+
+    result = run_next_queued_job(pconn, job_type="training_ppo")
+    assert result["status"] == "completed"
+    assert result["result"]["status"] == "deleted"
+    assert result["result"]["training_job_id"] == job_id
 
 
 def test_api_rl_champion_served_by_inference(monkeypatch):

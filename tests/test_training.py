@@ -31,6 +31,7 @@ from app.training.job_service import (
     list_jobs,
     update_job,
 )
+from app.system.retention import purge_completed_job_queue
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,9 @@ class _PersistentConn:
 
     def execute(self, sql, params=()):
         return self._conn.execute(sql, params)
+
+    def executemany(self, sql, seq_of_params):
+        return self._conn.executemany(sql, seq_of_params)
 
     def commit(self):
         self._conn.commit()
@@ -253,6 +257,26 @@ def test_train_length_mismatch_raises():
     X, y, _ = _small_xy(10)
     with pytest.raises(ValueError):
         train(X, y[:-1], n_features=len(FEATURE_NAMES))
+
+
+def test_retention_purges_completed_and_failed_job_queue_rows():
+    conn = _make_conn()
+    conn.execute(
+        """
+        INSERT INTO job_queue (job_type, status, payload_json, created_at, completed_at)
+        VALUES
+            ('training_ppo', 'completed', '{}', '2000-01-01 00:00:00', '2000-01-01 00:00:00'),
+            ('training_ppo', 'failed', '{}', '2000-01-01 00:00:00', '2000-01-01 00:00:00'),
+            ('training_ppo', 'queued', '{}', '2000-01-01 00:00:00', NULL);
+        """
+    )
+    conn.commit()
+
+    deleted = purge_completed_job_queue(conn, days=30)
+    assert deleted == 2
+
+    remaining = conn.execute("SELECT status FROM job_queue ORDER BY id ASC;").fetchall()
+    assert [str(row["status"]) for row in remaining] == ["queued"]
 
 
 def test_predict_proba_range():

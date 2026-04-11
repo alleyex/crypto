@@ -70,22 +70,17 @@ def materialize_features(
         return 0
 
     vectors = compute_features_for_candles(candles)
-    count = 0
-    for fv in vectors:
-        connection.execute(
-            _UPSERT_SQL,
-            (
-                symbol,
-                timeframe,
-                int(fv["open_time"]),
-                feature_set,
-                json.dumps(fv, sort_keys=True),
-                utc_now_iso(),
-            ),
-        )
-        count += 1
+    if not vectors:
+        return 0
+
+    now = utc_now_iso()
+    params = [
+        (symbol, timeframe, int(fv["open_time"]), feature_set, json.dumps(fv, sort_keys=True), now)
+        for fv in vectors
+    ]
+    connection.executemany(_UPSERT_SQL, params)
     connection.commit()
-    return count
+    return len(params)
 
 
 def get_features(
