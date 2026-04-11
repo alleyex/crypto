@@ -378,6 +378,43 @@ def _add_fills_symbol_index(connection: DBConnection) -> None:
     )
 
 
+def _add_job_queue_batch_id_column(connection: DBConnection) -> None:
+    """Promote batch_id from inside payload_json to a dedicated indexed column.
+
+    This replaces the LIKE '%"batch_id": "..."% ' full-scan pattern used in
+    fail_batch_jobs() and run_next_pipeline_batch() with a direct equality
+    lookup on an indexed column.
+    """
+    if table_exists(connection, "job_queue") and "batch_id" not in get_table_columns(connection, "job_queue"):
+        connection.execute("ALTER TABLE job_queue ADD COLUMN batch_id TEXT;")
+    # Backfill existing rows from payload_json so historical jobs remain queryable.
+    # Use a parameterised LIKE so the % characters are not misinterpreted as
+    # psycopg format-string placeholders.
+    backend = get_backend_name(connection)
+    if backend == "postgres":
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET batch_id = payload_json::json->>'batch_id'
+            WHERE batch_id IS NULL
+              AND payload_json IS NOT NULL
+              AND payload_json LIKE ?;
+            """,
+            ("%batch_id%",),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET batch_id = json_extract(payload_json, '$.batch_id')
+            WHERE batch_id IS NULL AND payload_json IS NOT NULL;
+            """
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_queue_batch_id ON job_queue (batch_id);"
+    )
+
+
 def _create_portfolio_config_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -1414,6 +1451,7 @@ MIGRATIONS: list[Migration] = [
     ("059_add_risk_configs_stop_loss_pct", _add_risk_configs_stop_loss_pct),
     ("060_add_signals_lookup_index", _add_signals_lookup_index),
     ("061_add_fills_symbol_index", _add_fills_symbol_index),
+    ("062_add_job_queue_batch_id_column", _add_job_queue_batch_id_column),
 ]
 
 

@@ -35,8 +35,9 @@ INSERT INTO job_queue (
     result_json,
     error_message,
     depends_on_job_id,
+    batch_id,
     created_at
-) VALUES (?, 'queued', ?, NULL, NULL, ?, ?);
+) VALUES (?, 'queued', ?, NULL, NULL, ?, ?, ?);
 """
 
 
@@ -87,6 +88,7 @@ def enqueue_job(
     job_type: str,
     payload: Optional[dict[str, Any]] = None,
     depends_on_job_id: Optional[int] = None,
+    batch_id: Optional[str] = None,
 ) -> int:
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unsupported job type: {job_type}")
@@ -95,7 +97,7 @@ def enqueue_job(
     job_id = insert_and_get_rowid(
         connection,
         INSERT_JOB_SQL,
-        (job_type, _serialize_payload(normalized_payload), depends_on_job_id, utc_now_iso()),
+        (job_type, _serialize_payload(normalized_payload), depends_on_job_id, batch_id, utc_now_iso()),
     )
     connection.commit()
     return job_id
@@ -121,7 +123,7 @@ def enqueue_pipeline_jobs(
     jobs: list[dict[str, Any]] = []
     prev_job_id: Optional[int] = None
     for job_type in PIPELINE_QUEUE_JOB_TYPES:
-        job_id = enqueue_job(connection, job_type, payload=job_payload or None, depends_on_job_id=prev_job_id)
+        job_id = enqueue_job(connection, job_type, payload=job_payload or None, depends_on_job_id=prev_job_id, batch_id=batch_id)
         jobs.append(
             {
                 "batch_id": batch_id,
@@ -347,26 +349,33 @@ def fail_batch_jobs(
     result: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     ensure_table(connection)
+    # Single UPDATE for all matching jobs — no per-row round-trips.
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET status = 'failed',
+            result_json = ?,
+            error_message = ?,
+            completed_at = ?
+        WHERE batch_id = ?
+          AND status IN ('queued', 'leased');
+        """,
+        (_serialize_payload(result), error_message, utc_now_iso(), batch_id),
+    )
+    connection.commit()
+    # Fetch all updated rows in one query.
     rows = fetch_all_as_dicts(
         connection,
         """
-        SELECT id
+        SELECT id, job_type, status, payload_json, result_json, error_message,
+               attempt_count, depends_on_job_id, created_at, started_at, completed_at
         FROM job_queue
-        WHERE
-            status IN ('queued', 'leased')
-            AND payload_json LIKE ?
+        WHERE batch_id = ? AND status = 'failed'
         ORDER BY id ASC;
         """,
-        (f'%"batch_id": "{batch_id}"%',),
+        (batch_id,),
     )
-    failed_jobs: list[dict[str, Any]] = []
-    for row in rows:
-        job_id = int(row["id"])
-        fail_job(connection, job_id, error_message, result=result)
-        failed_job = get_job(connection, job_id)
-        if failed_job is not None:
-            failed_jobs.append(failed_job)
-    return failed_jobs
+    return _normalize_rows(rows)
 
 
 def run_job(
@@ -448,56 +457,69 @@ def _propagate_dependent_job_payload(
     else:
         return
 
+    # Filter by job_type in SQL — eliminates per-row get_job() round-trips.
     rows = fetch_all_as_dicts(
         connection,
         """
         SELECT id, payload_json
         FROM job_queue
-        WHERE depends_on_job_id = ? AND status = 'queued'
+        WHERE depends_on_job_id = ? AND status = 'queued' AND job_type = ?
         ORDER BY id ASC;
         """,
-        (job_id,),
+        (job_id, target_job_type),
     )
+    if not rows:
+        return
+
+    # Parse payload from the row directly and batch all UPDATEs in one call.
+    params = []
     for row in rows:
-        dependent_id = int(row["id"])
-        dependent_job = get_job(connection, dependent_id)
-        if dependent_job is None or str(dependent_job["job_type"]) != target_job_type:
-            continue
-        updated_payload = dict(dependent_job.get("payload") or {})
-        updated_payload.update(propagated_fields)
-        connection.execute(
-            """
-            UPDATE job_queue
-            SET payload_json = ?
-            WHERE id = ?;
-            """,
-            (_serialize_payload(updated_payload), dependent_id),
-        )
+        raw = row.get("payload_json")
+        current_payload = json.loads(raw) if raw else {}
+        current_payload.update(propagated_fields)
+        params.append((_serialize_payload(current_payload), int(row["id"])))
+
+    connection.executemany(
+        "UPDATE job_queue SET payload_json = ? WHERE id = ?;",
+        params,
+    )
     connection.commit()
 
 
 def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
     ensure_table(connection)
-    queued_jobs = list_jobs(connection, limit=200, status="queued")
-    resolved_batch_id = batch_id or next(
-        (
-            str((job.get("payload") or {}).get("batch_id"))
-            for job in reversed(queued_jobs)
-            if (job.get("payload") or {}).get("batch_id")
-        ),
-        None,
-    )
+    if batch_id is None:
+        # Find the oldest queued batch directly — no Python-side filtering of 200 rows.
+        row = connection.execute(
+            """
+            SELECT batch_id FROM job_queue
+            WHERE status = 'queued' AND batch_id IS NOT NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1;
+            """
+        ).fetchone()
+        resolved_batch_id = str(row[0]) if row else None
+    else:
+        resolved_batch_id = batch_id
+
     if not resolved_batch_id:
         return {
             "status": "empty",
             "message": "No queued pipeline batches available." if batch_id is None else f"No queued jobs available for pipeline batch {batch_id}.",
         }
 
-    batch_jobs = [
-        job
-        for job in reversed(queued_jobs)
-        if str((job.get("payload") or {}).get("batch_id") or "") == resolved_batch_id
-    ]
+    batch_jobs_rows = fetch_all_as_dicts(
+        connection,
+        """
+        SELECT id, job_type, status, payload_json, result_json, error_message,
+               attempt_count, depends_on_job_id, created_at, started_at, completed_at
+        FROM job_queue
+        WHERE batch_id = ? AND status = 'queued'
+        ORDER BY id ASC;
+        """,
+        (resolved_batch_id,),
+    )
+    batch_jobs = _normalize_rows(batch_jobs_rows)
     if not batch_jobs:
         return {
             "status": "empty",
@@ -684,6 +706,27 @@ def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) 
             "execution_backend_status": backend_status,
         }
     except Exception as exc:
+        if exc.__class__.__name__ in {"CancelledTrainingJob", "MissingTrainingJob"}:
+            payload = (
+                exc.to_payload()
+                if hasattr(exc, "to_payload") and callable(getattr(exc, "to_payload"))
+                else {
+                    "status": "cancelled",
+                    "training_job_id": ((leased_job.get("payload") or {}).get("training_job_id")),
+                }
+            )
+            result = {
+                **payload,
+                "execution_backend_status": backend_status,
+            }
+            complete_job(connection, job_id, result=result)
+            completed_job = get_job(connection, job_id)
+            return {
+                "status": "completed",
+                "job": completed_job,
+                "result": result,
+                "execution_backend_status": backend_status,
+            }
         error_detail: dict[str, Any] = {
             "error_type": exc.__class__.__name__,
             "execution_backend_status": backend_status,
@@ -730,24 +773,22 @@ def reclaim_stale_leased_jobs(
     worker are automatically recovered without manual intervention.
     """
     ensure_table(connection)
+    # Push the cutoff comparison into SQL — avoids fetching all leased rows
+    # and filtering them in Python.
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)).isoformat()
     stale_rows = connection.execute(
         """
-        SELECT id, started_at FROM job_queue
+        SELECT id FROM job_queue
         WHERE status = 'leased'
           AND started_at IS NOT NULL
+          AND started_at < ?
         ORDER BY id ASC;
-        """
+        """,
+        (cutoff_iso,),
     ).fetchall()
     if not stale_rows:
         return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)
-    stale_ids = [
-        int(row[0])
-        for row in stale_rows
-        if parse_db_timestamp(row[1]) < cutoff
-    ]
-    if not stale_ids:
-        return 0
+    stale_ids = [int(row[0]) for row in stale_rows]
     placeholders = ", ".join("?" for _ in stale_ids)
     connection.execute(
         f"UPDATE job_queue SET status = 'queued', started_at = NULL WHERE id IN ({placeholders});",
