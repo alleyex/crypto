@@ -12,6 +12,7 @@ from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ LIMIT 1;
 UPSERT_PORTFOLIO_CONFIG_SQL = """
 INSERT INTO portfolio_config
     (id, total_capital, max_strategy_allocation_pct, max_total_exposure_pct, updated_at)
-VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (1, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     total_capital = excluded.total_capital,
     max_strategy_allocation_pct = excluded.max_strategy_allocation_pct,
@@ -172,7 +173,7 @@ def set_portfolio_config(
     )
     connection.execute(
         UPSERT_PORTFOLIO_CONFIG_SQL,
-        (merged.total_capital, merged.max_strategy_allocation_pct, merged.max_total_exposure_pct),
+        (merged.total_capital, merged.max_strategy_allocation_pct, merged.max_total_exposure_pct, utc_now_iso()),
     )
     connection.commit()
     return merged

@@ -4,6 +4,7 @@ from typing import Any, Optional
 from app.core.db import DBConnection
 from app.core.db import get_connection
 from app.core.db import insert_and_get_rowid
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 
 
@@ -26,8 +27,9 @@ INSERT INTO audit_events (
     status,
     source,
     message,
-    payload_json
-) VALUES (?, ?, ?, ?, ?);
+    payload_json,
+    created_at
+) VALUES (?, ?, ?, ?, ?, ?);
 """
 
 
@@ -53,6 +55,7 @@ def insert_event(
             source,
             message,
             json.dumps(payload, ensure_ascii=True, sort_keys=True) if payload is not None else None,
+            utc_now_iso(),
         ),
     )
     connection.commit()

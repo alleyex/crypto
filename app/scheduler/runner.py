@@ -1,11 +1,11 @@
 import time
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Optional
 
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
-from app.pipeline.orderbook_job import run_orderbook_job
 from app.pipeline.risk_job import run_risk_job
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
@@ -35,9 +35,10 @@ DATA_WORKER_LOG_FILE = LOG_DIR / "data-worker.log"
 STRATEGY_WORKER_LOG_FILE = LOG_DIR / "strategy-worker.log"
 EXECUTION_WORKER_LOG_FILE = LOG_DIR / "execution-worker.log"
 RISK_WORKER_LOG_FILE = LOG_DIR / "risk-worker.log"
+TRAINING_WORKER_LOG_FILE = LOG_DIR / "training-worker.log"
 RUNTIME_DIR = Path("runtime")
 STOP_FILE = RUNTIME_DIR / "scheduler.stop"
-SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only")
+SCHEDULER_MODES = ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only", "training-only")
 
 
 def _summarize_result(result: dict) -> str:
@@ -108,6 +109,8 @@ def get_scheduler_log_file(mode: str = "pipeline") -> Path:
         return RISK_WORKER_LOG_FILE
     if mode == "execution-only":
         return EXECUTION_WORKER_LOG_FILE
+    if mode == "training-only":
+        return TRAINING_WORKER_LOG_FILE
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
 
@@ -118,6 +121,7 @@ def get_scheduler_log_files() -> dict[str, Path]:
         "strategy-only": STRATEGY_WORKER_LOG_FILE,
         "risk-only": RISK_WORKER_LOG_FILE,
         "execution-only": EXECUTION_WORKER_LOG_FILE,
+        "training-only": TRAINING_WORKER_LOG_FILE,
     }
 
 
@@ -138,6 +142,8 @@ def _scheduler_component_name(mode: str) -> str:
         return "risk_worker"
     if mode == "execution-only":
         return "execution_worker"
+    if mode == "training-only":
+        return "training_worker"
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
 
@@ -282,6 +288,8 @@ def _run_scheduled_job(
                 job_type = "risk"
             elif mode == "execution-only":
                 job_type = "execution"
+            elif mode == "training-only":
+                job_type = "training_ppo"
             else:
                 raise ValueError(f"Unsupported queue-drain mode: {mode}")
             drain_result = run_next_queued_job(connection, job_type=job_type)
@@ -331,6 +339,9 @@ def _run_scheduled_job(
             elif mode == "execution-only":
                 job_type = "execution"
                 payload = build_job_payload(symbol_names=symbol_names)
+            elif mode == "training-only":
+                job_type = "training_ppo"
+                payload = build_job_payload()
             else:
                 raise ValueError(f"Unsupported queue-dispatch mode: {mode}")
             job_id = enqueue_job(connection, job_type, payload=payload or None)
@@ -356,6 +367,8 @@ def _run_scheduled_job(
             return run_risk_job(connection)
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
+        if mode == "training-only":
+            return {"status": "completed", "steps": [{"step": "drain_queue", "status": "empty", "job_type": "training_ppo"}]}
     finally:
         connection.close()
 
@@ -441,19 +454,20 @@ def _reclaim_stale_leases(pipeline_orchestration: str, queue_drain: bool) -> int
 
 
 def _record_soak_snapshot() -> None:
+    now_utc = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         from app.validation.soak_history import record_soak_validation_snapshot
 
         report = record_soak_validation_snapshot()
         snapshot_line = (
-            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"[{now_utc()}] "
             f"soak_snapshot status={report.get('status', 'unknown')}"
         )
         print(snapshot_line)
         _write_log(snapshot_line, mode="pipeline")
     except Exception as exc:
         error_line = (
-            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"[{now_utc()}] "
             f"soak_snapshot failed: {exc}"
         )
         print(error_line)
@@ -496,6 +510,7 @@ def run_scheduler(
 
     component = _scheduler_component_name(mode)
     run_count = 0
+    now_utc = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     connection = get_connection()
     try:
         run_migrations(connection)
@@ -504,7 +519,7 @@ def run_scheduler(
 
     while True:
         if stop_requested():
-            stopped_at = datetime.now().isoformat(timespec="seconds")
+            stopped_at = now_utc()
             log_line = f"[{stopped_at}] scheduler stopped by flag: {STOP_FILE}"
             print(log_line)
             _write_log(log_line, mode)
@@ -523,22 +538,12 @@ def run_scheduler(
             break
 
         run_count += 1
-        started_at = datetime.now().isoformat(timespec="seconds")
+        started_at = now_utc()
 
         _reclaim_stale_leases(pipeline_orchestration, queue_drain)
 
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
         active_symbol_names = _resolve_active_symbols(mode)
-
-        # Order book collection — runs every loop iteration, independent of strategy
-        try:
-            conn_ob = get_connection()
-            try:
-                run_orderbook_job(conn_ob, symbol_names=active_symbol_names)
-            finally:
-                conn_ob.close()
-        except Exception:
-            pass  # never let orderbook errors crash the scheduler
 
         if not active_strategy_names:
             log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"

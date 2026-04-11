@@ -3,10 +3,12 @@ from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
+from app.core.settings import STOP_LOSS_PCT
 
 
 @dataclass
@@ -15,6 +17,7 @@ class RiskConfig:
     order_qty: float
     max_position_qty: float
     cooldown_seconds: int
+    stop_loss_pct: float
     max_daily_loss: float
 
     def to_dict(self, updated_at: Optional[str] = None) -> dict:
@@ -23,6 +26,7 @@ class RiskConfig:
             "order_qty": self.order_qty,
             "max_position_qty": self.max_position_qty,
             "cooldown_seconds": self.cooldown_seconds,
+            "stop_loss_pct": self.stop_loss_pct,
             "max_daily_loss": self.max_daily_loss,
             "is_default": False,
         }
@@ -32,24 +36,25 @@ class RiskConfig:
 
 
 SELECT_RISK_CONFIG_SQL = """
-SELECT order_qty, max_position_qty, cooldown_seconds, max_daily_loss, updated_at
+SELECT order_qty, max_position_qty, cooldown_seconds, stop_loss_pct, max_daily_loss, updated_at
 FROM risk_configs
 WHERE strategy_name = ?;
 """
 
 SELECT_ALL_RISK_CONFIGS_SQL = """
-SELECT strategy_name, order_qty, max_position_qty, cooldown_seconds, max_daily_loss, updated_at
+SELECT strategy_name, order_qty, max_position_qty, cooldown_seconds, stop_loss_pct, max_daily_loss, updated_at
 FROM risk_configs
 ORDER BY strategy_name;
 """
 
 UPSERT_RISK_CONFIG_SQL = """
-INSERT INTO risk_configs (strategy_name, order_qty, max_position_qty, cooldown_seconds, max_daily_loss, updated_at)
-VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+INSERT INTO risk_configs (strategy_name, order_qty, max_position_qty, cooldown_seconds, stop_loss_pct, max_daily_loss, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (strategy_name) DO UPDATE SET
     order_qty = excluded.order_qty,
     max_position_qty = excluded.max_position_qty,
     cooldown_seconds = excluded.cooldown_seconds,
+    stop_loss_pct = excluded.stop_loss_pct,
     max_daily_loss = excluded.max_daily_loss,
     updated_at = excluded.updated_at;
 """
@@ -63,6 +68,7 @@ def _global_defaults(strategy_name: str) -> RiskConfig:
         order_qty=DEFAULT_ORDER_QTY,
         max_position_qty=MAX_POSITION_QTY,
         cooldown_seconds=COOLDOWN_SECONDS,
+        stop_loss_pct=STOP_LOSS_PCT,
         max_daily_loss=MAX_DAILY_LOSS,
     )
 
@@ -79,7 +85,8 @@ def get_risk_config(connection: DBConnection, strategy_name: str) -> tuple["Risk
         order_qty=float(row[0]),
         max_position_qty=float(row[1]),
         cooldown_seconds=int(row[2]),
-        max_daily_loss=float(row[3]),
+        stop_loss_pct=float(row[3]),
+        max_daily_loss=float(row[4]),
     )
     return cfg, False
 
@@ -90,6 +97,7 @@ def set_risk_config(
     order_qty: Optional[float] = None,
     max_position_qty: Optional[float] = None,
     cooldown_seconds: Optional[int] = None,
+    stop_loss_pct: Optional[float] = None,
     max_daily_loss: Optional[float] = None,
 ) -> RiskConfig:
     """Upsert per-strategy risk config, merging with existing or global defaults."""
@@ -99,11 +107,12 @@ def set_risk_config(
         order_qty=order_qty if order_qty is not None else existing.order_qty,
         max_position_qty=max_position_qty if max_position_qty is not None else existing.max_position_qty,
         cooldown_seconds=cooldown_seconds if cooldown_seconds is not None else existing.cooldown_seconds,
+        stop_loss_pct=stop_loss_pct if stop_loss_pct is not None else existing.stop_loss_pct,
         max_daily_loss=max_daily_loss if max_daily_loss is not None else existing.max_daily_loss,
     )
     connection.execute(
         UPSERT_RISK_CONFIG_SQL,
-        (merged.strategy_name, merged.order_qty, merged.max_position_qty, merged.cooldown_seconds, merged.max_daily_loss),
+        (merged.strategy_name, merged.order_qty, merged.max_position_qty, merged.cooldown_seconds, merged.stop_loss_pct, merged.max_daily_loss, utc_now_iso()),
     )
     connection.commit()
     return merged
@@ -129,8 +138,9 @@ def list_risk_configs(connection: DBConnection) -> list[dict]:
             "order_qty": float(row[1]),
             "max_position_qty": float(row[2]),
             "cooldown_seconds": int(row[3]),
-            "max_daily_loss": float(row[4]),
-            "updated_at": row[5],
+            "stop_loss_pct": float(row[4]),
+            "max_daily_loss": float(row[5]),
+            "updated_at": row[6],
         }
         for row in rows
     ]

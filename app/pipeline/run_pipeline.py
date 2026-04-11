@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from app.core.db import DB_FILE, get_connection
+from app.core.db import get_connection
 from app.core.db import get_database_label
 from app.core.job_queue import run_job
 from app.core.migrations import run_migrations
@@ -169,10 +169,10 @@ def print_pipeline_result(result: Dict[str, Any]) -> None:
                 for symbol_result in symbol_results:
                     print(
                         f"[symbol={symbol_result['symbol']}] "
-                        f"saved_klines={symbol_result['saved_klines']} to {DB_FILE}"
+                        f"saved_klines={symbol_result['saved_klines']}"
                     )
             else:
-                print(f"Saved {step_result['saved_klines']} klines to {DB_FILE}")
+                print(f"Saved {step_result['saved_klines']} klines")
         elif step == "generate_signal":
             if step_result.get("status") == "skipped":
                 print(f"{_step_scope_prefix(step_result)}{step_result['reason']}")

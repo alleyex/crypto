@@ -37,7 +37,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.core.db import DBConnection, fetch_all_as_dicts
+from app.core.db import DBConnection, fetch_all_as_dicts, utc_now_iso
 
 _STATUS_CANDIDATE = "candidate"
 _STATUS_CHAMPION = "champion"
@@ -52,7 +52,7 @@ VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?);
 
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return utc_now_iso()
 
 
 def _version_tag() -> str:

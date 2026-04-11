@@ -280,6 +280,28 @@ def get_all_fills(connection: DBConnection) -> list[dict[str, Any]]:
     return fetch_all_as_dicts(connection, SELECT_ALL_FILLS_SQL)
 
 
+def _fills_by_order_id(fills: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for item in fills:
+        order_id = item.get("order_id")
+        if order_id is None:
+            continue
+        grouped.setdefault(int(order_id), []).append(item)
+    return grouped
+
+
+def _executed_orders(
+    orders: list[dict[str, Any]],
+    fills_by_order_id: dict[int, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    executed: list[dict[str, Any]] = []
+    for item in orders:
+        order_id = int(item["id"])
+        if str(item.get("status") or "").upper() == "FILLED" or fills_by_order_id.get(order_id):
+            executed.append(item)
+    return executed
+
+
 def get_positions(connection: DBConnection, limit: int = 5) -> list[dict[str, Any]]:
     return _fetch_all(connection, SELECT_POSITIONS_SQL, limit)
 
@@ -486,6 +508,7 @@ def get_strategy_activity_summary(
     risk_events = get_risk_events(connection, limit=per_table_limit)
     orders = get_all_orders(connection)
     fills = get_all_fills(connection)
+    fills_by_order_id = _fills_by_order_id(fills)
     closed_trades = get_strategy_closed_trades(
         connection,
         limit=max(len(strategy_names), per_table_limit),
@@ -522,61 +545,50 @@ def get_strategy_activity_summary(
             if latest_activity_candidates
             else None
         )
-        filled_order_count = sum(1 for item in strategy_orders if item["status"] == "FILLED")
-        filled_orders = list(reversed([item for item in strategy_orders if item["status"] == "FILLED"]))
+        executed_orders = _executed_orders(strategy_orders, fills_by_order_id)
+        filled_order_count = len(executed_orders)
+        strategy_closed_trades, strategy_positions = _replay_closed_trades(
+            strategy_orders,
+            fills_by_order_id,
+            strategy_filter=strategy_name,
+        )
 
-        gross_realized_pnl = 0.0
+        gross_realized_pnl = sum(float(item["realized_pnl"]) for item in strategy_closed_trades)
         total_commission = 0.0
         filled_qty_total = 0.0
         buy_fill_count = 0
         sell_fill_count = 0
-        realized_trade_count = 0
-        winning_trade_count = 0
-        losing_trade_count = 0
-        breakeven_trade_count = 0
-        positions_by_symbol: dict[str, dict[str, float]] = {}
+        realized_trade_count = len(strategy_closed_trades)
+        winning_trade_count = sum(1 for item in strategy_closed_trades if float(item["realized_pnl"]) > 0)
+        losing_trade_count = sum(1 for item in strategy_closed_trades if float(item["realized_pnl"]) < 0)
+        breakeven_trade_count = realized_trade_count - winning_trade_count - losing_trade_count
 
-        from app.core.settings import COMMISSION_RATE
-        fills_by_order_id = {f["order_id"]: f for f in fills}
-        for order in filled_orders:
+        for order in executed_orders:
             symbol = order["symbol"]
             qty = float(order["qty"])
             price = float(order["price"])
             filled_qty_total += qty
-            fill_record = fills_by_order_id.get(order["id"])
+            order_fills = fills_by_order_id.get(int(order["id"]), [])
+            fill_record = order_fills[-1] if order_fills else None
             if fill_record and fill_record.get("commission") is not None:
                 c = float(fill_record["commission"])
                 asset = fill_record.get("commission_asset", "")
                 total_commission += c * price if asset != "USDT" else c
             else:
                 total_commission += qty * price * COMMISSION_RATE
-            position = positions_by_symbol.setdefault(symbol, {"qty": 0.0, "cost": 0.0})
-
             if order["side"] == "BUY":
                 buy_fill_count += 1
-                position["qty"] += qty
-                position["cost"] += qty * price
-            elif order["side"] == "SELL" and position["qty"] > 0:
+            elif order["side"] == "SELL":
                 sell_fill_count += 1
-                sell_qty = min(qty, position["qty"])
-                average_cost = position["cost"] / position["qty"]
-                position["qty"] -= sell_qty
-                position["cost"] -= sell_qty * average_cost
-                realized_pnl = (price - average_cost) * sell_qty
-                gross_realized_pnl += realized_pnl
-                realized_trade_count += 1
-                if realized_pnl > 0:
-                    winning_trade_count += 1
-                elif realized_pnl < 0:
-                    losing_trade_count += 1
-                else:
-                    breakeven_trade_count += 1
-
-        net_position_qty = sum(item["qty"] for item in positions_by_symbol.values())
+        net_position_qty = sum(item["qty"] for item in strategy_positions.values())
         open_entry_price = None
-        for pos in positions_by_symbol.values():
-            if pos["qty"] > 0:
-                open_entry_price = pos["cost"] / pos["qty"]
+        open_position_symbol = None
+        open_position_opened_at = None
+        for (_, sym, _timeframe), pos in strategy_positions.items():
+            if abs(pos["qty"]) > 1e-9:
+                open_entry_price = pos["cost"] / abs(pos["qty"])
+                open_position_symbol = sym
+                open_position_opened_at = pos.get("opened_at")
                 break
 
         # Current price from latest candle for this strategy's symbol/timeframe
@@ -609,6 +621,8 @@ def get_strategy_activity_summary(
                 "filled_qty_total": filled_qty_total,
                 "net_position_qty": net_position_qty,
                 "open_entry_price": open_entry_price,
+                "open_position_symbol": open_position_symbol,
+                "open_position_opened_at": open_position_opened_at,
                 "current_price": current_price,
                 "price_symbol": price_symbol,
                 "gross_realized_pnl": gross_realized_pnl,
@@ -660,53 +674,13 @@ def get_strategy_closed_trades(
 ) -> list[dict[str, Any]]:
     orders = get_all_orders(connection)
     fills = get_all_fills(connection)
-    fills_by_order_id = {int(item["order_id"]): item for item in fills}
+    fills_by_order_id = _fills_by_order_id(fills)
     strategy_filter = strategy_name.strip() if strategy_name else None
-    filled_orders = list(reversed([item for item in orders if item["status"] == "FILLED"]))
-    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
-    closed_trades: list[dict[str, Any]] = []
-
-    for order in filled_orders:
-        current_strategy_name = str(order["strategy_name"])
-        if strategy_filter and current_strategy_name != strategy_filter:
-            continue
-        symbol = str(order["symbol"])
-        timeframe = str(order.get("timeframe") or "1m")
-        key = (current_strategy_name, symbol, timeframe)
-        position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
-
-        qty = float(order["qty"])
-        price = float(order["price"])
-        if order["side"] == "BUY":
-            position["qty"] += qty
-            position["cost"] += qty * price
-            continue
-
-        if order["side"] != "SELL" or position["qty"] <= 0:
-            continue
-
-        close_qty = min(qty, position["qty"])
-        average_entry_price = position["cost"] / position["qty"]
-        latest_fill = fills_by_order_id.get(int(order["id"]))
-        realized_pnl = (price - average_entry_price) * close_qty
-        position["qty"] -= close_qty
-        position["cost"] -= close_qty * average_entry_price
-        closed_trades.append(
-            {
-                "strategy_name": current_strategy_name,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "qty": close_qty,
-                "entry_price": average_entry_price,
-                "exit_price": price,
-                "realized_pnl": realized_pnl,
-                "closed_at": latest_fill["created_at"] if latest_fill is not None else order["created_at"],
-                "order_id": order["id"],
-                "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
-            }
-        )
-
-    closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
+    closed_trades, _ = _replay_closed_trades(
+        orders,
+        fills_by_order_id,
+        strategy_filter=strategy_filter,
+    )
     return closed_trades[:limit]
 
 
@@ -716,6 +690,252 @@ def _commission_in_quote(fill_record: Optional[dict[str, Any]], price: float, qt
         asset = str(fill_record.get("commission_asset") or "")
         return commission if asset == "USDT" else commission * price
     return qty * price * COMMISSION_RATE
+
+
+def _report_fill_sort_key(fill_record: dict[str, Any]) -> tuple[int, str]:
+    transact_time = fill_record.get("transact_time")
+    if transact_time not in (None, ""):
+        return (int(transact_time), "")
+    return (0, str(fill_record.get("created_at") or ""))
+
+
+def _close_trade_status(realized_pnl: float) -> str:
+    if realized_pnl > 0:
+        return "win"
+    if realized_pnl < 0:
+        return "loss"
+    return "breakeven"
+
+
+def _replay_closed_trades(
+    orders: list[dict[str, Any]],
+    fills_by_order_id: dict[int, list[dict[str, Any]]],
+    *,
+    strategy_filter: Optional[str] = None,
+    symbol_filter: Optional[str] = None,
+    cutoff: Optional[datetime] = None,
+    include_hold_minutes: bool = False,
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str, str], dict[str, Any]]]:
+    allowed_strategy_names = set(list_registered_strategies())
+    filled_orders = list(reversed(_executed_orders(orders, fills_by_order_id)))
+    positions_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    last_entry_at_by_key: dict[tuple[str, str, str], Optional[datetime]] = {}
+    closed_trades: list[dict[str, Any]] = []
+
+    for order in filled_orders:
+        current_strategy_name = str(order["strategy_name"])
+        if current_strategy_name not in allowed_strategy_names:
+            continue
+        if strategy_filter and current_strategy_name != strategy_filter:
+            continue
+
+        symbol = str(order["symbol"])
+        if symbol_filter and symbol != symbol_filter:
+            continue
+
+        timeframe = str(order.get("timeframe") or "1m")
+        key = (current_strategy_name, symbol, timeframe)
+        position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0, "opened_at": None})
+
+        order_fills = fills_by_order_id.get(int(order["id"]), [])
+        fill_record = order_fills[-1] if order_fills else None
+        created_at_raw = fill_record["created_at"] if fill_record is not None else order["created_at"]
+        created_at = parse_db_timestamp(created_at_raw)
+        if cutoff is not None and created_at < cutoff:
+            continue
+
+        qty = float(order["qty"])
+        price = float(order["price"])
+        side = str(order["side"]).upper()
+        current_qty = float(position["qty"])
+
+        if side == "BUY":
+            if current_qty < 0:
+                close_qty = min(qty, abs(current_qty))
+                average_entry_price = position["cost"] / abs(current_qty)
+                realized_pnl = (average_entry_price - price) * close_qty
+                hold_minutes = None
+                if include_hold_minutes:
+                    entry_at = last_entry_at_by_key.get(key)
+                    if entry_at is not None:
+                        hold_minutes = round((created_at - entry_at).total_seconds() / 60, 2)
+                closed_trades.append(
+                    {
+                        "strategy_name": current_strategy_name,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "qty": close_qty,
+                        "entry_price": average_entry_price,
+                        "exit_price": price,
+                        "realized_pnl": realized_pnl,
+                        "closed_at": created_at_raw,
+                        "order_id": order["id"],
+                        "status": _close_trade_status(realized_pnl),
+                        **({"hold_minutes": hold_minutes} if include_hold_minutes else {}),
+                    }
+                )
+                position["qty"] += close_qty
+                position["cost"] -= close_qty * average_entry_price
+                remaining_buy = qty - close_qty
+                if remaining_buy > 1e-9:
+                    position["qty"] += remaining_buy
+                    position["cost"] += remaining_buy * price
+                    position["opened_at"] = created_at_raw
+                    last_entry_at_by_key[key] = created_at
+                elif abs(position["qty"]) < 1e-9:
+                    position["qty"] = 0.0
+                    position["cost"] = 0.0
+                    position["opened_at"] = None
+                    last_entry_at_by_key[key] = None
+                continue
+
+            position["qty"] += qty
+            position["cost"] += qty * price
+            if qty > 0:
+                if abs(current_qty) < 1e-9:
+                    position["opened_at"] = created_at_raw
+                last_entry_at_by_key[key] = created_at
+            continue
+
+        if side != "SELL":
+            continue
+
+        if current_qty > 0:
+            close_qty = min(qty, current_qty)
+            average_entry_price = position["cost"] / current_qty
+            realized_pnl = (price - average_entry_price) * close_qty
+            hold_minutes = None
+            if include_hold_minutes:
+                entry_at = last_entry_at_by_key.get(key)
+                if entry_at is not None:
+                    hold_minutes = round((created_at - entry_at).total_seconds() / 60, 2)
+            closed_trades.append(
+                {
+                    "strategy_name": current_strategy_name,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "qty": close_qty,
+                    "entry_price": average_entry_price,
+                    "exit_price": price,
+                    "realized_pnl": realized_pnl,
+                    "closed_at": created_at_raw,
+                    "order_id": order["id"],
+                    "status": _close_trade_status(realized_pnl),
+                    **({"hold_minutes": hold_minutes} if include_hold_minutes else {}),
+                }
+            )
+            position["qty"] -= close_qty
+            position["cost"] -= close_qty * average_entry_price
+            remaining_sell = qty - close_qty
+            if remaining_sell > 1e-9:
+                position["qty"] -= remaining_sell
+                position["cost"] += remaining_sell * price
+                position["opened_at"] = created_at_raw
+                last_entry_at_by_key[key] = created_at
+            elif abs(position["qty"]) < 1e-9:
+                position["qty"] = 0.0
+                position["cost"] = 0.0
+                position["opened_at"] = None
+                last_entry_at_by_key[key] = None
+            continue
+
+        position["qty"] -= qty
+        position["cost"] += qty * price
+        if qty > 0:
+            if abs(current_qty) < 1e-9:
+                position["opened_at"] = created_at_raw
+            last_entry_at_by_key[key] = created_at
+
+    closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
+    return closed_trades, positions_by_key
+
+
+def _normalize_binance_trade_fill(order_id: int, side: str, trade: dict[str, Any]) -> dict[str, Any]:
+    qty = float(trade.get("qty") or trade.get("executedQty") or 0.0)
+    price = float(trade.get("price") or 0.0)
+    transact_time = int(trade.get("time") or trade.get("transactTime") or 0) or None
+    if transact_time is None:
+        created_at = datetime.now(timezone.utc).isoformat()
+    else:
+        created_at = datetime.fromtimestamp(transact_time / 1000, tz=timezone.utc).isoformat()
+    quote_qty = trade.get("quoteQty")
+    if quote_qty in (None, ""):
+        quote_qty = qty * price
+    else:
+        quote_qty = float(quote_qty)
+    return {
+        "id": None,
+        "order_id": order_id,
+        "symbol": str(trade.get("symbol") or ""),
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "commission": float(trade.get("commission") or 0.0),
+        "commission_asset": str(trade.get("commissionAsset") or ""),
+        "quote_qty": quote_qty,
+        "transact_time": transact_time,
+        "created_at": created_at,
+    }
+
+
+def _fetch_binance_report_fills(
+    orders: list[dict[str, Any]],
+    *,
+    symbol: str,
+    cutoff: datetime,
+) -> list[dict[str, Any]]:
+    relevant_orders = [
+        order for order in orders
+        if order.get("symbol") == symbol
+        and str(order.get("broker_name") or "").lower() == "binance"
+        and order.get("broker_order_id") not in (None, "")
+    ]
+    if not relevant_orders:
+        return []
+
+    broker_order_map = {str(order["broker_order_id"]): order for order in relevant_orders}
+    try:
+        from app.execution.binance_broker import BinanceBrokerClient
+
+        broker_trades = BinanceBrokerClient().get_user_trades(
+            symbol,
+            start_time=int(cutoff.timestamp() * 1000),
+            limit=1000,
+        )
+    except Exception:
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for trade in broker_trades:
+        broker_order_id = str(trade.get("orderId") or "")
+        order = broker_order_map.get(broker_order_id)
+        if order is None:
+            continue
+        side = str(order.get("side") or "").upper()
+        normalized.append(_normalize_binance_trade_fill(int(order["id"]), side, trade))
+    normalized.sort(key=_report_fill_sort_key, reverse=True)
+    return normalized
+
+
+def _merge_report_fills(
+    local_fills: list[dict[str, Any]],
+    broker_fills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not broker_fills:
+        return local_fills
+
+    broker_by_order_id = _fills_by_order_id(broker_fills)
+    merged: list[dict[str, Any]] = []
+    for order_id, fills in broker_by_order_id.items():
+        merged.extend(fills)
+
+    for fill in local_fills:
+        order_id = fill.get("order_id")
+        if order_id is None or int(order_id) not in broker_by_order_id:
+            merged.append(fill)
+
+    merged.sort(key=_report_fill_sort_key, reverse=True)
+    return merged
 
 
 def get_execution_report(
@@ -739,16 +959,19 @@ def get_execution_report(
     )
     queue_jobs = get_job_queue_jobs(connection, limit=200)
 
-    fills_by_order_id = {int(item["order_id"]): item for item in fills if item.get("order_id") is not None}
+    fills_by_order_id = _fills_by_order_id(fills)
     strategy_filter = strategy_name.strip() if strategy_name else None
 
     filtered_orders = [
         item for item in orders
         if item.get("symbol") == symbol
-        and item.get("status") == "FILLED"
+        and (
+            str(item.get("status") or "").upper() == "FILLED"
+            or fills_by_order_id.get(int(item["id"]))
+        )
         and (not strategy_filter or item.get("strategy_name") == strategy_filter)
     ]
-    filtered_fills = [
+    local_filtered_fills = [
         item for item in fills
         if item.get("symbol") == symbol
         and parse_db_timestamp(item["created_at"]) >= cutoff
@@ -757,73 +980,20 @@ def get_execution_report(
             or any(order.get("id") == item.get("order_id") and order.get("strategy_name") == strategy_filter for order in orders)
         )
     ]
+    broker_filtered_fills = _fetch_binance_report_fills(filtered_orders, symbol=symbol, cutoff=cutoff)
+    filtered_fills = _merge_report_fills(local_filtered_fills, broker_filtered_fills)
+    reconciled_fills_by_order_id = _fills_by_order_id(filtered_fills)
+    combined_fills_by_order_id = dict(fills_by_order_id)
+    combined_fills_by_order_id.update(reconciled_fills_by_order_id)
 
-    filled_orders = list(reversed(filtered_orders))
-    positions_by_key: dict[tuple[str, str, str], dict[str, float]] = {}
-    closed_trades: list[dict[str, Any]] = []
-    total_fees = 0.0
-    for order in filled_orders:
-        fill_record = fills_by_order_id.get(int(order["id"]))
-        created_at = parse_db_timestamp(fill_record["created_at"] if fill_record else order["created_at"])
-        if created_at < cutoff:
-            continue
-        current_strategy_name = str(order["strategy_name"])
-        timeframe = str(order.get("timeframe") or "1m")
-        key = (current_strategy_name, symbol, timeframe)
-        position = positions_by_key.setdefault(key, {"qty": 0.0, "cost": 0.0})
-        qty = float(order["qty"])
-        price = float(order["price"])
-        total_fees += _commission_in_quote(fill_record, price, qty)
-
-        if order["side"] == "BUY":
-            position["qty"] += qty
-            position["cost"] += qty * price
-            continue
-
-        if order["side"] != "SELL" or position["qty"] <= 0:
-            continue
-
-        close_qty = min(qty, position["qty"])
-        average_entry_price = position["cost"] / position["qty"]
-        realized_pnl = (price - average_entry_price) * close_qty
-        hold_minutes = None
-        entry_order = next(
-            (
-                earlier
-                for earlier in reversed(filled_orders[:filled_orders.index(order)])
-                if earlier["side"] == "BUY"
-                and earlier["symbol"] == symbol
-                and earlier["strategy_name"] == current_strategy_name
-                and str(earlier.get("timeframe") or "1m") == timeframe
-            ),
-            None,
-        )
-        entry_fill = fills_by_order_id.get(int(entry_order["id"])) if entry_order else None
-        if entry_fill is not None:
-            hold_minutes = round(
-                (parse_db_timestamp(fill_record["created_at"] if fill_record else order["created_at"]) - parse_db_timestamp(entry_fill["created_at"]))
-                .total_seconds() / 60,
-                2,
-            )
-        position["qty"] -= close_qty
-        position["cost"] -= close_qty * average_entry_price
-        closed_trades.append(
-            {
-                "strategy_name": current_strategy_name,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "qty": close_qty,
-                "entry_price": average_entry_price,
-                "exit_price": price,
-                "realized_pnl": realized_pnl,
-                "closed_at": fill_record["created_at"] if fill_record is not None else order["created_at"],
-                "hold_minutes": hold_minutes,
-                "order_id": order["id"],
-                "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
-            }
-        )
-
-    closed_trades.sort(key=lambda item: str(item["closed_at"]), reverse=True)
+    closed_trades, _ = _replay_closed_trades(
+        filtered_orders,
+        combined_fills_by_order_id,
+        strategy_filter=strategy_filter,
+        symbol_filter=symbol,
+        cutoff=cutoff,
+        include_hold_minutes=True,
+    )
     gross_pnl = sum(float(item["realized_pnl"]) for item in closed_trades)
     closed_trade_count = len(closed_trades)
     wins = sum(1 for item in closed_trades if item["realized_pnl"] > 0)
@@ -831,6 +1001,10 @@ def get_execution_report(
     best_trade = max((float(item["realized_pnl"]) for item in closed_trades), default=None)
     worst_trade = min((float(item["realized_pnl"]) for item in closed_trades), default=None)
     notional = sum(float(item["price"]) * float(item["qty"]) for item in filtered_fills)
+    total_fees = sum(
+        _commission_in_quote(fill, float(fill["price"]), float(fill["qty"]))
+        for fill in filtered_fills
+    )
 
     daily_rows: dict[str, dict[str, Any]] = {}
     for fill in filtered_fills:

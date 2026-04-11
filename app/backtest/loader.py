@@ -1,9 +1,9 @@
 """Load historical candles from the DB for use with run_backtest()."""
 
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.db import DBConnection
+from app.core.db import parse_db_timestamp
 
 
 _SELECT_CANDLES_SQL = """
@@ -19,13 +19,7 @@ ORDER BY open_time ASC
 
 def _iso_to_epoch_ms(iso: str) -> int:
     """Parse an ISO date/datetime string (UTC) to epoch milliseconds."""
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(iso, fmt).replace(tzinfo=timezone.utc)
-            return int(dt.timestamp() * 1000)
-        except ValueError:
-            continue
-    raise ValueError(f"Cannot parse date string: {iso!r}")
+    return int(parse_db_timestamp(iso).timestamp() * 1000)
 
 
 def load_candles_from_db(

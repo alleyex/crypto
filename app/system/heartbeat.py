@@ -5,6 +5,7 @@ from typing import Optional
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
 from app.core.db import get_connection
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 
 
@@ -26,12 +27,12 @@ INSERT INTO runtime_heartbeats (
     message,
     payload_json,
     last_seen_at
-) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(component) DO UPDATE SET
     status = excluded.status,
     message = excluded.message,
     payload_json = excluded.payload_json,
-    last_seen_at = CURRENT_TIMESTAMP;
+    last_seen_at = excluded.last_seen_at;
 """
 
 
@@ -54,6 +55,7 @@ def upsert_heartbeat(
             status,
             message,
             json.dumps(payload, ensure_ascii=True, sort_keys=True) if payload is not None else None,
+            utc_now_iso(),
         ),
     )
     connection.commit()

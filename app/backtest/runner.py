@@ -153,7 +153,7 @@ def run_backtest(
     Parameters
     ----------
     symbol:           Trading pair, e.g. "BTCUSDT".
-    strategy_name:    Key from STRATEGY_REGISTRY, e.g. "ma_cross".
+    strategy_name:    Key from STRATEGY_REGISTRY, e.g. "ppo".
     candles:          List of dicts with keys: open_time (epoch ms), open, high,
                       low, close, volume (optional), close_time (optional).
                       Must be provided in any order — sorted internally.

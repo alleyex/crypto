@@ -7,6 +7,8 @@ from typing import Optional
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
 from app.core.db import insert_and_get_rowid
+from app.core.db import parse_db_timestamp
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_backend_status
@@ -17,9 +19,10 @@ from app.pipeline.risk_job import run_risk_job
 from app.pipeline.runtime_summary import record_pipeline_runtime
 from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
+from app.training.ppo_queue_job import run_ppo_training_job
 
 
-JOB_TYPES = ("market_data", "strategy", "risk", "execution")
+JOB_TYPES = ("market_data", "strategy", "risk", "execution", "training_ppo")
 JOB_STATUSES = ("queued", "leased", "completed", "failed")
 PIPELINE_QUEUE_JOB_TYPES = ("market_data", "strategy", "risk", "execution")
 
@@ -31,8 +34,9 @@ INSERT INTO job_queue (
     payload_json,
     result_json,
     error_message,
-    depends_on_job_id
-) VALUES (?, 'queued', ?, NULL, NULL, ?);
+    depends_on_job_id,
+    created_at
+) VALUES (?, 'queued', ?, NULL, NULL, ?, ?);
 """
 
 
@@ -91,7 +95,7 @@ def enqueue_job(
     job_id = insert_and_get_rowid(
         connection,
         INSERT_JOB_SQL,
-        (job_type, _serialize_payload(normalized_payload), depends_on_job_id),
+        (job_type, _serialize_payload(normalized_payload), depends_on_job_id, utc_now_iso()),
     )
     connection.commit()
     return job_id
@@ -234,10 +238,10 @@ def lease_next_job(connection: DBConnection, job_type: Optional[str] = None) -> 
         SET
             status = 'leased',
             attempt_count = attempt_count + 1,
-            started_at = CURRENT_TIMESTAMP
+            started_at = ?
         WHERE id = ?;
         """,
-        (job_id,),
+        (utc_now_iso(), job_id),
     )
     connection.commit()
     return get_job(connection, job_id)
@@ -251,10 +255,10 @@ def lease_job_by_id(connection: DBConnection, job_id: int) -> Optional[dict[str,
         SET
             status = 'leased',
             attempt_count = attempt_count + 1,
-            started_at = CURRENT_TIMESTAMP
+            started_at = ?
         WHERE id = ? AND status = 'queued';
         """,
-        (job_id,),
+        (utc_now_iso(), job_id),
     )
     connection.commit()
     job = get_job(connection, job_id)
@@ -276,10 +280,10 @@ def complete_job(
             status = 'completed',
             result_json = ?,
             error_message = NULL,
-            completed_at = CURRENT_TIMESTAMP
+            completed_at = ?
         WHERE id = ?;
         """,
-        (_serialize_payload(result), job_id),
+        (_serialize_payload(result), utc_now_iso(), job_id),
     )
     connection.commit()
     _propagate_dependent_job_payload(connection, job_id, result=result)
@@ -299,10 +303,10 @@ def fail_job(
             status = 'failed',
             result_json = ?,
             error_message = ?,
-            completed_at = CURRENT_TIMESTAMP
+            completed_at = ?
         WHERE id = ?;
         """,
-        (_serialize_payload(result), error_message, job_id),
+        (_serialize_payload(result), error_message, utc_now_iso(), job_id),
     )
     connection.commit()
 
@@ -407,6 +411,11 @@ def run_job(
             risk_event_ids=normalized_risk_event_ids,
             symbol_names=symbol_names,
         )
+    if job_type == "training_ppo":
+        training_job_id = normalized_payload.get("training_job_id")
+        if training_job_id is None:
+            raise ValueError("training_ppo job requires training_job_id.")
+        return run_ppo_training_job(int(training_job_id))
 
     raise ValueError(f"Unsupported job type: {job_type}")
 
@@ -721,20 +730,24 @@ def reclaim_stale_leased_jobs(
     worker are automatically recovered without manual intervention.
     """
     ensure_table(connection)
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)
-    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     stale_rows = connection.execute(
         """
-        SELECT id FROM job_queue
+        SELECT id, started_at FROM job_queue
         WHERE status = 'leased'
           AND started_at IS NOT NULL
-          AND started_at < ?;
-        """,
-        (cutoff_str,),
+        ORDER BY id ASC;
+        """
     ).fetchall()
     if not stale_rows:
         return 0
-    stale_ids = [int(row[0]) for row in stale_rows]
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)
+    stale_ids = [
+        int(row[0])
+        for row in stale_rows
+        if parse_db_timestamp(row[1]) < cutoff
+    ]
+    if not stale_ids:
+        return 0
     placeholders = ", ".join("?" for _ in stale_ids)
     connection.execute(
         f"UPDATE job_queue SET status = 'queued', started_at = NULL WHERE id IN ({placeholders});",

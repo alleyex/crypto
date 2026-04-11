@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union
 from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 from app.data.candles_service import get_latest_close
 from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
@@ -83,8 +84,9 @@ INSERT INTO orders (
     side,
     qty,
     price,
-    status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    status,
+    created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -98,8 +100,9 @@ INSERT INTO fills (
     commission,
     commission_asset,
     quote_qty,
-    transact_time
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    transact_time,
+    created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -171,12 +174,13 @@ def execute_risk_event_id(
             order_qty,
             latest_close,
             "FILLED",
+            utc_now_iso(),
         ),
     )
     insert_and_get_rowid(
         connection,
         INSERT_FILL_SQL,
-        (order_id, symbol, signal_type, order_qty, latest_close, None, None, None, None),
+        (order_id, symbol, signal_type, order_qty, latest_close, None, None, None, None, utc_now_iso()),
     )
     # Keep persisted daily realized PnL in sync with newly written fills.
     rebuild_daily_realized_pnl(connection)

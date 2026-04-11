@@ -2,16 +2,18 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from app.audit.service import insert_event
-from app.audit.service import log_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.core.db import parse_db_timestamp
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
+from app.core.settings import BINANCE_FUTURES
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
 from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
+from app.execution.runtime import read_configured_execution_backend
 from app.portfolio.daily_pnl_service import get_daily_realized_pnl
 from app.portfolio.portfolio_service import check_portfolio_limits
 from app.risk.risk_config import get_risk_config
@@ -107,8 +109,9 @@ INSERT INTO risk_events (
     strategy_name,
     signal_type,
     decision,
-    reason
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+    reason,
+    created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -134,6 +137,39 @@ def _get_pending_approved_buy_qty(
     return count * order_qty
 
 
+def _binance_futures_position_mode_enabled() -> bool:
+    return read_configured_execution_backend() == "binance" and BINANCE_FUTURES
+
+
+def _get_exchange_position_qty(symbol: str) -> Optional[float]:
+    if not _binance_futures_position_mode_enabled():
+        return None
+    try:
+        from app.execution.binance_broker import BinanceBrokerClient
+
+        positions = BinanceBrokerClient().get_positions(symbol=symbol, include_flat=True)
+        if not positions:
+            return 0.0
+        return float(positions[0].get("qty") or 0.0)
+    except Exception:
+        return None
+
+
+def _get_strategy_target_position(
+    strategy_name: str,
+    symbol: str,
+    timeframe: str,
+) -> Optional[int]:
+    if strategy_name != "ppo":
+        return None
+    try:
+        from app.strategy.ppo_strategy import get_runtime_target_position
+
+        return get_runtime_target_position(symbol, timeframe)
+    except Exception:
+        return None
+
+
 def _evaluate_signal_row(
     connection: DBConnection,
     signal_row,
@@ -143,6 +179,7 @@ def _evaluate_signal_row(
     max_daily_loss: float,
 ) -> Dict[str, Union[int, str]]:
     signal_id, symbol, timeframe, strategy_name, signal_type = signal_row
+    target_position = _get_strategy_target_position(strategy_name, symbol, timeframe)
 
     daily_realized_pnl: Optional[float] = None
     total_realized_pnl: Optional[float] = None
@@ -158,6 +195,9 @@ def _evaluate_signal_row(
     else:
         position_row = connection.execute(SELECT_POSITION_SQL, (symbol,)).fetchone()
         current_qty = float(position_row[0]) if position_row is not None else 0.0
+        exchange_position_qty = _get_exchange_position_qty(symbol)
+        if exchange_position_qty is not None:
+            current_qty = exchange_position_qty
         total_realized_pnl = float(position_row[1]) if position_row is not None else 0.0
         daily_realized_pnl = get_daily_realized_pnl(connection, symbol)
 
@@ -204,10 +244,17 @@ def _evaluate_signal_row(
                 if fill_row is not None:
                     latest_fill_at = parse_db_timestamp(fill_row[0])
 
-            pending_qty = _get_pending_approved_buy_qty(connection, symbol, order_qty)
+            supports_futures_target_positions = (
+                _binance_futures_position_mode_enabled()
+                and target_position is not None
+            )
+            pending_qty = 0.0 if supports_futures_target_positions else _get_pending_approved_buy_qty(connection, symbol, order_qty)
             effective_buy_qty = current_qty + pending_qty
+            has_existing_position = abs(current_qty) > 1e-9
 
-            if latest_fill_at is not None and signal_type != "SELL":
+            if latest_fill_at is not None and signal_type != "SELL" and not (
+                supports_futures_target_positions and has_existing_position
+            ):
                 cooldown_elapsed = (datetime.now(timezone.utc) - latest_fill_at).total_seconds()
                 if cooldown_elapsed < cooldown_seconds:
                     decision = "REJECTED"
@@ -219,22 +266,23 @@ def _evaluate_signal_row(
                     decision, reason = _apply_position_and_duplicate_rules(
                         connection, signal_id, symbol, timeframe, strategy_name,
                         signal_type, current_qty, effective_buy_qty, order_qty,
-                        max_position_qty, pending_qty,
+                        max_position_qty, pending_qty, target_position=target_position,
                     )
             else:
                 decision, reason = _apply_position_and_duplicate_rules(
                     connection, signal_id, symbol, timeframe, strategy_name,
                     signal_type, current_qty, effective_buy_qty, order_qty,
-                    max_position_qty, pending_qty,
+                    max_position_qty, pending_qty, target_position=target_position,
                 )
 
     risk_event_id = insert_and_get_rowid(
         connection,
         INSERT_RISK_EVENT_SQL,
-        (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason),
+        (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, utc_now_iso()),
     )
     connection.commit()
-    log_event(
+    insert_event(
+        connection,
         event_type="risk_evaluation",
         status=str(decision).lower(),
         source="risk_service",
@@ -274,13 +322,23 @@ def _apply_position_and_duplicate_rules(
     order_qty: float,
     max_position_qty: float,
     pending_qty: float,
+    target_position: Optional[int] = None,
 ) -> tuple:
     """Apply position-limit and duplicate-signal rules. Returns (decision, reason)."""
+    if _binance_futures_position_mode_enabled() and target_position in (-1, 0, 1):
+        target_qty = float(order_qty) * float(target_position)
+        if abs(target_qty) > max_position_qty:
+            return "REJECTED", f"Max position exceeded: target={target_qty}, limit={max_position_qty}."
+        if abs(target_qty - current_qty) <= 1e-9:
+            return "REJECTED", "Position already matches target."
+    else:
+        target_qty = None
+
     if signal_type == "BUY" and effective_buy_qty + order_qty > max_position_qty:
         return "REJECTED", f"Max position exceeded: current={current_qty}, pending={pending_qty}, limit={max_position_qty}."
     if signal_type == "BUY" and effective_buy_qty > 0:
         return "REJECTED", f"Existing long position already open (pending_qty={pending_qty})."
-    if signal_type == "SELL" and current_qty <= 0:
+    if signal_type == "SELL" and current_qty <= 0 and target_qty is None:
         return "REJECTED", "No position available to sell."
     previous_signal = connection.execute(
         SELECT_PREVIOUS_SIGNAL_SQL,
@@ -288,7 +346,9 @@ def _apply_position_and_duplicate_rules(
     ).fetchone()
     # Skip duplicate check for BUY when flat — PPO may emit BUY repeatedly until filled
     if previous_signal and previous_signal[0] == signal_type:
-        if not (signal_type == "BUY" and current_qty == 0):
+        if target_qty is not None and abs(target_qty - current_qty) > 1e-9:
+            pass
+        elif not (signal_type == "BUY" and current_qty == 0):
             return "REJECTED", "Duplicate signal type."
     if signal_type == "BUY":
         approved, portfolio_reason = check_portfolio_limits(connection, strategy_name, symbol, order_qty)

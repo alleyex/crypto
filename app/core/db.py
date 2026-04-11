@@ -1,25 +1,18 @@
 import importlib
-import os
-import sqlite3
 import time
 from datetime import datetime
 from datetime import timezone
-from pathlib import Path
 from re import match
 from re import sub
 from typing import Any
 from typing import Optional
 
 from app.core.settings import DATABASE_URL
-from app.core.settings import DB_BACKEND
 from app.core.settings import POSTGRES_CONNECT_RETRIES
 from app.core.settings import POSTGRES_CONNECT_RETRY_DELAY_SECONDS
-from app.core.settings import SQLITE_PATH
 
 DBConnection = Any
 DBError = Exception
-DB_FILE = SQLITE_PATH
-DB_DIR = DB_FILE.parent
 
 
 def _load_psycopg() -> Any:
@@ -107,9 +100,9 @@ class PostgresConnectionAdapter:
 
 
 def get_backend_name(connection: Optional[DBConnection] = None) -> str:
-    if connection is not None and isinstance(connection, PostgresConnectionAdapter):
+    if connection is None or isinstance(connection, PostgresConnectionAdapter):
         return "postgres"
-    return DB_BACKEND
+    return "sqlite"
 
 
 def _materialize_postgres_cursor(rows: Any, description: Any, lastrowid: Any) -> PostgresCursorAdapter:
@@ -143,96 +136,102 @@ def _table_identifier(table_name: str) -> str:
     return table_name
 
 
-def ensure_storage_dir() -> None:
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def get_connection() -> DBConnection:
-    if DB_BACKEND == "postgres":
-        if not DATABASE_URL:
-            raise RuntimeError("CRYPTO_DATABASE_URL is required when CRYPTO_DB_BACKEND=postgres.")
-        psycopg = _load_psycopg()
-        last_error: Optional[Exception] = None
-        for attempt in range(POSTGRES_CONNECT_RETRIES):
-            try:
-                return PostgresConnectionAdapter(psycopg.connect(DATABASE_URL))
-            except Exception as exc:  # pragma: no cover - exact psycopg error type is backend-specific
-                last_error = exc
-                if attempt == POSTGRES_CONNECT_RETRIES - 1:
-                    break
-                time.sleep(POSTGRES_CONNECT_RETRY_DELAY_SECONDS)
-        raise RuntimeError(
-            "Unable to connect to PostgreSQL after "
-            f"{POSTGRES_CONNECT_RETRIES} attempts: {last_error}"
-        ) from last_error
-
-    if DB_BACKEND != "sqlite":
-        raise RuntimeError(f"Unsupported database backend: {DB_BACKEND}")
-
-    ensure_storage_dir()
-    busy_timeout = int(os.getenv("CRYPTO_SQLITE_BUSY_TIMEOUT_MS", "5000"))
-    conn = sqlite3.connect(DB_FILE, timeout=busy_timeout / 1000)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute(f"PRAGMA busy_timeout = {busy_timeout};")
-    return conn
+    if not DATABASE_URL:
+        raise RuntimeError("CRYPTO_DATABASE_URL must be set.")
+    psycopg = _load_psycopg()
+    last_error: Optional[Exception] = None
+    for attempt in range(POSTGRES_CONNECT_RETRIES):
+        try:
+            return PostgresConnectionAdapter(psycopg.connect(DATABASE_URL))
+        except Exception as exc:  # pragma: no cover
+            last_error = exc
+            if attempt == POSTGRES_CONNECT_RETRIES - 1:
+                break
+            time.sleep(POSTGRES_CONNECT_RETRY_DELAY_SECONDS)
+    raise RuntimeError(
+        f"Unable to connect to PostgreSQL after {POSTGRES_CONNECT_RETRIES} attempts: {last_error}"
+    ) from last_error
 
 
 def list_tables(connection: DBConnection, backend: Optional[str] = None) -> list[str]:
-    backend = backend or get_backend_name(connection)
-    if backend == "postgres":
+    if (backend or get_backend_name(connection)) != "postgres":
         rows = connection.execute(
-            """
-            SELECT tablename
-            FROM pg_catalog.pg_tables
-            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY tablename ASC;
-            """
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name ASC;"
         ).fetchall()
-    else:
-        rows = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC;"
-        ).fetchall()
+        return [str(row[0]) for row in rows]
+    rows = connection.execute(
+        """
+        SELECT tablename
+        FROM pg_catalog.pg_tables
+        WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        ORDER BY tablename ASC;
+        """
+    ).fetchall()
     return [str(row[0]) for row in rows]
 
 
 def table_exists(connection: DBConnection, table_name: str, backend: Optional[str] = None) -> bool:
-    backend = backend or get_backend_name(connection)
-    if backend == "postgres":
+    if (backend or get_backend_name(connection)) != "postgres":
         row = connection.execute(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = %s
-            LIMIT 1;
-            """,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
             (table_name,),
         ).fetchone()
-    else:
-        row = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
-            (table_name,),
-        ).fetchone()
+        return row is not None
+    row = connection.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = %s
+        LIMIT 1;
+        """,
+        (table_name,),
+    ).fetchone()
     return row is not None
 
 
 def get_table_columns(connection: DBConnection, table_name: str, backend: Optional[str] = None) -> set[str]:
-    backend = backend or get_backend_name(connection)
-    if backend == "postgres":
+    if (backend or get_backend_name(connection)) != "postgres":
         rows = connection.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s
-            ORDER BY ordinal_position ASC;
-            """,
-            (table_name,),
+            f"PRAGMA table_info({_table_identifier(table_name)});"
         ).fetchall()
-        return {str(row[0]) for row in rows}
+        return {str(row[1]) for row in rows}
+    rows = connection.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        ORDER BY ordinal_position ASC;
+        """,
+        (table_name,),
+    ).fetchall()
+    return {str(row[0]) for row in rows}
 
-    identifier = _table_identifier(table_name)
-    rows = connection.execute(f"PRAGMA table_info({identifier});").fetchall()
-    return {str(row[1]) for row in rows}
+
+def get_table_column_type(
+    connection: DBConnection,
+    table_name: str,
+    column_name: str,
+    backend: Optional[str] = None,
+) -> Optional[str]:
+    if (backend or get_backend_name(connection)) != "postgres":
+        rows = connection.execute(
+            f"PRAGMA table_info({_table_identifier(table_name)});"
+        ).fetchall()
+        for row in rows:
+            if str(row[1]) == column_name:
+                return str(row[2]).lower()
+        return None
+    row = connection.execute(
+        """
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
+        LIMIT 1;
+        """,
+        (table_name, column_name),
+    ).fetchone()
+    return str(row[0]).lower() if row is not None and row[0] is not None else None
 
 
 def fetch_all_as_dicts(
@@ -244,35 +243,28 @@ def fetch_all_as_dicts(
     rows = cursor.fetchall()
     if not getattr(cursor, "description", None):
         return []
-
     column_names = [str(item[0]) for item in cursor.description]
     return [dict(zip(column_names, row)) for row in rows]
 
 
 def insert_and_get_rowid(connection: DBConnection, query: str, params: tuple[Any, ...] = ()) -> int:
-    if isinstance(connection, PostgresConnectionAdapter):
-        cursor = connection.execute(_inject_returning_id(query), params)
-        row = cursor.fetchone()
-        if row is None:
-            raise RuntimeError("PostgreSQL insert did not return an id.")
-        return int(row[0])
-
-    cursor = connection.execute(query, params)
-    return int(cursor.lastrowid)
+    cursor = connection.execute(_inject_returning_id(query), params)
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("PostgreSQL insert did not return an id.")
+    return int(row[0])
 
 
 def get_database_info() -> dict[str, str]:
-    info = {"backend": DB_BACKEND}
-    if DB_BACKEND == "sqlite":
-        info["sqlite_path"] = str(DB_FILE)
-    if DATABASE_URL:
-        info["database_url"] = DATABASE_URL
-    return info
+    return {"backend": "postgres", "database_url": DATABASE_URL}
 
 
 def get_database_label() -> str:
-    info = get_database_info()
-    return info.get("database_url", info.get("sqlite_path", str(DB_FILE)))
+    return DATABASE_URL
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def parse_db_timestamp(value: Any) -> datetime:

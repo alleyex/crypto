@@ -16,8 +16,8 @@ from typing import Any, Dict, List
 from app.core.db import DBConnection, parse_db_timestamp, table_exists
 
 
-def _cutoff_timestamp(period_hours: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(hours=period_hours)).strftime("%Y-%m-%d %H:%M:%S")
+def _cutoff_timestamp(period_hours: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(hours=period_hours)
 
 
 def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:

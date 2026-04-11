@@ -8,6 +8,7 @@ from app.core.db import parse_db_timestamp
 from app.core.db import table_exists
 from app.core.settings import SOAK_ACTIVITY_STALENESS_SECONDS
 from app.scheduler.control import read_scheduler_log
+from app.strategy.registry import list_registered_strategies
 from app.system.heartbeat import get_heartbeats
 from app.validation.soak_history import build_soak_history_summary
 
@@ -105,6 +106,7 @@ def _scheduler_log_summary(lines: list[str]) -> dict[str, Any]:
 
 def _signal_quality_check(connection: DBConnection) -> dict[str, Any]:
     """Analyse signal / risk / fill pipeline quality for soak reporting."""
+    allowed_strategy_names = set(list_registered_strategies())
     empty: dict[str, Any] = {
         "total_signals": 0,
         "buy_count": 0,
@@ -175,6 +177,8 @@ def _signal_quality_check(connection: DBConnection) -> dict[str, Any]:
         "SELECT strategy_name, signal_type, COUNT(*) FROM signals GROUP BY strategy_name, signal_type;"
     ).fetchall()
     for strategy_name, signal_type, cnt in strat_rows:
+        if strategy_name not in allowed_strategy_names:
+            continue
         if strategy_name not in by_strategy:
             by_strategy[strategy_name] = {"signals": 0, "buy": 0, "sell": 0, "hold": 0, "approved": 0, "filled": 0}
         by_strategy[strategy_name]["signals"] += int(cnt)
@@ -187,7 +191,7 @@ def _signal_quality_check(connection: DBConnection) -> dict[str, Any]:
             "SELECT strategy_name, COUNT(*) FROM risk_events WHERE decision = 'APPROVED' GROUP BY strategy_name;"
         ).fetchall()
         for strategy_name, cnt in appr_rows:
-            if strategy_name in by_strategy:
+            if strategy_name in allowed_strategy_names and strategy_name in by_strategy:
                 by_strategy[strategy_name]["approved"] = int(cnt)
 
     if table_exists(connection, "fills") and table_exists(connection, "orders"):
@@ -200,7 +204,7 @@ def _signal_quality_check(connection: DBConnection) -> dict[str, Any]:
             """
         ).fetchall()
         for strategy_name, cnt in fill_rows:
-            if strategy_name in by_strategy:
+            if strategy_name in allowed_strategy_names and strategy_name in by_strategy:
                 by_strategy[strategy_name]["filled"] = int(cnt)
 
     return {

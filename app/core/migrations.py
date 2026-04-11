@@ -1,22 +1,14 @@
-from typing import Callable
+from typing import Callable, Optional
 
 from app.core.db import DBConnection
 from app.core.db import get_backend_name
+from app.core.db import get_table_column_type
 from app.core.db import get_table_columns
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 
 
 Migration = tuple[str, Callable[[DBConnection], None]]
-
-
-CREATE_SCHEMA_MIGRATIONS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version TEXT PRIMARY KEY,
-    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
-POSTGRES_MIGRATION_LOCK_ID = 8_455_771_239
 
 
 def _auto_id_column_sql(backend: str) -> str:
@@ -29,6 +21,70 @@ def _epoch_millis_column_sql(backend: str) -> str:
     if backend == "postgres":
         return "BIGINT"
     return "INTEGER"
+
+
+CREATE_SCHEMA_MIGRATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+"""
+
+POSTGRES_MIGRATION_LOCK_ID = 8_455_771_239
+
+LEGACY_UTC_TIMESTAMP_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("audit_events", ("id",), ("created_at",)),
+    ("runtime_heartbeats", ("component",), ("last_seen_at",)),
+    ("risk_events", ("id",), ("created_at",)),
+    ("orders", ("id",), ("created_at",)),
+    ("fills", ("id",), ("created_at",)),
+    ("positions", ("symbol",), ("updated_at",)),
+    ("daily_realized_pnl", ("symbol", "pnl_date"), ("updated_at",)),
+    ("risk_configs", ("strategy_name",), ("updated_at",)),
+    ("portfolio_config", ("id",), ("updated_at",)),
+    ("signals", ("id",), ("created_at",)),
+    ("pnl_snapshots", ("id",), ("created_at",)),
+    ("training_jobs", ("id",), ("created_at", "started_at", "finished_at")),
+    ("model_registry", ("id",), ("created_at", "promoted_at")),
+    ("schema_migrations", ("version",), ("applied_at",)),
+)
+
+STARTUP_LEGACY_UTC_TIMESTAMP_TABLES: frozenset[str] = frozenset(
+    {
+        "runtime_heartbeats",
+        "risk_events",
+        "orders",
+        "fills",
+        "positions",
+        "daily_realized_pnl",
+        "risk_configs",
+        "portfolio_config",
+        "training_jobs",
+        "model_registry",
+    }
+)
+
+POSTGRES_TEXT_TIMESTAMP_TYPES: frozenset[str] = frozenset({"text", "character varying", "varchar"})
+
+POSTGRES_TEXT_TIMESTAMP_DEFAULT_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("schema_migrations", ("applied_at",)),
+    ("signals", ("created_at",)),
+    ("risk_events", ("created_at",)),
+    ("orders", ("created_at",)),
+    ("fills", ("created_at",)),
+    ("positions", ("updated_at",)),
+    ("pnl_snapshots", ("created_at",)),
+    ("daily_realized_pnl", ("updated_at",)),
+    ("audit_events", ("created_at",)),
+    ("runtime_heartbeats", ("last_seen_at",)),
+    ("job_queue", ("created_at",)),
+    ("risk_configs", ("updated_at",)),
+    ("portfolio_config", ("updated_at",)),
+    ("backtest_runs", ("created_at",)),
+    ("feature_vectors", ("created_at",)),
+    ("training_jobs", ("created_at",)),
+    ("model_registry", ("created_at",)),
+)
 
 
 def _create_candles_table(connection: DBConnection) -> None:
@@ -59,11 +115,10 @@ def _create_candles_table(connection: DBConnection) -> None:
 
 
 def _create_signals_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS signals (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             symbol TEXT NOT NULL,
             timeframe TEXT NOT NULL,
             strategy_name TEXT NOT NULL,
@@ -77,11 +132,10 @@ def _create_signals_table(connection: DBConnection) -> None:
 
 
 def _create_risk_events_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS risk_events (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             signal_id INTEGER,
             symbol TEXT NOT NULL,
             timeframe TEXT NOT NULL,
@@ -196,11 +250,10 @@ def _add_positions_realized_pnl(connection: DBConnection) -> None:
 
 
 def _create_pnl_snapshots_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS pnl_snapshots (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             symbol TEXT NOT NULL,
             qty REAL NOT NULL,
             avg_price REAL NOT NULL,
@@ -227,11 +280,10 @@ def _create_daily_realized_pnl_table(connection: DBConnection) -> None:
 
 
 def _create_audit_events_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS audit_events (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             event_type TEXT NOT NULL,
             status TEXT NOT NULL,
             source TEXT NOT NULL,
@@ -258,11 +310,10 @@ def _create_runtime_heartbeats_table(connection: DBConnection) -> None:
 
 
 def _create_job_queue_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS job_queue (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             job_type TEXT NOT NULL,
             status TEXT NOT NULL,
             payload_json TEXT,
@@ -293,11 +344,17 @@ def _create_risk_configs_table(connection: DBConnection) -> None:
             order_qty NUMERIC(20,8) NOT NULL,
             max_position_qty NUMERIC(20,8) NOT NULL,
             cooldown_seconds INTEGER NOT NULL,
+            stop_loss_pct NUMERIC(20,8) NOT NULL DEFAULT 0,
             max_daily_loss NUMERIC(20,8) NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
     )
+
+
+def _add_risk_configs_stop_loss_pct(connection: DBConnection) -> None:
+    if table_exists(connection, "risk_configs") and "stop_loss_pct" not in get_table_columns(connection, "risk_configs"):
+        connection.execute("ALTER TABLE risk_configs ADD COLUMN stop_loss_pct NUMERIC(20,8) NOT NULL DEFAULT 0;")
 
 
 def _create_portfolio_config_table(connection: DBConnection) -> None:
@@ -315,11 +372,10 @@ def _create_portfolio_config_table(connection: DBConnection) -> None:
 
 
 def _create_backtest_runs_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS backtest_runs (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             run_type TEXT NOT NULL,
             symbol TEXT NOT NULL,
             strategy_name TEXT NOT NULL,
@@ -396,11 +452,10 @@ def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
 
 
 def _create_feature_vectors_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS feature_vectors (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             symbol        TEXT    NOT NULL,
             timeframe     TEXT    NOT NULL,
             open_time     INTEGER NOT NULL,
@@ -418,11 +473,10 @@ def _create_feature_vectors_table(connection: DBConnection) -> None:
 
 
 def _create_training_jobs_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS training_jobs (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             symbol       TEXT    NOT NULL,
             timeframe    TEXT    NOT NULL,
             feature_set  TEXT    NOT NULL DEFAULT 'v1',
@@ -450,11 +504,10 @@ def _add_training_jobs_job_type(connection: DBConnection) -> None:
 
 
 def _create_model_registry_table(connection: DBConnection) -> None:
-    backend = get_backend_name(connection)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS model_registry (
-            {_auto_id_column_sql(backend)},
+            {_auto_id_column_sql(get_backend_name(connection))},
             symbol          TEXT    NOT NULL,
             timeframe       TEXT    NOT NULL,
             feature_set     TEXT    NOT NULL DEFAULT 'v1',
@@ -544,12 +597,10 @@ def _migrate_pnl_snapshots_to_numeric(connection: DBConnection) -> None:
 
     REAL (IEEE 754 float) can accumulate rounding errors for financial values.
     NUMERIC provides exact decimal storage consistent with other financial tables.
-    SQLite does not enforce column types, so this only applies to PostgreSQL.
     """
-    if not table_exists(connection, "pnl_snapshots"):
+    if get_backend_name(connection) != "postgres":
         return
-    backend = get_backend_name(connection)
-    if backend != "postgres":
+    if not table_exists(connection, "pnl_snapshots"):
         return
     for col in ("qty", "avg_price", "market_price", "unrealized_pnl"):
         connection.execute(
@@ -565,68 +616,20 @@ _CANDLES_NUMERIC_COLS = [
 
 
 def _migrate_candles_columns_to_numeric(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
     if not table_exists(connection, "candles"):
         return
-    backend = get_backend_name(connection)
-    if backend == "postgres":
-        for col in _CANDLES_NUMERIC_COLS:
-            connection.execute(
-                f"ALTER TABLE candles ALTER COLUMN {col} TYPE NUMERIC(20,8)"
-                f" USING {col}::NUMERIC;"
-            )
-    else:
-        # SQLite does not support ALTER COLUMN — rebuild the table
-        connection.execute("ALTER TABLE candles RENAME TO candles_old;")
+    for col in _CANDLES_NUMERIC_COLS:
         connection.execute(
-            f"""
-            CREATE TABLE candles (
-                id INTEGER PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                timeframe TEXT NOT NULL,
-                open_time INTEGER NOT NULL,
-                open NUMERIC(20,8) NOT NULL,
-                high NUMERIC(20,8) NOT NULL,
-                low NUMERIC(20,8) NOT NULL,
-                close NUMERIC(20,8) NOT NULL,
-                volume NUMERIC(20,8) NOT NULL,
-                close_time INTEGER NOT NULL,
-                quote_asset_volume NUMERIC(20,8),
-                number_of_trades INTEGER,
-                taker_buy_base_volume NUMERIC(20,8),
-                taker_buy_quote_volume NUMERIC(20,8),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(symbol, timeframe, open_time)
-            );
-            """
+            f"ALTER TABLE candles ALTER COLUMN {col} TYPE NUMERIC(20,8)"
+            f" USING {col}::NUMERIC;"
         )
-        connection.execute(
-            """
-            INSERT INTO candles
-              (id, symbol, timeframe, open_time, open, high, low, close, volume,
-               close_time, quote_asset_volume, number_of_trades,
-               taker_buy_base_volume, taker_buy_quote_volume, created_at)
-            SELECT
-              id, symbol, timeframe, open_time,
-              CAST(open AS REAL), CAST(high AS REAL),
-              CAST(low AS REAL), CAST(close AS REAL), CAST(volume AS REAL),
-              close_time,
-              CAST(quote_asset_volume AS REAL),
-              number_of_trades,
-              CAST(taker_buy_base_volume AS REAL),
-              CAST(taker_buy_quote_volume AS REAL),
-              created_at
-            FROM candles_old;
-            """
-        )
-        connection.execute("DROP TABLE candles_old;")
 
 
 def _migrate_financial_columns_to_numeric(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
-        # SQLite uses type affinity; NUMERIC affinity already works for numbers
-        # stored as REAL. No rebuild needed.
         return
-
     _FINANCIAL_COLS: dict[str, list[str]] = {
         "positions": ["qty", "avg_price", "realized_pnl"],
         "orders": ["qty", "price"],
@@ -658,7 +661,6 @@ def _add_candles_symbol_timeframe_index(connection: DBConnection) -> None:
 def _migrate_timestamps_to_timestamptz(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
-
     _TABLES_WITH_CREATED_AT = [
         "candles",
         "signals",
@@ -738,13 +740,12 @@ def _add_fills_commission(connection: DBConnection) -> None:
 def _create_order_book_snapshots(connection: DBConnection) -> None:
     """Create order_book_snapshots table for 1m order book collection."""
     backend = get_backend_name(connection)
-    epoch_t = _epoch_millis_column_sql(backend)
     connection.execute(
         f"""
         CREATE TABLE IF NOT EXISTS order_book_snapshots (
             {_auto_id_column_sql(backend)},
             symbol        TEXT NOT NULL,
-            timestamp_ms  {epoch_t} NOT NULL,
+            timestamp_ms  {_epoch_millis_column_sql(backend)} NOT NULL,
             bids_json     TEXT,
             asks_json     TEXT,
             ob_imbalance  NUMERIC(10,6),
@@ -844,14 +845,11 @@ def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
 def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> None:
     if not table_exists(connection, "futures_order_book_snapshots"):
         return
-    if get_backend_name(connection) == "postgres":
+    if get_backend_name(connection) != "postgres":
         connection.execute(
             """
             UPDATE futures_order_book_snapshots
-            SET active_seconds = LEAST(
-                60,
-                GREATEST(0, CAST(ROUND(COALESCE(coverage_ratio, 0) * 60) AS INTEGER))
-            )
+            SET active_seconds = MIN(60, MAX(0, ROUND(COALESCE(coverage_ratio, 0) * 60)))
             WHERE COALESCE(active_seconds, 0) = 0
               AND COALESCE(coverage_ratio, 0) > 0
             """
@@ -860,7 +858,10 @@ def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> Non
     connection.execute(
         """
         UPDATE futures_order_book_snapshots
-        SET active_seconds = MIN(60, MAX(0, ROUND(COALESCE(coverage_ratio, 0) * 60)))
+        SET active_seconds = LEAST(
+            60,
+            GREATEST(0, CAST(ROUND(COALESCE(coverage_ratio, 0) * 60) AS INTEGER))
+        )
         WHERE COALESCE(active_seconds, 0) = 0
           AND COALESCE(coverage_ratio, 0) > 0
         """
@@ -1125,6 +1126,211 @@ def _add_missing_performance_indexes(connection: DBConnection) -> None:
         )
 
 
+def _postgres_utc_text_default_sql() -> str:
+    return "(to_char(timezone('UTC', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS') || '+00:00')"
+
+
+def _normalize_legacy_utc_timestamp_strings(connection: DBConnection) -> None:
+    """Normalize legacy UTC strings to ISO 8601 UTC on operational tables.
+
+    This preserves the instant in time and only standardizes representation,
+    for example:
+      2026-04-09 06:05:48        -> 2026-04-09T06:05:48+00:00
+      2026-04-09 06:05:48.123456 -> 2026-04-09T06:05:48.123456+00:00
+    """
+
+    backend = get_backend_name(connection)
+    for table_name, _key_columns, timestamp_columns in LEGACY_UTC_TIMESTAMP_TARGETS:
+        if table_name not in STARTUP_LEGACY_UTC_TIMESTAMP_TABLES:
+            continue
+        if not table_exists(connection, table_name):
+            continue
+        existing_columns = set(get_table_columns(connection, table_name))
+        present_timestamp_columns = [column for column in timestamp_columns if column in existing_columns]
+        if not present_timestamp_columns:
+            continue
+        for column_name in present_timestamp_columns:
+            if backend == "postgres":
+                column_type = get_table_column_type(connection, table_name, column_name, backend=backend) or "text"
+                if column_type not in POSTGRES_TEXT_TIMESTAMP_TYPES:
+                    continue
+                normalized_expression = f"REPLACE({column_name}::text, ' ', 'T')"
+                connection.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET {column_name} = {normalized_expression}
+                    WHERE {column_name} IS NOT NULL
+                      AND {column_name}::text LIKE '____-__-__ __:__:%%+__:%%'
+                      AND {column_name}::text NOT LIKE '%%T%%';
+                    """
+                )
+                normalized_expression = f"REPLACE({column_name}::text, ' ', 'T') || ':00'"
+                connection.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET {column_name} = {normalized_expression}
+                    WHERE {column_name} IS NOT NULL
+                      AND {column_name}::text LIKE '____-__-__ __:__:%%+00'
+                      AND {column_name}::text NOT LIKE '%%T%%';
+                    """
+                )
+                normalized_expression = f"REPLACE({column_name}::text, ' ', 'T') || '+00:00'"
+                connection.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET {column_name} = {normalized_expression}
+                    WHERE {column_name} IS NOT NULL
+                      AND {column_name}::text LIKE '____-__-__ __:__:%%'
+                      AND {column_name}::text NOT LIKE '%%T%%'
+                      AND {column_name}::text NOT LIKE '%%+__:%%'
+                      AND {column_name}::text NOT LIKE '%%+__'
+                      AND {column_name}::text NOT LIKE '%%Z';
+                    """
+                )
+            else:
+                connection.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET {column_name} = REPLACE({column_name}, ' ', 'T') || '+00:00'
+                    WHERE {column_name} IS NOT NULL
+                      AND {column_name} LIKE '____-__-__ __:__:%'
+                      AND {column_name} NOT LIKE '%T%'
+                      AND {column_name} NOT LIKE '%+__:%'
+                      AND {column_name} NOT LIKE '%+__'
+                      AND {column_name} NOT LIKE '%Z';
+                    """
+                )
+
+
+def normalize_legacy_utc_timestamp_strings_offline(
+    connection: DBConnection,
+    *,
+    batch_size: int = 10_000,
+    table_names: Optional[set[str]] = None,
+) -> dict[str, int]:
+    """Normalize legacy UTC timestamps in batches without blocking app startup."""
+
+    normalized_counts: dict[str, int] = {}
+    backend = get_backend_name(connection)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    for table_name, key_columns, timestamp_columns in LEGACY_UTC_TIMESTAMP_TARGETS:
+        if table_names is not None and table_name not in table_names:
+            continue
+        if not table_exists(connection, table_name):
+            continue
+        existing_columns = set(get_table_columns(connection, table_name))
+        present_timestamp_columns = [column for column in timestamp_columns if column in existing_columns]
+        if not present_timestamp_columns:
+            continue
+        for column_name in present_timestamp_columns:
+            updated_total = 0
+            if backend == "postgres":
+                column_type = get_table_column_type(connection, table_name, column_name, backend=backend) or "text"
+                if column_type not in POSTGRES_TEXT_TIMESTAMP_TYPES:
+                    continue
+                key_select = ", ".join(key_columns)
+                order_by = ", ".join(key_columns)
+                join_clause = " AND ".join(f"target.{key} = batch.{key}" for key in key_columns)
+                batch_limit = int(batch_size)
+                normalized_with_colon_offset = "REPLACE(target.{column_name}::text, ' ', 'T')".format(
+                    column_name=column_name
+                )
+                normalized_with_offset = "REPLACE(target.{column_name}::text, ' ', 'T') || ':00'".format(
+                    column_name=column_name
+                )
+                normalized_without_offset = "REPLACE(target.{column_name}::text, ' ', 'T') || '+00:00'".format(
+                    column_name=column_name
+                )
+                while True:
+                    rows = connection.execute(
+                        f"""
+                        WITH batch AS (
+                            SELECT {key_select}
+                            FROM {table_name}
+                            WHERE {column_name} IS NOT NULL
+                              AND (
+                                ({column_name}::text LIKE '____-__-__ __:__:%%+__:%%' AND {column_name}::text NOT LIKE '%%T%%')
+                                OR
+                                ({column_name}::text LIKE '____-__-__ __:__:%%+00' AND {column_name}::text NOT LIKE '%%T%%')
+                                OR (
+                                  {column_name}::text LIKE '____-__-__ __:__:%%'
+                                  AND {column_name}::text NOT LIKE '%%T%%'
+                                  AND {column_name}::text NOT LIKE '%%+__:%%'
+                                  AND {column_name}::text NOT LIKE '%%+__'
+                                  AND {column_name}::text NOT LIKE '%%Z'
+                                )
+                              )
+                            ORDER BY {order_by}
+                            LIMIT {batch_limit}
+                        )
+                        UPDATE {table_name} AS target
+                        SET {column_name} = CASE
+                            WHEN target.{column_name}::text LIKE '____-__-__ __:__:%%+__:%%'
+                              AND target.{column_name}::text NOT LIKE '%%T%%'
+                            THEN {normalized_with_colon_offset}
+                            WHEN target.{column_name}::text LIKE '____-__-__ __:__:%%+00'
+                              AND target.{column_name}::text NOT LIKE '%%T%%'
+                            THEN {normalized_with_offset}
+                            ELSE {normalized_without_offset}
+                        END
+                        FROM batch
+                        WHERE {join_clause}
+                        RETURNING 1;
+                        """
+                    ).fetchall()
+                    updated = len(rows)
+                    updated_total += updated
+                    connection.commit()
+                    if updated < batch_size:
+                        break
+            else:
+                connection.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET {column_name} = REPLACE({column_name}, ' ', 'T') || '+00:00'
+                    WHERE {column_name} IS NOT NULL
+                      AND {column_name} LIKE '____-__-__ __:__:%'
+                      AND {column_name} NOT LIKE '%T%'
+                      AND {column_name} NOT LIKE '%+__:%'
+                      AND {column_name} NOT LIKE '%+__'
+                      AND {column_name} NOT LIKE '%Z';
+                    """
+                )
+                connection.commit()
+                count_row = connection.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {table_name}
+                    WHERE {column_name} LIKE '____-__-__T__:%+00:00';
+                    """
+                ).fetchone()
+                updated_total = int(count_row[0] or 0)
+            if updated_total:
+                normalized_counts[f"{table_name}.{column_name}"] = updated_total
+    return normalized_counts
+
+
+def _set_postgres_text_timestamp_defaults_to_utc_iso(connection: DBConnection) -> None:
+    if get_backend_name(connection) != "postgres":
+        return
+    default_sql = _postgres_utc_text_default_sql()
+    for table_name, column_names in POSTGRES_TEXT_TIMESTAMP_DEFAULT_TABLES:
+        if not table_exists(connection, table_name):
+            continue
+        existing_columns = get_table_columns(connection, table_name)
+        for column_name in column_names:
+            if column_name not in existing_columns:
+                continue
+            column_type = get_table_column_type(connection, table_name, column_name, backend="postgres")
+            if column_type not in POSTGRES_TEXT_TIMESTAMP_TYPES:
+                continue
+            connection.execute(
+                f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {default_sql};"
+            )
+
+
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
     ("002_create_signals_table", _create_signals_table),
@@ -1182,6 +1388,9 @@ MIGRATIONS: list[Migration] = [
     ("054_add_risk_events_signal_id_index", _add_risk_events_signal_id_index),
     ("055_add_risk_events_symbol_strategy_decision_index", _add_risk_events_symbol_strategy_decision_index),
     ("056_migrate_pnl_snapshots_to_numeric", _migrate_pnl_snapshots_to_numeric),
+    ("057_normalize_legacy_utc_timestamp_strings", _normalize_legacy_utc_timestamp_strings),
+    ("058_set_postgres_text_timestamp_defaults_to_utc_iso", _set_postgres_text_timestamp_defaults_to_utc_iso),
+    ("059_add_risk_configs_stop_loss_pct", _add_risk_configs_stop_loss_pct),
 ]
 
 
@@ -1211,15 +1420,17 @@ def _record_applied_version(connection: DBConnection, version: str) -> None:
     if get_backend_name(connection) == "postgres":
         connection.execute(
             """
-            INSERT INTO schema_migrations (version)
-            VALUES (?)
+            INSERT INTO schema_migrations (version, applied_at)
+            VALUES (?, ?)
             ON CONFLICT (version) DO NOTHING;
             """,
-            (version,),
+            (version, utc_now_iso()),
         )
         return
-
-    connection.execute("INSERT INTO schema_migrations (version) VALUES (?);", (version,))
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?);",
+        (version, utc_now_iso()),
+    )
 
 
 def run_migrations(connection: DBConnection) -> list[str]:

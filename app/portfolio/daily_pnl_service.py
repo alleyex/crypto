@@ -4,6 +4,7 @@ from typing import Optional
 from app.core.db import DBConnection
 from app.core.db import parse_db_timestamp
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 
 CREATE_DAILY_REALIZED_PNL_TABLE_SQL = """
@@ -33,10 +34,10 @@ INSERT INTO daily_realized_pnl (
     pnl_date,
     realized_pnl,
     updated_at
-) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?)
 ON CONFLICT(symbol, pnl_date) DO UPDATE SET
     realized_pnl = excluded.realized_pnl,
-    updated_at = CURRENT_TIMESTAMP;
+    updated_at = excluded.updated_at;
 """
 
 
@@ -88,7 +89,7 @@ def rebuild_daily_realized_pnl(connection: DBConnection) -> int:
     for (symbol, pnl_date), realized_pnl in daily_pnl.items():
         connection.execute(
             UPSERT_DAILY_REALIZED_PNL_SQL,
-            (symbol, pnl_date, realized_pnl),
+            (symbol, pnl_date, realized_pnl, utc_now_iso()),
         )
 
     connection.commit()

@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 
 from app.core.db import DBConnection
 from app.core.settings import DEFAULT_STRATEGY_NAME
-from app.strategy.ma_cross import ensure_table as ensure_signals_table
+from app.strategy.signal_service import ensure_table as ensure_signals_table
 from app.strategy.registry import generate_registered_signal
 
 

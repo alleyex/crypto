@@ -1,5 +1,6 @@
 from app.core.db import DBConnection
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 
 
@@ -28,8 +29,9 @@ INSERT INTO pnl_snapshots (
     qty,
     avg_price,
     market_price,
-    unrealized_pnl
-) VALUES (?, ?, ?, ?, ?);
+    unrealized_pnl,
+    created_at
+) VALUES (?, ?, ?, ?, ?, ?);
 """
 
 
@@ -79,7 +81,7 @@ def update_pnl_snapshots(connection: DBConnection) -> int:
         qty = float(qty)
         avg_price = float(avg_price)
         unrealized_pnl = (market_price - avg_price) * qty
-        rows_to_insert.append((symbol, qty, avg_price, market_price, unrealized_pnl))
+        rows_to_insert.append((symbol, qty, avg_price, market_price, unrealized_pnl, utc_now_iso()))
         snapshot_count += 1
 
     if rows_to_insert:

@@ -2,6 +2,18 @@ import os
 from pathlib import Path
 
 
+def _get_database_backend() -> str:
+    explicit = os.getenv("CRYPTO_DB_BACKEND")
+    if explicit is not None and explicit.strip():
+        normalized = explicit.strip().lower()
+        if normalized in {"sqlite", "postgres"}:
+            return normalized
+        return "sqlite"
+    if os.getenv("CRYPTO_DATABASE_URL", "").strip():
+        return "postgres"
+    return "sqlite"
+
+
 def _get_float(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None:
@@ -35,6 +47,7 @@ DEFAULT_ORDER_QTY = _get_float("CRYPTO_ORDER_QTY", 0.001)
 COMMISSION_RATE = _get_float("CRYPTO_COMMISSION_RATE", 0.001)  # 0.1% per side
 MAX_POSITION_QTY = _get_float("CRYPTO_MAX_POSITION_QTY", 0.001)
 COOLDOWN_SECONDS = _get_int("CRYPTO_COOLDOWN_SECONDS", 300)
+STOP_LOSS_PCT = _get_float("CRYPTO_STOP_LOSS_PCT", 0.0)
 CANDLE_STALENESS_SECONDS = _get_int("CRYPTO_CANDLE_STALENESS_SECONDS", 600)
 CANDLE_STALENESS_MULTIPLIER = _get_int("CRYPTO_CANDLE_STALENESS_MULTIPLIER", 3)
 SOAK_ACTIVITY_STALENESS_SECONDS = _get_int("CRYPTO_SOAK_ACTIVITY_STALENESS_SECONDS", 900)
@@ -43,7 +56,7 @@ QUEUE_BATCH_STALENESS_SECONDS = _get_int("CRYPTO_QUEUE_BATCH_STALENESS_SECONDS",
 ORDER_STALENESS_SECONDS = _get_int("CRYPTO_ORDER_STALENESS_SECONDS", 300)
 RISK_REJECTION_STREAK_THRESHOLD = _get_int("CRYPTO_RISK_REJECTION_STREAK_THRESHOLD", 3)
 MAX_DAILY_LOSS = _get_float("CRYPTO_MAX_DAILY_LOSS", 50.0)
-DB_BACKEND = os.getenv("CRYPTO_DB_BACKEND", "sqlite").strip().lower()
+DB_BACKEND = _get_database_backend()
 SQLITE_PATH = Path(os.getenv("CRYPTO_SQLITE_PATH", "storage/market_data.db"))
 DATABASE_URL = os.getenv("CRYPTO_DATABASE_URL", "").strip()
 POSTGRES_CONNECT_RETRIES = _get_int("CRYPTO_POSTGRES_CONNECT_RETRIES", 15)
@@ -51,11 +64,14 @@ POSTGRES_CONNECT_RETRY_DELAY_SECONDS = _get_float("CRYPTO_POSTGRES_CONNECT_RETRY
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_TIMEOUT_SECONDS = _get_int("TELEGRAM_TIMEOUT_SECONDS", 5)
-DEFAULT_STRATEGY_NAME = os.getenv("CRYPTO_STRATEGY_NAME", "ma_cross").strip() or "ma_cross"
+DEFAULT_STRATEGY_NAME = os.getenv("CRYPTO_STRATEGY_NAME", "ppo").strip() or "ppo"
 EXECUTION_BACKEND = os.getenv("CRYPTO_EXECUTION_BACKEND", "paper").strip().lower() or "paper"
 BINANCE_API_KEY = os.getenv("CRYPTO_BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("CRYPTO_BINANCE_API_SECRET", "").strip()
 BINANCE_TESTNET = os.getenv("CRYPTO_BINANCE_TESTNET", "true").strip().lower() != "false"
+BINANCE_FUTURES = os.getenv("CRYPTO_BINANCE_FUTURES", "false").strip().lower() == "true"
+BINANCE_FUTURES_API_KEY = os.getenv("CRYPTO_BINANCE_FUTURES_API_KEY", "").strip()
+BINANCE_FUTURES_API_SECRET = os.getenv("CRYPTO_BINANCE_FUTURES_API_SECRET", "").strip()
 DEFAULT_PIPELINE_ORCHESTRATION = _get_choice(
     "CRYPTO_PIPELINE_ORCHESTRATION",
     "queue_batch",

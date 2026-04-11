@@ -1,5 +1,6 @@
 from app.audit.service import insert_event
 from app.core.db import DBConnection
+from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 
 
@@ -21,12 +22,12 @@ INSERT INTO positions (
     avg_price,
     realized_pnl,
     updated_at
-) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(symbol) DO UPDATE SET
     qty = excluded.qty,
     avg_price = excluded.avg_price,
     realized_pnl = excluded.realized_pnl,
-    updated_at = CURRENT_TIMESTAMP;
+    updated_at = excluded.updated_at;
 """
 
 
@@ -54,19 +55,42 @@ def update_positions(connection: DBConnection) -> int:
         if symbol not in positions:
             positions[symbol] = {"qty": 0.0, "cost": 0.0, "realized_pnl": 0.0}
 
+        current_qty = positions[symbol]["qty"]
+
         if side == "BUY":
-            positions[symbol]["qty"] += qty
-            positions[symbol]["cost"] += qty * price
+            if current_qty >= 0:
+                # Adding to LONG or opening LONG from flat
+                positions[symbol]["qty"] += qty
+                positions[symbol]["cost"] += qty * price
+            else:
+                # Closing SHORT position (current_qty < 0)
+                close_qty = min(qty, abs(current_qty))
+                avg_short_price = positions[symbol]["cost"] / abs(current_qty) if current_qty != 0 else price
+                positions[symbol]["realized_pnl"] += (avg_short_price - price) * close_qty
+                positions[symbol]["qty"] += close_qty
+                positions[symbol]["cost"] = abs(positions[symbol]["qty"]) * avg_short_price if positions[symbol]["qty"] < 0 else 0.0
+                remaining_buy = qty - close_qty
+                if remaining_buy > 1e-9:
+                    # Flip to LONG with remaining qty
+                    positions[symbol]["qty"] += remaining_buy
+                    positions[symbol]["cost"] += remaining_buy * price
         elif side == "SELL":
-            current_qty = positions[symbol]["qty"]
-            current_cost = positions[symbol]["cost"]
             if current_qty <= 0:
-                continue
-            sell_qty = min(qty, current_qty)
-            avg_price = current_cost / current_qty
-            positions[symbol]["qty"] -= sell_qty
-            positions[symbol]["cost"] -= sell_qty * avg_price
-            positions[symbol]["realized_pnl"] += (price - avg_price) * sell_qty
+                # Adding to SHORT or opening SHORT from flat
+                positions[symbol]["qty"] -= qty
+                positions[symbol]["cost"] += qty * price  # cost stored as positive notional
+            else:
+                # Closing LONG position
+                close_qty = min(qty, current_qty)
+                avg_price = positions[symbol]["cost"] / current_qty
+                positions[symbol]["realized_pnl"] += (price - avg_price) * close_qty
+                positions[symbol]["qty"] -= close_qty
+                positions[symbol]["cost"] -= close_qty * avg_price
+                remaining_sell = qty - close_qty
+                if remaining_sell > 1e-9:
+                    # Flip to SHORT with remaining qty
+                    positions[symbol]["qty"] -= remaining_sell
+                    positions[symbol]["cost"] += remaining_sell * price
 
     # Read existing positions before overwriting so we can detect state transitions.
     existing: dict[str, float] = {}
@@ -76,16 +100,17 @@ def update_positions(connection: DBConnection) -> int:
     for symbol, position in positions.items():
         qty = position["qty"]
         realized_pnl = position["realized_pnl"]
-        if qty <= 0:
+        cost = position["cost"]
+        if abs(qty) < 1e-9:
             avg_price = 0.0
             qty = 0.0
         else:
-            avg_price = position["cost"] / qty
-        connection.execute(UPSERT_POSITION_SQL, (symbol, qty, avg_price, realized_pnl))
+            avg_price = cost / abs(qty) if qty != 0 else 0.0
+        connection.execute(UPSERT_POSITION_SQL, (symbol, qty, avg_price, realized_pnl, utc_now_iso()))
 
         # Emit audit event when position opens or closes.
         old_qty = existing.get(symbol, 0.0)
-        if old_qty <= 0 and qty > 0:
+        if abs(old_qty) < 1e-9 and abs(qty) > 1e-9:
             insert_event(
                 connection,
                 event_type="position",
@@ -94,7 +119,7 @@ def update_positions(connection: DBConnection) -> int:
                 message=f"Position opened for {symbol}: qty={qty}, avg_price={round(avg_price, 4)}.",
                 payload={"symbol": symbol, "qty": qty, "avg_price": round(avg_price, 4)},
             )
-        elif old_qty > 0 and qty <= 0:
+        elif abs(old_qty) > 1e-9 and abs(qty) < 1e-9:
             insert_event(
                 connection,
                 event_type="position",
