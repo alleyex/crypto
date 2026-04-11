@@ -7,7 +7,6 @@ from typing import Optional
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
 from app.pipeline.risk_job import run_risk_job
-from app.pipeline.strategy_job import run_strategy_job
 from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
@@ -17,7 +16,6 @@ from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import reclaim_stale_leased_jobs
 from app.core.job_queue import run_pipeline_batch
-from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
@@ -387,10 +385,6 @@ def _run_scheduled_job(
         return _run_pipeline_job(pipeline_orchestration, strategy_name, strategy_names, symbol_names)
 
     return _run_worker_job(mode, strategy_name, strategy_names, symbol_names, queue_dispatch, queue_drain)
-
-
-def _resolve_active_strategy(mode: str, fallback_strategy_name: str) -> str:
-    return _resolve_active_strategies(mode, fallback_strategy_name)[0]
 
 
 def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[str]:
