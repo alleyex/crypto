@@ -2,13 +2,16 @@
 
 ## Current State
 
-The project defaults to SQLite. PostgreSQL is supported as an opt-in backend validated end-to-end on March 18, 2026.
+The project defaults to SQLite only when no PostgreSQL DSN is present. If
+`CRYPTO_DATABASE_URL` is set and `CRYPTO_DB_BACKEND` is omitted, runtime now
+auto-selects PostgreSQL.
 
 Runtime configuration:
 
-- `CRYPTO_DB_BACKEND=sqlite` (default)
+- `CRYPTO_DB_BACKEND=sqlite` when no PostgreSQL DSN is set
 - `CRYPTO_SQLITE_PATH=storage/market_data.db`
-- `CRYPTO_DATABASE_URL=` — set this to enable PostgreSQL
+- `CRYPTO_DATABASE_URL=` — when set, runtime defaults to PostgreSQL unless
+  `CRYPTO_DB_BACKEND` explicitly says otherwise
 
 ## What Is Already Prepared
 

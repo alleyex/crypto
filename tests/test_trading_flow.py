@@ -39,7 +39,6 @@ from app.core.job_queue import retry_job
 from app.core.job_queue import run_pipeline_batch
 from app.core.job_queue import run_next_pipeline_batch
 from app.core.job_queue import run_next_queued_job
-from app.core.migrations import _auto_id_column_sql
 from app.core.migrations import POSTGRES_MIGRATION_LOCK_ID
 from app.core.migrations import run_migrations
 from app.core.postgres_smoke import run_postgres_migration_smoke
@@ -109,10 +108,8 @@ from app.query.read_service import get_strategy_closed_trades
 from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_signal_id
 from app.risk.risk_service import evaluate_latest_signal
-from app.strategy.ma_cross import ensure_table as ensure_signals_table
-from app.strategy.ma_cross import insert_signal
-from app.strategy.ma_cross import generate_signal
-from app.strategy.momentum_3bar import generate_signal as generate_momentum_3bar_signal
+from app.strategy.signal_service import ensure_table as ensure_signals_table
+from app.strategy.signal_service import insert_signal
 from app.strategy.ppo_strategy import _build_observation
 from app.strategy import ppo_strategy
 from app.strategy.registry import generate_registered_signal
@@ -175,21 +172,6 @@ def insert_fill(
     )
 
 
-def test_generate_signal_creates_buy_signal_from_moving_average_cross() -> None:
-    connection = make_connection()
-    try:
-        seed_candles(connection, [10, 11, 12, 13, 14])
-        ensure_signals_table(connection)
-
-        result = generate_signal(connection)
-
-        assert result is not None
-        assert result["signal_type"] == "BUY"
-        signals = get_signals(connection, limit=1)
-        assert signals[0]["strategy_name"] == "ma_cross"
-    finally:
-        connection.close()
-
 
 def test_ppo_build_observation_handles_decimal_candle_rows() -> None:
     class _Cursor:
@@ -225,15 +207,17 @@ def test_ppo_build_observation_handles_decimal_candle_rows() -> None:
             )
         )
 
-    obs = _build_observation(
+    result = _build_observation(
         _Connection(list(reversed(rows))),
         symbol="BTCUSDT",
         timeframe="5m",
         state={"position": 0, "entry_price": None, "bars_held": 0},
     )
 
-    assert obs is not None
+    assert result is not None
+    obs, current_close = result
     assert obs.dtype == "float32"
+    assert isinstance(current_close, float)
 
 
 def test_ppo_generate_signal_supports_two_action_long_flat_model(monkeypatch) -> None:
@@ -281,6 +265,18 @@ def test_ppo_generate_signal_supports_two_action_long_flat_model(monkeypatch) ->
             lambda *_args, **_kwargs: {"position": 0, "entry_price": None, "bars_held": 0},
         )
         monkeypatch.setattr(ppo_strategy, "_save_state", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            ppo_strategy, "_build_observation",
+            lambda *_args, **_kwargs: (np.zeros(20, dtype=float), 100.0),
+        )
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            ppo_strategy,
+            "insert_event",
+            lambda conn, event_type, status, source, message, payload=None: captured.append(
+                {"event_type": event_type, "status": status, "source": source, "payload": payload}
+            ) or 1,
+        )
 
         result = ppo_strategy.generate_signal(connection, symbol="BTCUSDT", timeframe="1m")
 
@@ -289,6 +285,164 @@ def test_ppo_generate_signal_supports_two_action_long_flat_model(monkeypatch) ->
         assert result["position"] == 1
         assert result["prob_buy"] == 0.8
         assert result["prob_sell"] == 0.0
+        assert result["current_position"] == 0
+        assert result["target_position"] == 1
+        assert result["blocked_reason"] is None
+        assert captured[0]["event_type"] == "ppo_inference"
+        assert captured[0]["payload"]["current_position"] == 0
+        assert captured[0]["payload"]["target_position"] == 1
+        assert captured[0]["payload"]["blocked_reason"] is None
+    finally:
+        connection.close()
+
+
+def test_ppo_generate_signal_logs_hold_reason_when_target_matches_current_position(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, 100 + index) for index in range(170)],
+        )
+
+        class _FakeDistribution:
+            def __init__(self):
+                self.distribution = SimpleNamespace(
+                    probs=SimpleNamespace(
+                        squeeze=lambda: SimpleNamespace(
+                            cpu=lambda: SimpleNamespace(
+                                numpy=lambda: np.array([0.01, 0.98, 0.01], dtype=float)
+                            )
+                        )
+                    )
+                )
+
+        class _FakePolicy:
+            @staticmethod
+            def obs_to_tensor(obs):
+                return (obs, None)
+
+            @staticmethod
+            def get_distribution(_obs_tensor):
+                return _FakeDistribution()
+
+        class _FakeModel:
+            policy = _FakePolicy()
+
+            @staticmethod
+            def predict(_obs, deterministic=True):
+                return 1, None
+
+        monkeypatch.setattr(ppo_strategy, "_load_model", lambda *_args, **_kwargs: _FakeModel())
+        monkeypatch.setattr(
+            ppo_strategy,
+            "_load_state",
+            lambda *_args, **_kwargs: {"position": 1, "entry_price": 100.0, "bars_held": 3},
+        )
+        monkeypatch.setattr(ppo_strategy, "_get_db_position", lambda *_args, **_kwargs: 1)
+        monkeypatch.setattr(ppo_strategy, "_save_state", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            ppo_strategy, "_build_observation",
+            lambda *_args, **_kwargs: (np.zeros(24, dtype=float), 101.0),
+        )
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            ppo_strategy,
+            "insert_event",
+            lambda conn, event_type, status, source, message, payload=None: captured.append(
+                {"event_type": event_type, "status": status, "source": source, "payload": payload}
+            ) or 1,
+        )
+
+        result = ppo_strategy.generate_signal(connection, symbol="BTCUSDT", timeframe="1m")
+
+        assert result is not None
+        assert result["signal_type"] == "HOLD"
+        assert result["current_position"] == 1
+        assert result["target_position"] == 1
+        assert result["blocked_reason"] == "same_position"
+        assert captured[0]["event_type"] == "ppo_inference"
+        assert captured[0]["status"] == "hold"
+        assert captured[0]["payload"]["blocked_reason"] == "same_position"
+    finally:
+        connection.close()
+
+
+def test_ppo_generate_signal_applies_stop_loss_override(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_candles_table(connection)
+        ensure_signals_table(connection)
+        save_klines(
+            connection,
+            [make_kline((index + 1) * 60_000, 100 + index) for index in range(170)],
+        )
+
+        class _FakeDistribution:
+            def __init__(self):
+                self.distribution = SimpleNamespace(
+                    probs=SimpleNamespace(
+                        squeeze=lambda: SimpleNamespace(
+                            cpu=lambda: SimpleNamespace(
+                                numpy=lambda: np.array([0.01, 0.98, 0.01], dtype=float)
+                            )
+                        )
+                    )
+                )
+
+        class _FakePolicy:
+            @staticmethod
+            def obs_to_tensor(obs):
+                return (obs, None)
+
+            @staticmethod
+            def get_distribution(_obs_tensor):
+                return _FakeDistribution()
+
+        class _FakeModel:
+            policy = _FakePolicy()
+
+            @staticmethod
+            def predict(_obs, deterministic=True):
+                return 1, None
+
+        monkeypatch.setattr(ppo_strategy, "_load_model", lambda *_args, **_kwargs: _FakeModel())
+        monkeypatch.setattr(
+            ppo_strategy,
+            "_load_state",
+            lambda *_args, **_kwargs: {"position": 1, "entry_price": 100.0, "bars_held": 3},
+        )
+        monkeypatch.setattr(ppo_strategy, "_get_db_position", lambda *_args, **_kwargs: 1)
+        monkeypatch.setattr(ppo_strategy, "_save_state", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            ppo_strategy, "_build_observation",
+            lambda *_args, **_kwargs: (np.zeros(24, dtype=float), 98.5),
+        )
+        monkeypatch.setattr(
+            ppo_strategy,
+            "get_risk_config",
+            lambda *_args, **_kwargs: (SimpleNamespace(stop_loss_pct=0.01), False),
+        )
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            ppo_strategy,
+            "insert_event",
+            lambda conn, event_type, status, source, message, payload=None: captured.append(
+                {"event_type": event_type, "status": status, "source": source, "payload": payload}
+            ) or 1,
+        )
+
+        result = ppo_strategy.generate_signal(connection, symbol="BTCUSDT", timeframe="1m")
+
+        assert result is not None
+        assert result["signal_type"] == "SELL"
+        assert result["current_position"] == 1
+        assert result["model_target_position"] == 1
+        assert result["target_position"] == 0
+        assert result["risk_override_reason"] == "stop_loss"
+        assert captured[0]["payload"]["risk_override_reason"] == "stop_loss"
+        assert captured[0]["payload"]["stop_loss_pct"] == 0.01
     finally:
         connection.close()
 
@@ -302,7 +456,7 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
         ensure_execution_tables(connection)
 
         save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
-        generate_signal(connection, strategy_name="ma_cross")
+        insert_signal(connection, "BUY", strategy_name="ppo")
         evaluate_latest_signal(connection)
         execution_result = execute_latest_risk(connection)
         assert execution_result is not None
@@ -312,55 +466,75 @@ def test_get_strategy_activity_summary_groups_latest_records_by_strategy() -> No
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("ma-cross-sell-1", 999, "BTCUSDT", "1m", "ma_cross", "SELL", 0.001, 12.0, "FILLED"),
+            ("ma-cross-sell-1", 999, "BTCUSDT", "1m", "ppo", "SELL", 0.001, 12.0, "FILLED"),
         )
-        ma_cross_sell_order_id = int(
+        ppo_sell_order_id = int(
             connection.execute(
                 "SELECT id FROM orders WHERE client_order_id = 'ma-cross-sell-1';"
             ).fetchone()[0]
         )
-        insert_fill(connection, ma_cross_sell_order_id, "BTCUSDT", "SELL", 0.001, 12.0, "2026-03-19 10:05:00")
+        insert_fill(connection, ppo_sell_order_id, "BTCUSDT", "SELL", 0.001, 12.0, "2026-03-19 10:05:00")
 
         save_klines(connection, [make_kline((index + 10) * 60_000, close) for index, close in enumerate([20, 21, 22, 24])])
-        generate_signal(connection, strategy_name="ppo")
+        insert_signal(connection, "BUY", strategy_name="ppo")
         evaluate_latest_signal(connection, cooldown_seconds=0)
 
         summary = get_strategy_activity_summary(connection)
 
         by_name = {item["strategy_name"]: item for item in summary}
-        assert by_name["ma_cross"]["latest_signal"] is not None
-        assert by_name["ma_cross"]["latest_risk"] is not None
-        assert by_name["ma_cross"]["latest_order"] is not None
-        assert by_name["ma_cross"]["latest_fill"] is not None
-        assert by_name["ma_cross"]["latest_closed_trade"] is not None
-        assert by_name["ma_cross"]["latest_closed_trade"]["symbol"] == "BTCUSDT"
-        assert by_name["ma_cross"]["latest_closed_trade"]["status"] == "loss"
-        assert by_name["ma_cross"]["latest_closed_trade"]["closed_at"] == "2026-03-19 10:05:00"
-        assert by_name["ma_cross"]["latest_closed_trade"]["realized_pnl"] == -0.002
-        assert by_name["ma_cross"]["latest_activity_at"] >= by_name["ma_cross"]["latest_fill_at"]
-        assert by_name["ma_cross"]["latest_order_at"] is not None
-        assert by_name["ma_cross"]["latest_fill_at"] == "2026-03-19 10:05:00"
-        assert by_name["ma_cross"]["filled_order_count"] == 2
-        assert by_name["ma_cross"]["filled_qty_total"] == 0.002
-        assert by_name["ma_cross"]["gross_realized_pnl"] == -0.002
-        assert by_name["ma_cross"]["buy_fill_count"] == 1
-        assert by_name["ma_cross"]["sell_fill_count"] == 1
-        assert by_name["ma_cross"]["realized_trade_count"] == 1
-        assert by_name["ma_cross"]["winning_trade_count"] == 0
-        assert by_name["ma_cross"]["losing_trade_count"] == 1
-        assert by_name["ma_cross"]["breakeven_trade_count"] == 0
-        assert by_name["ma_cross"]["net_position_qty"] == 0.0
         assert by_name["ppo"]["latest_signal"] is not None
         assert by_name["ppo"]["latest_risk"] is not None
-        assert by_name["ppo"]["latest_fill"] is None
-        assert by_name["ppo"]["latest_closed_trade"] is None
-        assert by_name["ppo"]["latest_activity_at"] is not None
-        assert by_name["ppo"]["latest_order_at"] is None
-        assert by_name["ppo"]["latest_fill_at"] is None
-        assert by_name["ppo"]["filled_order_count"] == 0
-        assert by_name["ppo"]["filled_qty_total"] == 0.0
-        assert by_name["ppo"]["buy_fill_count"] == 0
+        assert by_name["ppo"]["latest_order"] is not None
+        assert by_name["ppo"]["latest_fill"] is not None
+        assert by_name["ppo"]["latest_closed_trade"] is not None
+        assert by_name["ppo"]["latest_closed_trade"]["symbol"] == "BTCUSDT"
+        assert by_name["ppo"]["latest_closed_trade"]["status"] == "loss"
+        assert by_name["ppo"]["latest_closed_trade"]["closed_at"] == "2026-03-19 10:05:00"
+        assert by_name["ppo"]["latest_closed_trade"]["realized_pnl"] == -0.002
+        assert by_name["ppo"]["latest_activity_at"] >= by_name["ppo"]["latest_fill_at"]
+        assert by_name["ppo"]["latest_order_at"] is not None
+        assert by_name["ppo"]["latest_fill_at"] == "2026-03-19 10:05:00"
+        assert by_name["ppo"]["filled_order_count"] == 2
+        assert by_name["ppo"]["filled_qty_total"] == 0.002
+        assert by_name["ppo"]["gross_realized_pnl"] == -0.002
+        assert by_name["ppo"]["buy_fill_count"] == 1
+        assert by_name["ppo"]["sell_fill_count"] == 1
+        assert by_name["ppo"]["realized_trade_count"] == 1
+        assert by_name["ppo"]["winning_trade_count"] == 0
+        assert by_name["ppo"]["losing_trade_count"] == 1
+        assert by_name["ppo"]["breakeven_trade_count"] == 0
+        assert by_name["ppo"]["net_position_qty"] == 0.0
+    finally:
+        connection.close()
+
+
+def test_get_strategy_activity_summary_treats_filled_orders_with_new_status_as_executed() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-buy-new", 1, "SOLUSDT", "1m", "ppo", "BUY", 1.0, 78.87, "NEW", "2026-04-07 14:35:06"),
+        )
+        order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-buy-new';").fetchone()[0])
+        insert_fill(connection, order_id, "SOLUSDT", "BUY", 1.0, 78.87, "2026-04-07 14:35:07")
+
+        summary = get_strategy_activity_summary(connection)
+
+        by_name = {item["strategy_name"]: item for item in summary}
+        assert by_name["ppo"]["latest_fill"] is not None
+        assert by_name["ppo"]["filled_order_count"] == 1
+        assert by_name["ppo"]["filled_qty_total"] == 1.0
+        assert by_name["ppo"]["buy_fill_count"] == 1
         assert by_name["ppo"]["sell_fill_count"] == 0
+        assert by_name["ppo"]["net_position_qty"] == 1.0
+        assert by_name["ppo"]["open_position_symbol"] == "SOLUSDT"
+        assert by_name["ppo"]["open_entry_price"] == 78.87
+        assert by_name["ppo"]["open_position_opened_at"] == "2026-04-07 14:35:07"
     finally:
         connection.close()
 
@@ -371,7 +545,7 @@ def test_get_strategy_activity_summary_enriches_bid_ask_when_requested(monkeypat
         ensure_candles_table(connection)
         ensure_signals_table(connection)
         save_klines(connection, [make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])])
-        generate_signal(connection, strategy_name="ma_cross")
+        insert_signal(connection, "BUY", strategy_name="ppo")
 
         monkeypatch.setattr(
             "app.query.read_service.fetch_book_ticker",
@@ -387,9 +561,9 @@ def test_get_strategy_activity_summary_enriches_bid_ask_when_requested(monkeypat
         summary = get_strategy_activity_summary(connection, include_live_book=True)
 
         by_name = {item["strategy_name"]: item for item in summary}
-        assert by_name["ma_cross"]["bid_price"] == pytest.approx(70850.1)
-        assert by_name["ma_cross"]["ask_price"] == pytest.approx(70850.9)
-        assert by_name["ma_cross"]["current_price"] == pytest.approx(70850.5)
+        assert by_name["ppo"]["bid_price"] == pytest.approx(70850.1)
+        assert by_name["ppo"]["ask_price"] == pytest.approx(70850.9)
+        assert by_name["ppo"]["current_price"] == pytest.approx(70850.5)
     finally:
         connection.close()
 
@@ -463,7 +637,7 @@ def test_get_strategy_closed_trades_returns_recent_realized_trades() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-1", 1, "BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 100.0, "FILLED", "2026-03-19 10:00:00"),
+            ("buy-1", 1, "BTCUSDT", "1m", "ppo", "BUY", 1.0, 100.0, "FILLED", "2026-03-19 10:00:00"),
         )
         buy_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'buy-1';").fetchone()[0])
         insert_fill(connection, buy_order_id, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-19 10:00:00")
@@ -473,7 +647,7 @@ def test_get_strategy_closed_trades_returns_recent_realized_trades() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-1", 2, "BTCUSDT", "1m", "ma_cross", "SELL", 1.0, 110.0, "FILLED", "2026-03-19 10:05:00"),
+            ("sell-1", 2, "BTCUSDT", "1m", "ppo", "SELL", 1.0, 110.0, "FILLED", "2026-03-19 10:05:00"),
         )
         sell_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'sell-1';").fetchone()[0])
         insert_fill(connection, sell_order_id, "BTCUSDT", "SELL", 1.0, 110.0, "2026-03-19 10:05:00")
@@ -481,9 +655,83 @@ def test_get_strategy_closed_trades_returns_recent_realized_trades() -> None:
         closed_trades = get_strategy_closed_trades(connection)
 
         assert len(closed_trades) == 1
-        assert closed_trades[0]["strategy_name"] == "ma_cross"
+        assert closed_trades[0]["strategy_name"] == "ppo"
         assert closed_trades[0]["realized_pnl"] == 10.0
         assert closed_trades[0]["status"] == "win"
+    finally:
+        connection.close()
+
+
+def test_get_strategy_closed_trades_uses_fill_backed_orders_even_when_status_is_new() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-buy-new", 1, "SOLUSDT", "1m", "ppo", "BUY", 1.0, 78.87, "NEW", "2026-04-07 14:35:06"),
+        )
+        buy_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-buy-new';").fetchone()[0])
+        insert_fill(connection, buy_order_id, "SOLUSDT", "BUY", 1.0, 78.87, "2026-04-07 14:35:07")
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-sell-new", 2, "SOLUSDT", "1m", "ppo", "SELL", 1.0, 79.28, "NEW", "2026-04-07 15:05:06"),
+        )
+        sell_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-sell-new';").fetchone()[0])
+        insert_fill(connection, sell_order_id, "SOLUSDT", "SELL", 1.0, 79.28, "2026-04-07 15:05:07")
+
+        closed_trades = get_strategy_closed_trades(connection, strategy_name="ppo")
+
+        assert len(closed_trades) == 1
+        assert closed_trades[0]["strategy_name"] == "ppo"
+        assert closed_trades[0]["symbol"] == "SOLUSDT"
+        assert closed_trades[0]["entry_price"] == 78.87
+        assert closed_trades[0]["exit_price"] == 79.28
+        assert closed_trades[0]["realized_pnl"] == pytest.approx(0.41)
+    finally:
+        connection.close()
+
+
+def test_get_strategy_closed_trades_supports_short_round_trip() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-short-open", 1, "SOLUSDT", "1m", "ppo", "SELL", 1.0, 82.27, "FILLED", "2026-04-09 02:30:00"),
+        )
+        short_open_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-short-open';").fetchone()[0])
+        insert_fill(connection, short_open_order_id, "SOLUSDT", "SELL", 1.0, 82.27, "2026-04-09 02:30:00")
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-short-close", 2, "SOLUSDT", "1m", "ppo", "BUY", 1.0, 83.00681, "FILLED", "2026-04-09 02:34:44"),
+        )
+        short_close_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-short-close';").fetchone()[0])
+        insert_fill(connection, short_close_order_id, "SOLUSDT", "BUY", 1.0, 83.00681, "2026-04-09 02:34:44")
+
+        closed_trades = get_strategy_closed_trades(connection, strategy_name="ppo")
+
+        assert len(closed_trades) == 1
+        assert closed_trades[0]["symbol"] == "SOLUSDT"
+        assert closed_trades[0]["entry_price"] == pytest.approx(82.27)
+        assert closed_trades[0]["exit_price"] == pytest.approx(83.00681)
+        assert closed_trades[0]["realized_pnl"] == pytest.approx(-0.73681)
+        assert closed_trades[0]["status"] == "loss"
     finally:
         connection.close()
 
@@ -498,7 +746,7 @@ def test_get_strategy_closed_trades_filters_by_strategy() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-ma", 1, "BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 100.0, "FILLED", "2026-03-19 10:00:00"),
+            ("buy-ma", 1, "BTCUSDT", "1m", "other_strategy", "BUY", 1.0, 100.0, "FILLED", "2026-03-19 10:00:00"),
         )
         buy_ma_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'buy-ma';").fetchone()[0])
         insert_fill(connection, buy_ma_order_id, "BTCUSDT", "BUY", 1.0, 100.0, "2026-03-19 10:00:00")
@@ -508,7 +756,7 @@ def test_get_strategy_closed_trades_filters_by_strategy() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-ma", 2, "BTCUSDT", "1m", "ma_cross", "SELL", 1.0, 110.0, "FILLED", "2026-03-19 10:05:00"),
+            ("sell-ma", 2, "BTCUSDT", "1m", "other_strategy", "SELL", 1.0, 110.0, "FILLED", "2026-03-19 10:05:00"),
         )
         sell_ma_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'sell-ma';").fetchone()[0])
         insert_fill(connection, sell_ma_order_id, "BTCUSDT", "SELL", 1.0, 110.0, "2026-03-19 10:05:00")
@@ -518,7 +766,7 @@ def test_get_strategy_closed_trades_filters_by_strategy() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("buy-mom", 3, "ETHUSDT", "1m", "momentum_3bar", "BUY", 1.0, 200.0, "FILLED", "2026-03-19 10:10:00"),
+            ("buy-mom", 3, "ETHUSDT", "1m", "ppo", "BUY", 1.0, 200.0, "FILLED", "2026-03-19 10:10:00"),
         )
         buy_mom_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'buy-mom';").fetchone()[0])
         insert_fill(connection, buy_mom_order_id, "ETHUSDT", "BUY", 1.0, 200.0, "2026-03-19 10:10:00")
@@ -528,38 +776,65 @@ def test_get_strategy_closed_trades_filters_by_strategy() -> None:
                 client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("sell-mom", 4, "ETHUSDT", "1m", "momentum_3bar", "SELL", 1.0, 190.0, "FILLED", "2026-03-19 10:15:00"),
+            ("sell-mom", 4, "ETHUSDT", "1m", "ppo", "SELL", 1.0, 190.0, "FILLED", "2026-03-19 10:15:00"),
         )
         sell_mom_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'sell-mom';").fetchone()[0])
         insert_fill(connection, sell_mom_order_id, "ETHUSDT", "SELL", 1.0, 190.0, "2026-03-19 10:15:00")
 
-        closed_trades = get_strategy_closed_trades(connection, strategy_name="momentum_3bar")
+        closed_trades = get_strategy_closed_trades(connection, strategy_name="ppo")
 
         assert len(closed_trades) == 1
-        assert closed_trades[0]["strategy_name"] == "momentum_3bar"
+        assert closed_trades[0]["strategy_name"] == "ppo"
         assert closed_trades[0]["symbol"] == "ETHUSDT"
         assert closed_trades[0]["status"] == "loss"
     finally:
         connection.close()
 
 
-def test_strategy_registry_exposes_ma_cross() -> None:
+def test_get_strategy_activity_summary_supports_open_short_positions() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-short-open", 1, "SOLUSDT", "1m", "ppo", "SELL", 1.0, 82.27, "FILLED", "2026-04-09 04:28:02"),
+        )
+        short_open_order_id = int(connection.execute("SELECT id FROM orders WHERE client_order_id = 'ppo-short-open';").fetchone()[0])
+        insert_fill(connection, short_open_order_id, "SOLUSDT", "SELL", 1.0, 82.27, "2026-04-09 04:28:02")
+
+        summary = get_strategy_activity_summary(connection)
+
+        by_name = {item["strategy_name"]: item for item in summary}
+        assert by_name["ppo"]["filled_order_count"] == 1
+        assert by_name["ppo"]["sell_fill_count"] == 1
+        assert by_name["ppo"]["buy_fill_count"] == 0
+        assert by_name["ppo"]["net_position_qty"] == pytest.approx(-1.0)
+        assert by_name["ppo"]["open_position_symbol"] == "SOLUSDT"
+        assert by_name["ppo"]["open_entry_price"] == pytest.approx(82.27)
+        assert by_name["ppo"]["open_position_opened_at"] == "2026-04-09 04:28:02"
+    finally:
+        connection.close()
+
+
+def test_strategy_registry_exposes_ppo() -> None:
     names = list_registered_strategies()
 
-    assert "ma_cross" in names
     assert "ppo" in names
-    assert get_strategy("ma_cross") is not None
     assert get_strategy("ppo") is not None
 
 
-def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
+def test_generate_registered_signal_runs_ppo_strategy(monkeypatch) -> None:
     connection = make_connection()
     try:
         monkeypatch.setattr(
             "app.strategy.registry.STRATEGY_REGISTRY",
             {
-                "ma_cross": lambda conn, symbol="BTCUSDT", timeframe="1m": {
-                    "strategy_name": "ma_cross",
+                "ppo": lambda conn, symbol="BTCUSDT", timeframe="1m": {
+                    "strategy_name": "ppo",
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "signal_type": "BUY",
@@ -569,170 +844,16 @@ def test_generate_registered_signal_runs_ma_cross_strategy(monkeypatch) -> None:
             },
         )
 
-        result = generate_registered_signal(connection, strategy_name="ma_cross")
+        result = generate_registered_signal(connection, strategy_name="ppo")
 
         assert result == {
-            "strategy_name": "ma_cross",
+            "strategy_name": "ppo",
             "symbol": "BTCUSDT",
             "timeframe": "1m",
             "signal_type": "BUY",
             "short_ma": 3.0,
             "long_ma": 2.0,
         }
-    finally:
-        connection.close()
-
-
-def test_momentum_3bar_generates_buy_signal() -> None:
-    connection = make_connection()
-    try:
-        ensure_candles_table(connection)
-        base_open_time = 1_710_000_000_000
-        klines = []
-        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
-            open_time = base_open_time + (index * 60_000)
-            klines.append(
-                [
-                    open_time,
-                    str(close - 1.0),
-                    str(close + 1.0),
-                    str(close - 2.0),
-                    str(close),
-                    "100",
-                    open_time + 59_000,
-                    "1000",
-                    10,
-                    "50",
-                    "500",
-                    "0",
-                ]
-            )
-
-        save_klines(connection, klines)
-
-        result = generate_momentum_3bar_signal(connection)
-
-        assert result is not None
-        assert result["strategy_name"] == "momentum_3bar"
-        assert result["signal_type"] == "BUY"
-        assert result["short_ma"] == 104.0
-        assert result["long_ma"] == 100.0
-    finally:
-        connection.close()
-
-
-def test_momentum_3bar_generates_hold_when_long_position_already_open() -> None:
-    connection = make_connection()
-    try:
-        ensure_candles_table(connection)
-        ensure_positions_table(connection)
-        connection.execute(
-            """
-            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
-            VALUES ('BTCUSDT', 0.001, 100.0, 0.0, CURRENT_TIMESTAMP);
-            """
-        )
-        connection.commit()
-        base_open_time = 1_710_000_000_000
-        klines = []
-        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
-            open_time = base_open_time + (index * 60_000)
-            klines.append(
-                [
-                    open_time,
-                    str(close - 1.0),
-                    str(close + 1.0),
-                    str(close - 2.0),
-                    str(close),
-                    "100",
-                    open_time + 59_000,
-                    "1000",
-                    10,
-                    "50",
-                    "500",
-                    "0",
-                ]
-            )
-
-        save_klines(connection, klines)
-
-        result = generate_momentum_3bar_signal(connection)
-
-        assert result is not None
-        assert result["signal_type"] == "HOLD"
-    finally:
-        connection.close()
-
-
-def test_momentum_3bar_generates_hold_when_no_position_available_to_sell() -> None:
-    connection = make_connection()
-    try:
-        ensure_candles_table(connection)
-        ensure_positions_table(connection)
-        base_open_time = 1_710_000_000_000
-        klines = []
-        for index, close in enumerate((104.0, 103.0, 102.0, 100.0)):
-            open_time = base_open_time + (index * 60_000)
-            klines.append(
-                [
-                    open_time,
-                    str(close - 1.0),
-                    str(close + 1.0),
-                    str(close - 2.0),
-                    str(close),
-                    "100",
-                    open_time + 59_000,
-                    "1000",
-                    10,
-                    "50",
-                    "500",
-                    "0",
-                ]
-            )
-
-        save_klines(connection, klines)
-
-        result = generate_momentum_3bar_signal(connection)
-
-        assert result is not None
-        assert result["signal_type"] == "HOLD"
-    finally:
-        connection.close()
-
-
-def test_momentum_3bar_generates_hold_when_previous_signal_has_same_direction() -> None:
-    connection = make_connection()
-    try:
-        ensure_candles_table(connection)
-        ensure_positions_table(connection)
-        base_open_time = 1_710_000_000_000
-        klines = []
-        for index, close in enumerate((100.0, 101.0, 102.0, 104.0)):
-            open_time = base_open_time + (index * 60_000)
-            klines.append(
-                [
-                    open_time,
-                    str(close - 1.0),
-                    str(close + 1.0),
-                    str(close - 2.0),
-                    str(close),
-                    "100",
-                    open_time + 59_000,
-                    "1000",
-                    10,
-                    "50",
-                    "500",
-                    "0",
-                ]
-            )
-
-        save_klines(connection, klines)
-        insert_signal(connection, "BUY", symbol="BTCUSDT", timeframe="1m", strategy_name="momentum_3bar", short_ma=103.0, long_ma=100.0)
-
-        result = generate_momentum_3bar_signal(connection)
-
-        assert result is not None
-        assert result["signal_type"] == "HOLD"
     finally:
         connection.close()
 
@@ -1791,11 +1912,6 @@ def test_validate_compose_runtime_sets_world_writable_bind_mounts(monkeypatch, t
         assert mode == 0o777
 
 
-def test_auto_id_column_sql_supports_sqlite_and_postgres() -> None:
-    assert _auto_id_column_sql("sqlite") == "id INTEGER PRIMARY KEY"
-    assert _auto_id_column_sql("postgres") == "id BIGSERIAL PRIMARY KEY"
-
-
 def test_get_backend_name_detects_postgres_adapter() -> None:
     class DummyRawConnection:
         def cursor(self):
@@ -1862,6 +1978,101 @@ def test_parse_db_timestamp_supports_sqlite_and_postgres_formats() -> None:
     assert postgres_short_offset.isoformat() == "2026-03-18T10:00:00.622394+00:00"
 
 
+def test_migration_normalizes_legacy_utc_timestamp_strings() -> None:
+    from app.core.migrations import _normalize_legacy_utc_timestamp_strings
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            ("SOLUSDT", 1.0, 82.21, 0.0, "2026-04-09 06:05:48"),
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_heartbeats (component, status, message, payload_json, last_seen_at)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            ("scheduler", "ok", "legacy timestamp", None, "2026-04-09 06:05:48"),
+        )
+        connection.commit()
+
+        _normalize_legacy_utc_timestamp_strings(connection)
+        connection.commit()
+
+        position_updated_at = connection.execute(
+            "SELECT updated_at FROM positions WHERE symbol = ?;",
+            ("SOLUSDT",),
+        ).fetchone()[0]
+        heartbeat_last_seen_at = connection.execute(
+            "SELECT last_seen_at FROM runtime_heartbeats WHERE component = ?;",
+            ("scheduler",),
+        ).fetchone()[0]
+
+        assert position_updated_at == "2026-04-09T06:05:48+00:00"
+        assert heartbeat_last_seen_at == "2026-04-09T06:05:48+00:00"
+    finally:
+        connection.close()
+
+
+def test_offline_normalize_legacy_utc_timestamp_strings_updates_large_tables() -> None:
+    from app.core.migrations import normalize_legacy_utc_timestamp_strings_offline
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        connection.execute(
+            """
+            INSERT INTO audit_events (event_type, status, source, message, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            ("test", "ok", "unit", "legacy timestamp", None, "2026-04-09 06:05:48"),
+        )
+        connection.execute(
+            """
+            INSERT INTO signals (
+                symbol, timeframe, strategy_name, signal_type, short_ma, long_ma, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("SOLUSDT", "1m", "ppo", "BUY", 1.0, 2.0, "2026-04-09 06:05:48"),
+        )
+        connection.execute(
+            "UPDATE schema_migrations SET applied_at = ? WHERE version = ?;",
+            ("2026-04-09 06:05:48", "001_create_candles_table"),
+        )
+        connection.commit()
+
+        result = normalize_legacy_utc_timestamp_strings_offline(
+            connection,
+            batch_size=1,
+            table_names={"audit_events", "signals", "schema_migrations"},
+        )
+
+        audit_created_at = connection.execute(
+            "SELECT created_at FROM audit_events LIMIT 1;"
+        ).fetchone()[0]
+        signal_created_at = connection.execute(
+            "SELECT created_at FROM signals LIMIT 1;"
+        ).fetchone()[0]
+        schema_applied_at = connection.execute(
+            "SELECT applied_at FROM schema_migrations WHERE version = ?;",
+            ("001_create_candles_table",),
+        ).fetchone()[0]
+
+        assert result["audit_events.created_at"] == 1
+        assert result["signals.created_at"] == 1
+        assert result["schema_migrations.applied_at"] >= 1
+        assert audit_created_at == "2026-04-09T06:05:48+00:00"
+        assert signal_created_at == "2026-04-09T06:05:48+00:00"
+        assert schema_applied_at == "2026-04-09T06:05:48+00:00"
+    finally:
+        connection.close()
+
+
 def test_get_connection_supports_postgres_backend(monkeypatch) -> None:
     class DummyRawConnection:
         def cursor(self):
@@ -1878,7 +2089,6 @@ def test_get_connection_supports_postgres_backend(monkeypatch) -> None:
             assert database_url == "postgresql://crypto:crypto@127.0.0.1:5432/crypto"
             return DummyRawConnection()
 
-    monkeypatch.setattr(db_module, "DB_BACKEND", "postgres")
     monkeypatch.setattr(db_module, "DATABASE_URL", "postgresql://crypto:crypto@127.0.0.1:5432/crypto")
     monkeypatch.setattr(db_module, "_load_psycopg", lambda: DummyPsycopg())
 
@@ -1908,7 +2118,6 @@ def test_get_connection_retries_postgres_until_ready(monkeypatch) -> None:
                 raise RuntimeError("database system is starting up")
             return DummyRawConnection()
 
-    monkeypatch.setattr(db_module, "DB_BACKEND", "postgres")
     monkeypatch.setattr(db_module, "DATABASE_URL", "postgresql://crypto:crypto@127.0.0.1:5432/crypto")
     monkeypatch.setattr(db_module, "POSTGRES_CONNECT_RETRIES", 3)
     monkeypatch.setattr(db_module, "POSTGRES_CONNECT_RETRY_DELAY_SECONDS", 0.25)
@@ -1920,26 +2129,6 @@ def test_get_connection_retries_postgres_until_ready(monkeypatch) -> None:
     assert connection.__class__.__name__ == "PostgresConnectionAdapter"
     assert len(attempts) == 3
     assert sleep_calls == [0.25, 0.25]
-
-
-def test_get_connection_sqlite_enables_wal_and_busy_timeout(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("CRYPTO_DB_BACKEND", "sqlite")
-    monkeypatch.setenv("CRYPTO_SQLITE_BUSY_TIMEOUT_MS", "3000")
-    monkeypatch.setattr("app.core.db.DB_BACKEND", "sqlite")
-    monkeypatch.setattr("app.core.db.DB_FILE", tmp_path / "test.db")
-    monkeypatch.setattr("app.core.db.DB_DIR", tmp_path)
-
-    conn = get_connection()
-    try:
-        journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
-        busy_timeout = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
-        foreign_keys = conn.execute("PRAGMA foreign_keys;").fetchone()[0]
-    finally:
-        conn.close()
-
-    assert journal_mode == "wal"
-    assert busy_timeout == 3000
-    assert foreign_keys == 1
 
 
 def test_insert_and_get_rowid_uses_returning_for_postgres() -> None:
@@ -2051,7 +2240,7 @@ def test_query_read_service_supports_postgres_limit_queries() -> None:
                         ("created_at",),
                     ]
                     self._rows = [
-                        (1, "order-1", 11, "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 100.0, "FILLED", "2026-03-18 10:00:00")
+                        (1, "order-1", 11, "BTCUSDT", "1m", "ppo", "BUY", 0.001, 100.0, "FILLED", "2026-03-18 10:00:00")
                     ]
 
                 def fetchone(self):
@@ -2085,7 +2274,7 @@ def test_query_read_service_supports_postgres_limit_queries() -> None:
             "risk_event_id": 11,
             "symbol": "BTCUSDT",
             "timeframe": "1m",
-            "strategy_name": "ma_cross",
+            "strategy_name": "ppo",
             "side": "BUY",
             "qty": 0.001,
             "price": 100.0,
@@ -2148,7 +2337,7 @@ def test_evaluate_signal_id_rejects_when_kill_switch_enabled(monkeypatch) -> Non
         seed_candles(connection, [100.0] * 5)
         connection.execute(
             "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
-            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.1, 1.0),
+            ("BTCUSDT", "1m", "ppo", "BUY", 1.1, 1.0),
         )
         connection.commit()
         from app.risk.risk_service import evaluate_latest_signal
@@ -2168,7 +2357,7 @@ def test_evaluate_signal_ids_batch_evaluates_all(monkeypatch) -> None:
         for signal_type in ("BUY", "SELL"):
             connection.execute(
                 "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
-                ("BTCUSDT", "1m", "ma_cross", signal_type, 1.1, 1.0),
+                ("BTCUSDT", "1m", "ppo", signal_type, 1.1, 1.0),
             )
         connection.commit()
         from app.risk.risk_service import evaluate_signal_ids
@@ -2215,8 +2404,8 @@ def test_evaluate_signal_id_rejects_second_strategy_buy_when_first_is_pending() 
 
         # Two strategies both signal BUY for BTCUSDT in the same pipeline cycle.
         # Neither has executed yet (no order row exists).
-        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ma_cross")
-        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="momentum_3bar")
+        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ppo")
+        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ppo")
 
         ma_risk = evaluate_signal_id(connection, int(ma_signal["id"]), cooldown_seconds=0, max_position_qty=0.002)
         momentum_risk = evaluate_signal_id(connection, int(momentum_signal["id"]), cooldown_seconds=0, max_position_qty=0.002)
@@ -2239,7 +2428,7 @@ def test_evaluate_signal_id_allows_second_strategy_buy_after_first_is_executed()
         ensure_risk_table(connection)
 
         # Simulate first strategy approved and order placed (risk_event_id linked to an order).
-        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ma_cross")
+        ma_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ppo")
         ma_risk = evaluate_signal_id(connection, int(ma_signal["id"]), cooldown_seconds=0, max_position_qty=0.002)
         assert ma_risk is not None and ma_risk["decision"] == "APPROVED"
 
@@ -2248,7 +2437,7 @@ def test_evaluate_signal_id_allows_second_strategy_buy_after_first_is_executed()
             "INSERT INTO orders"
             " (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            ("coid-ma", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", int(ma_risk["id"])),
+            ("coid-ma", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "FILLED", int(ma_risk["id"])),
         )
         # Update position to reflect executed BUY.
         connection.execute(
@@ -2257,7 +2446,7 @@ def test_evaluate_signal_id_allows_second_strategy_buy_after_first_is_executed()
         )
         connection.commit()
 
-        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="momentum_3bar")
+        momentum_signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="ppo")
         momentum_risk = evaluate_signal_id(connection, int(momentum_signal["id"]), cooldown_seconds=0, max_position_qty=0.002)
 
         assert momentum_risk is not None
@@ -2563,6 +2752,56 @@ def test_daily_realized_pnl_ledger_ignores_previous_day_losses() -> None:
         connection.close()
 
 
+def test_futures_target_position_buy_does_not_treat_pending_buys_as_existing_long(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_positions_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="SOLUSDT", strategy_name="ppo")
+        for risk_event_id in (101, 102):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    id, signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    risk_event_id,
+                    risk_event_id,
+                    "SOLUSDT",
+                    "1m",
+                    "ppo",
+                    "BUY",
+                    "APPROVED",
+                    "Passed basic risk checks.",
+                    "2026-04-09T06:00:00+00:00",
+                ),
+            )
+        connection.commit()
+
+        monkeypatch.setattr("app.risk.risk_service._binance_futures_position_mode_enabled", lambda: True)
+        monkeypatch.setattr("app.risk.risk_service._get_strategy_target_position", lambda *args, **kwargs: 1)
+        monkeypatch.setattr("app.risk.risk_service._get_exchange_position_qty", lambda symbol: -1.0)
+        monkeypatch.setattr("app.risk.risk_service.check_portfolio_limits", lambda *args, **kwargs: (True, ""))
+
+        result = evaluate_signal_id(
+            connection,
+            int(signal["id"]),
+            order_qty=1.0,
+            max_position_qty=2.0,
+            cooldown_seconds=0,
+        )
+
+        assert result is not None
+        assert result["decision"] == "APPROVED"
+        assert result["reason"] == "Passed basic risk checks."
+    finally:
+        connection.close()
+
+
 def test_execute_latest_risk_refreshes_persisted_daily_realized_pnl() -> None:
     connection = make_connection()
     try:
@@ -2689,7 +2928,6 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
     def fake_connection() -> sqlite3.Connection:
         return sqlite3.connect(db_path)
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
@@ -2697,6 +2935,14 @@ def test_run_pipeline_collect_runs_end_to_end(monkeypatch, tmp_path) -> None:
         lambda symbol="BTCUSDT", interval="1m", limit=5: [
             make_kline((index + 1) * 60_000, close) for index, close in enumerate([10, 11, 12, 13, 14])
         ],
+    )
+    from app.strategy.signal_service import insert_signal as _insert_signal
+    monkeypatch.setattr(
+        "app.pipeline.strategy_job.generate_registered_signal",
+        lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": _insert_signal(
+            conn, "BUY", symbol=symbol, timeframe=timeframe, strategy_name=strategy_name,
+            short_ma=12.0, long_ma=10.0,
+        ),
     )
 
     result = run_pipeline_collect()
@@ -2731,7 +2977,6 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
     def fake_connection() -> sqlite3.Connection:
         return sqlite3.connect(db_path)
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
     monkeypatch.setattr("app.audit.service.get_connection", fake_connection)
     monkeypatch.setattr("app.system.heartbeat.get_connection", fake_connection)
@@ -2745,6 +2990,14 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
                 [10, 11, 12, 13, 14] if symbol == "BTCUSDT" else [20, 21, 22, 23, 24]
             )
         ],
+    )
+    from app.strategy.signal_service import insert_signal as _insert_signal
+    monkeypatch.setattr(
+        "app.pipeline.strategy_job.generate_registered_signal",
+        lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": _insert_signal(
+            conn, "BUY", symbol=symbol, timeframe=timeframe, strategy_name=strategy_name,
+            short_ma=12.0, long_ma=10.0,
+        ),
     )
 
     result = run_pipeline_collect()
@@ -2764,7 +3017,7 @@ def test_run_pipeline_collect_records_multi_symbol_summary_in_heartbeat_and_audi
     pipeline_heartbeat = next(item for item in heartbeats if item["component"] == "pipeline" and item["status"] == "completed")
     heartbeat_payload = json.loads(pipeline_heartbeat["payload_json"])
     assert heartbeat_payload["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
-    assert heartbeat_payload["strategy_names"] == ["ma_cross"]
+    assert heartbeat_payload["strategy_names"] == ["ppo"]
     assert heartbeat_payload["execution_backend"] == "paper"
     assert heartbeat_payload["execution_backend_status"]["backend"] == "paper"
     assert heartbeat_payload["execution_backend_status"]["dry_run"] is False
@@ -2790,7 +3043,6 @@ def test_run_pipeline_collect_uses_selected_strategy(monkeypatch, tmp_path) -> N
     def fake_connection() -> sqlite3.Connection:
         return sqlite3.connect(db_path)
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr(
@@ -2879,7 +3131,6 @@ def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> No
     def fake_connection() -> sqlite3.Connection:
         return sqlite3.connect(db_path)
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", fake_connection)
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.pipeline.run_pipeline.run_migrations", lambda connection: None)
@@ -2897,7 +3148,7 @@ def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> No
             }
         if job_type == "strategy":
             captured["strategy_symbols"] = list(payload.get("symbol_names") or [])
-            strategy_name = str(payload.get("strategy_name") or "ma_cross")
+            strategy_name = str(payload.get("strategy_name") or "ppo")
             symbol_names = payload.get("symbol_names") or []
             return {
                 "status": "ok",
@@ -2922,7 +3173,7 @@ def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> No
                         "step": "evaluate_risk",
                         "id": 11,
                         "signal_id": 7,
-                        "strategy_name": "momentum_3bar",
+                        "strategy_name": "ppo",
                         "symbol": (payload.get("symbol_names") or ["ETHUSDT"])[0],
                         "decision": "APPROVED",
                         "reason": "Passed basic risk checks.",
@@ -2940,7 +3191,7 @@ def test_run_pipeline_collect_uses_selected_symbols(monkeypatch, tmp_path) -> No
 
     monkeypatch.setattr("app.pipeline.run_pipeline.run_job", fake_run_job)
 
-    result = run_pipeline_collect(strategy_name="momentum_3bar", symbol_names=["ETHUSDT"])
+    result = run_pipeline_collect(strategy_name="ppo", symbol_names=["ETHUSDT"])
 
     assert result["requested_symbol_names"] == ["ETHUSDT"]
     assert captured["market_data_symbols"] == ["ETHUSDT"]
@@ -2963,7 +3214,7 @@ def test_print_pipeline_result_includes_symbol_and_strategy_scope() -> None:
             },
             {
                 "step": "generate_signal",
-                "strategy_name": "ma_cross",
+                "strategy_name": "ppo",
                 "symbol": "BTCUSDT",
                 "signal_type": "BUY",
                 "short_ma": 13.0,
@@ -2971,14 +3222,14 @@ def test_print_pipeline_result_includes_symbol_and_strategy_scope() -> None:
             },
             {
                 "step": "evaluate_risk",
-                "strategy_name": "ma_cross",
+                "strategy_name": "ppo",
                 "symbol": "BTCUSDT",
                 "decision": "APPROVED",
                 "reason": "Passed basic risk checks.",
             },
             {
                 "step": "paper_execute",
-                "strategy_name": "ma_cross",
+                "strategy_name": "ppo",
                 "symbol": "BTCUSDT",
                 "status": "FILLED",
                 "side": "BUY",
@@ -2994,9 +3245,9 @@ def test_print_pipeline_result_includes_symbol_and_strategy_scope() -> None:
     output = buffer.getvalue()
     assert "[symbol=BTCUSDT] saved_klines=5" in output
     assert "[symbol=ETHUSDT] saved_klines=5" in output
-    assert "[strategy=ma_cross symbol=BTCUSDT] signal=BUY" in output
-    assert "[strategy=ma_cross symbol=BTCUSDT] decision=APPROVED" in output
-    assert "[strategy=ma_cross symbol=BTCUSDT] order_status=FILLED" in output
+    assert "[strategy=ppo symbol=BTCUSDT] signal=BUY" in output
+    assert "[strategy=ppo symbol=BTCUSDT] decision=APPROVED" in output
+    assert "[strategy=ppo symbol=BTCUSDT] order_status=FILLED" in output
 
 
 def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch, tmp_path) -> None:
@@ -3023,7 +3274,6 @@ def test_run_pipeline_collect_is_blocked_when_kill_switch_is_enabled(monkeypatch
 def test_run_pipeline_collect_returns_failed_result_when_fetch_klines_errors(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "pipeline-failure.db"
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
@@ -3114,8 +3364,8 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
             message="Pipeline run completed.",
             payload={
                 "step_count": 6,
-                "strategy_name": "ma_cross",
-                "strategy_names": ["ma_cross"],
+                "strategy_name": "ppo",
+                "strategy_names": ["ppo"],
                 "symbol_names": ["BTCUSDT", "ETHUSDT"],
                 "generated_signal_count": 2,
                 "approved_risk_count": 2,
@@ -3126,7 +3376,6 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     finally:
         connection.close()
 
-    monkeypatch.setattr("app.api.main.DB_FILE", db_path)
     monkeypatch.setattr("app.api.main.LOG_FILE", log_path)
     monkeypatch.setattr("app.api.main.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.api.main._utc_now", lambda: fixed_now)
@@ -3173,7 +3422,7 @@ def test_health_endpoint_reports_ok_with_recent_pipeline_activity(monkeypatch, t
     assert payload["checks"]["execution_backend"]["can_execute_orders"] is True
     assert payload["checks"]["execution_backend"]["dry_run"] is False
     assert payload["checks"]["pipeline"]["status"] == "ok"
-    assert payload["checks"]["pipeline"]["latest_run"]["strategy_names"] == ["ma_cross"]
+    assert payload["checks"]["pipeline"]["latest_run"]["strategy_names"] == ["ppo"]
     assert payload["checks"]["pipeline"]["latest_run"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert payload["checks"]["pipeline"]["latest_run"]["execution_backend"] == "paper"
     assert payload["checks"]["pipeline"]["latest_run"]["execution_backend_status"]["backend"] == "paper"
@@ -3197,7 +3446,8 @@ def test_health_endpoint_reports_degraded_when_scheduler_stopped_and_no_candles(
     finally:
         connection.close()
 
-    monkeypatch.setattr("app.api.main.DB_FILE", db_path)
+    monkeypatch.setattr("app.api.main._health_cache", {})
+    monkeypatch.setattr("app.api.main._health_cache_ts", 0.0)
     monkeypatch.setattr("app.api.main.LOG_FILE", Path(tmp_path / "missing.log"))
     monkeypatch.setattr("app.api.main.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
@@ -3334,6 +3584,37 @@ def test_maybe_send_health_alert_ignores_volatile_heartbeat_fields(monkeypatch, 
 
     assert first["sent"] is True
     assert second == {"sent": False, "reason": "Health alert already sent for current state."}
+    assert len(sent_messages) == 1
+
+
+def test_maybe_send_health_alert_handles_multiple_failed_heartbeat_components(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "health_alert_state.json"
+    sent_messages: list[str] = []
+
+    monkeypatch.setattr("app.alerting.health.HEALTH_ALERT_STATE_FILE", state_file)
+    monkeypatch.setattr(
+        "app.alerting.health.send_telegram_message",
+        lambda text: sent_messages.append(text) or {"sent": True},
+    )
+
+    from app.alerting.health import maybe_send_health_alert
+
+    report = {
+        "status": "degraded",
+        "checks": {
+            "heartbeats": {
+                "status": "degraded",
+                "components": [
+                    {"component": "scheduler", "status": "failed", "message": "late"},
+                    {"component": "alerting", "status": "stopped", "message": "idle"},
+                ],
+            },
+        },
+    }
+
+    result = maybe_send_health_alert(report)
+
+    assert result["sent"] is True
     assert len(sent_messages) == 1
 
 
@@ -3531,7 +3812,7 @@ def test_broker_protection_check_ignores_cooldown_only_rejected_risk_streak(monk
                     index + 1,
                     "BTCUSDT",
                     "1m",
-                    "ma_cross",
+                    "ppo",
                     "BUY",
                     "REJECTED",
                     "Cooldown active: last fill 10 seconds ago, minimum 300.",
@@ -3578,7 +3859,7 @@ def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(m
                     index + 1,
                     "BTCUSDT",
                     "1m",
-                    "ma_cross",
+                    "ppo",
                     "BUY",
                     "REJECTED",
                     "Existing long position already open (pending_qty=0.0).",
@@ -3593,7 +3874,7 @@ def test_broker_protection_check_degrades_on_non_cooldown_rejected_risk_streak(m
             {
                 "latest_risk": {
                     "symbol": "BTCUSDT",
-                    "strategy_name": "ma_cross",
+                    "strategy_name": "ppo",
                     "decision": "REJECTED",
                     "reason": "Existing long position already open (pending_qty=0.0).",
                 }
@@ -3631,7 +3912,7 @@ def test_broker_protection_check_ignores_hold_only_rejected_risk_streak(monkeypa
                     index + 1,
                     "BTCUSDT",
                     "1m",
-                    "ma_cross",
+                    "ppo",
                     "HOLD",
                     "REJECTED",
                     "Signal is HOLD.",
@@ -3672,7 +3953,7 @@ def test_broker_protection_check_ignores_duplicate_only_rejected_risk_streak(mon
                     index + 1,
                     "BTCUSDT",
                     "1m",
-                    "ma_cross",
+                    "ppo",
                     "BUY",
                     "REJECTED",
                     "Duplicate signal type.",
@@ -3713,7 +3994,7 @@ def test_broker_protection_check_ignores_no_position_sell_rejected_risk_streak(m
                     index + 1,
                     "BTCUSDT",
                     "1m",
-                    "ma_cross",
+                    "ppo",
                     "SELL",
                     "REJECTED",
                     "No position available to sell.",
@@ -3732,6 +4013,47 @@ def test_broker_protection_check_ignores_no_position_sell_rejected_risk_streak(m
         assert "rejected_risk_streak" not in result
         assert result["expected_rejected_risk_streak"] == 3
         assert result["expected_latest_rejection_reason"] == "No position available to sell."
+        assert result["reason_code"] is None
+        assert result["recommended_action"] is None
+    finally:
+        connection.close()
+
+
+def test_broker_protection_check_ignores_position_matches_target_rejected_risk_streak(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        monkeypatch.setattr("app.api.main.RISK_REJECTION_STREAK_THRESHOLD", 3)
+        for index in range(3):
+            connection.execute(
+                """
+                INSERT INTO risk_events (
+                    signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    index + 1,
+                    "SOLUSDT",
+                    "1m",
+                    "ppo",
+                    "BUY",
+                    "REJECTED",
+                    "Position already matches target.",
+                    f"2026-03-20 10:0{index}:00",
+                ),
+            )
+        connection.commit()
+
+        result = __import__("app.api.main", fromlist=["_broker_protection_check"])._broker_protection_check(
+            connection,
+            {"backend": "binance", "can_execute_orders": True, "dry_run": False, "placeholder": False},
+            {"latest_risk": {"decision": "REJECTED", "reason": "Position already matches target."}},
+        )
+
+        assert result["status"] == "ok"
+        assert "rejected_risk_streak" not in result
+        assert result["expected_rejected_risk_streak"] == 3
+        assert result["expected_latest_rejection_reason"] == "Position already matches target."
         assert result["reason_code"] is None
         assert result["recommended_action"] is None
     finally:
@@ -3847,6 +4169,22 @@ def test_alert_state_read_never_expires_when_ttl_zero(tmp_path) -> None:
     result = read_alert_state(state_file, ttl_seconds=0)
     assert result is not None
     assert result["fingerprint"] == "abc"
+
+
+def test_alert_state_build_fingerprint_handles_datetime() -> None:
+    from app.alerting.state import build_fingerprint
+
+    payload = {
+        "status": "degraded",
+        "latest_failed_job": {
+            "completed_at": datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+        },
+    }
+
+    fingerprint = build_fingerprint(payload)
+
+    assert isinstance(fingerprint, str)
+    assert len(fingerprint) == 64
 
 
 def test_broker_alert_refires_after_ttl_expires(monkeypatch, tmp_path) -> None:
@@ -4096,23 +4434,23 @@ def test_maybe_send_broker_alert_prefers_anomalous_streak_label(monkeypatch, tmp
 
 
 def test_insert_signal_writes_audit_event_for_buy_sell() -> None:
-    from app.strategy.ma_cross import insert_signal
-    import app.strategy.ma_cross as ma_cross_mod
+    from app.strategy.signal_service import insert_signal
+    import app.strategy.signal_service as signal_service_mod
 
     connection = make_connection()
     run_migrations(connection)
     captured: list[dict] = []
 
-    original = ma_cross_mod.insert_event
-    ma_cross_mod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured.append(
+    original = signal_service_mod.insert_event
+    signal_service_mod.insert_event = lambda conn, event_type, status, source, message, payload=None: captured.append(
         {"event_type": event_type, "status": status, "source": source, "payload": payload}
     ) or 1
     try:
-        insert_signal(connection, signal_type="BUY", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=100.1, long_ma=99.9)
-        insert_signal(connection, signal_type="HOLD", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=100.0, long_ma=100.0)
-        insert_signal(connection, signal_type="SELL", symbol="BTCUSDT", timeframe="1m", strategy_name="ma_cross", short_ma=99.8, long_ma=100.0)
+        insert_signal(connection, signal_type="BUY", symbol="BTCUSDT", timeframe="1m", strategy_name="test_strategy", short_ma=100.1, long_ma=99.9)
+        insert_signal(connection, signal_type="HOLD", symbol="BTCUSDT", timeframe="1m", strategy_name="test_strategy", short_ma=100.0, long_ma=100.0)
+        insert_signal(connection, signal_type="SELL", symbol="BTCUSDT", timeframe="1m", strategy_name="test_strategy", short_ma=99.8, long_ma=100.0)
     finally:
-        ma_cross_mod.insert_event = original
+        signal_service_mod.insert_event = original
         connection.close()
 
     assert len(captured) == 2, "Only BUY and SELL should produce audit events"
@@ -4138,11 +4476,11 @@ def test_execute_risk_event_id_writes_audit_event_on_fill() -> None:
         seed_candles(connection, [50000.0] * 5)
         connection.execute(
             "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?, ?, ?, ?, ?, ?)",
-            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 0.9),
+            ("BTCUSDT", "1m", "ppo", "BUY", 1.0, 0.9),
         )
         connection.execute(
             "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "ok"),
+            (1, "BTCUSDT", "1m", "ppo", "BUY", "APPROVED", "ok"),
         )
         connection.commit()
         from app.execution.paper_broker import execute_risk_event_id
@@ -4175,7 +4513,7 @@ def test_execution_job_reconciles_orphan_order_and_emits_audit_event() -> None:
     try:
         connection.execute(
             "INSERT INTO orders (client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("cid-1", None, "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "NEW"),
+            ("cid-1", None, "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "NEW"),
         )
         connection.commit()
         from app.pipeline.execution_job import run_execution_job
@@ -4453,7 +4791,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                         "risk": "queued",
                         "execution": "queued",
                     },
-                    "strategy_names": ["ma_cross", "momentum_3bar"],
+                    "strategy_names": ["ppo", "ppo"],
                     "symbol_names": ["BTCUSDT", "ETHUSDT"],
                     "execution_backend": "paper",
                     "source": "api_pipeline",
@@ -4469,7 +4807,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "risk": "queued",
                     "execution": "queued",
                 },
-                "strategy_names": ["ma_cross", "momentum_3bar"],
+                "strategy_names": ["ppo", "ppo"],
                 "symbol_names": ["BTCUSDT", "ETHUSDT"],
                 "execution_backend": "paper",
                 "source": "api_pipeline",
@@ -4484,7 +4822,7 @@ def test_queue_summary_endpoint(monkeypatch) -> None:
                     "risk": "completed",
                     "execution": "completed",
                 },
-                "strategy_names": ["ma_cross"],
+                "strategy_names": ["ppo"],
                 "symbol_names": ["BTCUSDT"],
                 "execution_backend": "paper",
                 "source": "scheduler_pipeline",
@@ -4559,7 +4897,7 @@ def test_get_job_queue_summary_includes_quality_metrics() -> None:
         }
         job_queue_module.get_execution_adapter_name = lambda: "paper"
         market_job_id = enqueue_job(connection, "market_data", payload={"symbol_names": ["BTCUSDT"]})
-        strategy_job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        strategy_job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ppo"]})
         execution_job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["ETHUSDT"]})
 
         leased_market_job = lease_next_job(connection, job_type="market_data")
@@ -4633,7 +4971,7 @@ def test_get_job_queue_summary_includes_batch_source_and_orchestration() -> None
         run_migrations(connection)
         enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
             payload={"source": "api_pipeline", "orchestration": "queue_batch"},
         )
@@ -4654,7 +4992,7 @@ def test_get_job_queue_summary_includes_batch_age_seconds(monkeypatch) -> None:
         run_migrations(connection)
         enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
             payload={"source": "api_pipeline", "orchestration": "queue_batch"},
         )
@@ -4897,7 +5235,7 @@ def test_pipeline_run_endpoint_accepts_strategy_name_for_direct_orchestration(mo
 
     monkeypatch.setattr(
         "app.api.main.run_pipeline_collect",
-        lambda strategy_name="ma_cross", symbol_names=None: called.append(
+        lambda strategy_name="ppo", symbol_names=None: called.append(
             {"strategy_name": strategy_name, "symbol_names": symbol_names}
         ) or {
             "status": "completed",
@@ -4909,13 +5247,13 @@ def test_pipeline_run_endpoint_accepts_strategy_name_for_direct_orchestration(mo
 
     response = client.post(
         "/pipeline/run",
-        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"], "orchestration": "direct"},
+        json={"strategy_name": "ppo", "symbol_names": ["BTCUSDT", "ETHUSDT"], "orchestration": "direct"},
     )
 
     assert response.status_code == 200
-    assert response.json()["strategy_name"] == "momentum_3bar"
+    assert response.json()["strategy_name"] == "ppo"
     assert response.json()["requested_symbol_names"] == ["BTCUSDT", "ETHUSDT"]
-    assert called == [{"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT", "ETHUSDT"]}]
+    assert called == [{"strategy_name": "ppo", "symbol_names": ["BTCUSDT", "ETHUSDT"]}]
 
 
 def test_pipeline_run_endpoint_supports_queue_dispatch(monkeypatch) -> None:
@@ -4941,7 +5279,7 @@ def test_pipeline_run_endpoint_supports_queue_dispatch(monkeypatch) -> None:
     response = client.post(
         "/pipeline/run",
         json={
-            "strategy_name": "momentum_3bar",
+            "strategy_name": "ppo",
             "symbol_names": ["BTCUSDT", "ETHUSDT"],
             "orchestration": "queue_dispatch",
         },
@@ -4953,7 +5291,7 @@ def test_pipeline_run_endpoint_supports_queue_dispatch(monkeypatch) -> None:
     assert response.json()["batch_id"] == "batch-123"
     assert captured["kwargs"] == {
         "payload": {"orchestration": "queue_dispatch", "source": "api_pipeline"},
-        "strategy_name": "momentum_3bar",
+        "strategy_name": "ppo",
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
     }
 
@@ -4968,7 +5306,12 @@ def test_pipeline_run_endpoint_supports_queue_drain(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
-    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+    monkeypatch.setattr(
+        "app.api.main.insert_event",
+        lambda connection, event_type, status, source, message, payload=None: audit_calls.append(
+            {"event_type": event_type, "status": status, "source": source, "message": message, "payload": payload}
+        ),
+    )
     def fake_run_pipeline_batch(connection, batch_id=None):
         captured["batch_id"] = batch_id
         return {
@@ -4989,7 +5332,7 @@ def test_pipeline_run_endpoint_supports_queue_drain(monkeypatch) -> None:
     response = client.post(
         "/pipeline/run",
         json={
-            "strategy_name": "momentum_3bar",
+            "strategy_name": "ppo",
             "symbol_names": ["BTCUSDT"],
             "orchestration": "queue_drain",
             "batch_id": "batch-stale-1",
@@ -5000,7 +5343,7 @@ def test_pipeline_run_endpoint_supports_queue_drain(monkeypatch) -> None:
     assert response.json()["status"] == "completed"
     assert response.json()["orchestration"] == "queue_drain"
     assert response.json()["batch_id"] == "batch-123"
-    assert response.json()["strategy_name"] == "momentum_3bar"
+    assert response.json()["strategy_name"] == "ppo"
     assert response.json()["requested_symbol_names"] == ["BTCUSDT"]
     assert response.json()["requested_batch_id"] == "batch-stale-1"
     assert captured["batch_id"] == "batch-stale-1"
@@ -5033,7 +5376,7 @@ def test_pipeline_run_endpoint_supports_queue_batch(monkeypatch) -> None:
     response = client.post(
         "/pipeline/run",
         json={
-            "strategy_name": "momentum_3bar",
+            "strategy_name": "ppo",
             "symbol_names": ["BTCUSDT"],
             "orchestration": "queue_batch",
         },
@@ -5061,7 +5404,7 @@ def test_pipeline_run_endpoint_uses_default_orchestration_setting(monkeypatch) -
 
     response = client.post(
         "/pipeline/run",
-        json={"strategy_name": "momentum_3bar", "symbol_names": ["BTCUSDT"]},
+        json={"strategy_name": "ppo", "symbol_names": ["BTCUSDT"]},
     )
 
     assert response.status_code == 200
@@ -5076,8 +5419,8 @@ def test_strategies_endpoint_lists_registered_strategies() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["default_strategy"] == "ma_cross"
-    assert "ma_cross" in payload["strategies"]
+    assert payload["default_strategy"] == "ppo"
+    assert "ppo" in payload["strategies"]
     assert "ppo" in payload["strategies"]
 
 
@@ -5089,7 +5432,7 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
         "app.api.main.get_strategy_activity_summary",
         lambda connection, include_live_book=False: [
             {
-                "strategy_name": "ma_cross",
+                "strategy_name": "ppo",
                 "latest_signal": {"signal_type": "BUY"},
                 "latest_risk": {"decision": "APPROVED"},
                 "latest_order": {"status": "FILLED"},
@@ -5109,7 +5452,7 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
                 "has_activity": True,
             },
             {
-                "strategy_name": "momentum_3bar",
+                "strategy_name": "ppo",
                 "latest_signal": None,
                 "latest_risk": None,
                 "latest_order": None,
@@ -5139,7 +5482,7 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload[0]["strategy_name"] == "ma_cross"
+    assert payload[0]["strategy_name"] == "ppo"
     assert payload[0]["latest_risk"]["decision"] == "APPROVED"
     assert payload[0]["latest_fill"]["side"] == "BUY"
     assert payload[0]["bid_price"] == 70850.1
@@ -5147,7 +5490,193 @@ def test_strategy_summary_endpoint_returns_grouped_activity(monkeypatch) -> None
     assert payload[0]["filled_order_count"] == 1
     assert payload[0]["gross_realized_pnl"] == 12.5
     assert payload[0]["winning_trade_count"] == 1
-    assert payload[1]["strategy_name"] == "momentum_3bar"
+    assert payload[1]["strategy_name"] == "ppo"
+
+
+def test_strategy_summary_endpoint_uses_exchange_latest_closed_trade_when_binance_is_source_of_truth(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.get_strategy_activity_summary",
+        lambda connection, include_live_book=False: [
+            {
+                "strategy_name": "ppo",
+                "latest_signal": {"signal_type": "SELL", "symbol": "SOLUSDT"},
+                "latest_risk": {"decision": "APPROVED"},
+                "latest_order": {"status": "FILLED", "symbol": "SOLUSDT"},
+                "latest_fill": {"side": "SELL", "symbol": "SOLUSDT"},
+                "latest_closed_trade": {"realized_pnl": 123.0, "closed_at": "stale"},
+                "gross_realized_pnl": 0.0,
+                "total_commission": 0.0,
+                "net_realized_pnl": 0.0,
+                "filled_order_count": 0,
+                "filled_qty_total": 0.0,
+                "buy_fill_count": 0,
+                "sell_fill_count": 0,
+                "realized_trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "breakeven_trade_count": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr("app.api.main._binance_futures_source_of_truth_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.api.main._get_binance_futures_positions",
+        lambda symbol=None, include_flat=False: [
+            {"symbol": "SOLUSDT", "qty": -1.0, "avg_price": 82.27, "unrealized_pnl": 0.43}
+        ],
+    )
+    monkeypatch.setattr(
+        "app.api.main._get_binance_futures_position",
+        lambda symbol: {"symbol": symbol, "qty": -1.0, "avg_price": 82.27, "unrealized_pnl": 0.43},
+    )
+    monkeypatch.setattr(
+        "app.api.main._build_exchange_trade_snapshot",
+        lambda symbol, strategy_name=None, days=7, limit=1000, start_date=None, end_date=None: {
+            "exchange": {
+                "summary": {"fills": 2, "notional": 166.01362},
+                "trades": [],
+            },
+            "trades": [
+                {"symbol": symbol, "side": "SELL", "qty": 1.0, "commission": 0.1, "commission_asset": "USDT", "realized_pnl": 0.0},
+                {"symbol": symbol, "side": "BUY", "qty": 1.0, "commission": 0.1, "commission_asset": "USDT", "realized_pnl": -0.73681},
+            ],
+            "daily": [],
+            "gross_pnl": -0.73681,
+            "total_fees": 0.2,
+            "realized_trade_count": 1,
+            "win_trade_count": 0,
+            "loss_trade_count": 1,
+            "best_trade": -0.73681,
+            "worst_trade": -0.73681,
+            "latest_closed_trade": {
+                "strategy_name": strategy_name,
+                "symbol": symbol,
+                "timeframe": None,
+                "qty": 1.0,
+                "entry_price": None,
+                "exit_price": 83.00681,
+                "realized_pnl": -0.73681,
+                "closed_at": "2026-04-09T02:34:44+00:00",
+                "order_id": "short-close",
+                "status": "loss",
+                "source": "binance_user_trades",
+            },
+            "recent_closed_trades": [],
+            "filled_qty_total": 2.0,
+            "buy_count": 1,
+            "sell_count": 1,
+        },
+    )
+
+    response = client.get("/strategies/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["latest_closed_trade"]["realized_pnl"] == pytest.approx(-0.73681)
+    assert payload[0]["latest_closed_trade"]["closed_at"] == "2026-04-09T02:34:44+00:00"
+    assert payload[0]["latest_closed_trade"]["status"] == "loss"
+    assert payload[0]["latest_exchange_closed_trade"]["realized_pnl"] == pytest.approx(-0.73681)
+    assert payload[0]["net_position_qty"] == pytest.approx(-1.0)
+
+
+def test_strategy_summary_endpoint_tolerates_binance_position_timeout(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.get_strategy_activity_summary",
+        lambda connection, include_live_book=False: [
+            {
+                "strategy_name": "ppo",
+                "latest_signal": {"signal_type": "BUY", "symbol": "SOLUSDT"},
+                "latest_risk": {"decision": "APPROVED"},
+                "latest_order": {"status": "FILLED", "symbol": "SOLUSDT"},
+                "latest_fill": {"side": "BUY", "symbol": "SOLUSDT"},
+                "filled_order_count": 1,
+                "filled_qty_total": 1.0,
+                "gross_realized_pnl": 0.0,
+                "buy_fill_count": 1,
+                "sell_fill_count": 0,
+                "realized_trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "breakeven_trade_count": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr("app.api.main._binance_futures_source_of_truth_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.api.main._get_binance_futures_positions",
+        lambda symbol=None, include_flat=False: (_ for _ in ()).throw(TimeoutError("positionRisk timeout")),
+    )
+    monkeypatch.setattr(
+        "app.api.main._build_exchange_trade_snapshot",
+        lambda symbol, strategy_name=None, days=7, limit=1000, start_date=None, end_date=None: {
+            "exchange": {
+                "summary": {"fills": 1, "notional": 163.74},
+                "trades": [],
+            },
+            "trades": [
+                {
+                    "trade_id": 2,
+                    "order_id": "short-close",
+                    "symbol": symbol,
+                    "side": "BUY",
+                    "price": 81.87,
+                    "qty": 2.0,
+                    "commission": 0.1,
+                    "commission_asset": "USDT",
+                    "realized_pnl": 0.4,
+                    "transact_time": 2000,
+                    "created_at": "2026-04-09T04:34:28+00:00",
+                },
+            ],
+            "daily": [],
+            "gross_pnl": 0.4,
+            "total_fees": 0.1,
+            "realized_trade_count": 1,
+            "win_trade_count": 1,
+            "loss_trade_count": 0,
+            "best_trade": 0.4,
+            "worst_trade": 0.4,
+            "latest_closed_trade": {
+                "strategy_name": strategy_name,
+                "symbol": symbol,
+                "timeframe": None,
+                "qty": 2.0,
+                "entry_price": None,
+                "exit_price": 81.87,
+                "realized_pnl": 0.4,
+                "closed_at": "2026-04-09T04:34:28+00:00",
+                "order_id": "short-close",
+                "status": "win",
+                "source": "binance_user_trades",
+            },
+            "recent_closed_trades": [],
+            "filled_qty_total": 2.0,
+            "buy_count": 1,
+            "sell_count": 0,
+        },
+    )
+
+    response = client.get("/strategies/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["latest_closed_trade"]["realized_pnl"] == pytest.approx(0.4)
+    assert payload[0]["latest_exchange_closed_trade"]["realized_pnl"] == pytest.approx(0.4)
+    assert payload[0]["exchange_current_position"]["qty"] == pytest.approx(0.0)
 
 
 def test_get_strategy_activity_summary_handles_mixed_timestamp_types(monkeypatch) -> None:
@@ -5237,7 +5766,7 @@ def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> N
         captured["strategy_name"] = strategy_name
         return [
             {
-                "strategy_name": "ma_cross",
+                "strategy_name": "ppo",
                 "symbol": "BTCUSDT",
                 "qty": 1.0,
                 "entry_price": 100.0,
@@ -5250,13 +5779,144 @@ def test_strategy_closed_trades_endpoint_returns_recent_trades(monkeypatch) -> N
         ]
     monkeypatch.setattr("app.api.main.get_strategy_closed_trades", fake_get_strategy_closed_trades)
 
-    response = client.get("/strategies/closed-trades?limit=10&strategy_name=ma_cross")
+    response = client.get("/strategies/closed-trades?limit=10&strategy_name=ppo")
 
     assert response.status_code == 200
-    assert captured == {"limit": 10, "strategy_name": "ma_cross"}
+    assert captured == {"limit": 10, "strategy_name": "ppo"}
     payload = response.json()
-    assert payload[0]["strategy_name"] == "ma_cross"
+    assert payload[0]["strategy_name"] == "ppo"
     assert payload[0]["realized_pnl"] == 10.0
+
+
+def test_positions_endpoint_falls_back_to_local_positions_when_binance_times_out(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.main._binance_futures_source_of_truth_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.api.main._get_binance_futures_positions",
+        lambda include_flat=False: (_ for _ in ()).throw(TimeoutError("positionRisk timeout")),
+    )
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.get_positions",
+        lambda connection, limit=10: [
+            {"symbol": "SOLUSDT", "qty": 1.0, "avg_price": 81.87, "realized_pnl": 0.0, "updated_at": "2026-04-09T04:34:28+00:00"}
+        ],
+    )
+
+    response = client.get("/positions?limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["symbol"] == "SOLUSDT"
+    assert payload[0]["avg_price"] == pytest.approx(81.87)
+
+
+def test_testnet_execution_report_includes_latest_exchange_closed_trade(monkeypatch) -> None:
+    client = TestClient(app)
+
+    class DummyConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr(
+        "app.api.main.get_execution_report",
+        lambda connection, symbol="BTCUSDT", strategy_name=None, days=7, limit=10: {
+            "summary": {"symbol": symbol, "strategy_name": strategy_name or "all"},
+            "recent_closed_trades": [],
+            "recent_fills": [],
+            "daily": [],
+        },
+    )
+    monkeypatch.setattr("app.api.main._binance_futures_source_of_truth_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.api.main._build_exchange_trade_snapshot",
+        lambda symbol, strategy_name=None, days=7, limit=100, start_date=None, end_date=None: {
+            "exchange": {
+                "summary": {"fills": 1, "notional": 163.74},
+                "trades": [],
+            },
+            "trades": [
+                {
+                    "trade_id": 1,
+                    "order_id": "close-1",
+                    "symbol": symbol,
+                    "side": "BUY",
+                    "price": 81.87,
+                    "qty": 2.0,
+                    "quote_qty": 163.74,
+                    "commission": 0.1,
+                    "commission_asset": "USDT",
+                    "realized_pnl": 0.4,
+                    "created_at": "2026-04-09T04:34:28+00:00",
+                }
+            ],
+            "daily": [
+                {
+                    "trade_date": "2026-04-09",
+                    "fills": 1,
+                    "notional": 163.74,
+                    "gross_pnl": 0.4,
+                    "fees": 0.1,
+                    "net_pnl": 0.3,
+                }
+            ],
+            "gross_pnl": 0.4,
+            "total_fees": 0.1,
+            "realized_trade_count": 1,
+            "win_trade_count": 1,
+            "loss_trade_count": 0,
+            "best_trade": 0.4,
+            "worst_trade": 0.4,
+            "latest_closed_trade": {
+                "strategy_name": "ppo",
+                "symbol": symbol,
+                "qty": 2.0,
+                "entry_price": None,
+                "exit_price": 81.87,
+                "realized_pnl": 0.4,
+                "closed_at": "2026-04-09T04:34:28+00:00",
+                "order_id": "close-1",
+                "status": "win",
+                "source": "binance_user_trades",
+            },
+            "recent_closed_trades": [
+                {
+                    "strategy_name": "ppo",
+                    "symbol": symbol,
+                    "timeframe": "1m",
+                    "qty": 2.0,
+                    "entry_price": None,
+                    "exit_price": 81.87,
+                    "realized_pnl": 0.4,
+                    "closed_at": "2026-04-09T04:34:28+00:00",
+                    "hold_minutes": None,
+                    "order_id": "close-1",
+                    "status": "win",
+                    "source": "binance_user_trades",
+                }
+            ],
+            "filled_qty_total": 2.0,
+            "buy_count": 1,
+            "sell_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.main._get_binance_futures_position",
+        lambda symbol: {"symbol": symbol, "qty": 1.0, "avg_price": 81.87, "unrealized_pnl": -0.01, "source": "binance_futures"},
+    )
+
+    response = client.get("/reports/testnet-execution?symbol=SOLUSDT&strategy_name=ppo&days=7&limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["latest_exchange_closed_trade"]["realized_pnl"] == pytest.approx(0.4)
+    assert payload["recent_closed_trades"][0]["realized_pnl"] == pytest.approx(0.4)
 
 
 def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
@@ -5266,20 +5926,20 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.main.get_strategy_status",
         lambda: {
-            "strategy_name": "ma_cross",
-            "strategy_names": ["ma_cross", "momentum_3bar"],
-            "disabled_strategy_names": ["momentum_3bar"],
-            "effective_strategy_names": ["ma_cross"],
+            "strategy_name": "ppo",
+            "strategy_names": ["ppo", "ppo"],
+            "disabled_strategy_names": ["ppo"],
+            "effective_strategy_names": ["ppo"],
             "effective_strategy_limit": 1,
-            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
-            "disabled_strategy_notes": {"momentum_3bar": "cooldown investigation"},
-            "default_strategy": "ma_cross",
+            "strategy_priorities": {"ppo": 0, "ppo": 10},
+            "disabled_strategy_notes": {"ppo": "cooldown investigation"},
+            "default_strategy": "ppo",
             "strategy_file": "runtime/scheduler.strategy",
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
             "priority_file": "runtime/scheduler.strategy.priority.json",
             "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
             "effective_limit_file": "runtime/scheduler.strategy.limit",
-            "available_strategies": ["ma_cross", "momentum_3bar"],
+            "available_strategies": ["ppo", "ppo"],
         },
     )
     def fake_set_active_strategies(strategy_names, **kwargs):
@@ -5333,10 +5993,10 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     update_response = client.post(
         "/scheduler/strategy",
         json={
-            "strategy_names": ["ma_cross", "momentum_3bar"],
-            "disabled_strategy_names": ["momentum_3bar"],
-            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 10},
-            "disabled_strategy_notes": {"momentum_3bar": "cooldown investigation"},
+            "strategy_names": ["ppo", "ppo"],
+            "disabled_strategy_names": ["ppo"],
+            "strategy_priorities": {"ppo": 0, "ppo": 10},
+            "disabled_strategy_notes": {"ppo": "cooldown investigation"},
             "effective_strategy_limit": 1,
             "audit_action": "save_strategy_state",
             "audit_message": "Applied scheduler strategy state from admin.",
@@ -5344,22 +6004,22 @@ def test_scheduler_strategy_endpoints_round_trip(monkeypatch) -> None:
     )
 
     assert status_response.status_code == 200
-    assert status_response.json()["strategy_name"] == "ma_cross"
-    assert status_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
-    assert status_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
-    assert status_response.json()["effective_strategy_names"] == ["ma_cross"]
+    assert status_response.json()["strategy_name"] == "ppo"
+    assert status_response.json()["strategy_names"] == ["ppo", "ppo"]
+    assert status_response.json()["disabled_strategy_names"] == ["ppo"]
+    assert status_response.json()["effective_strategy_names"] == ["ppo"]
     assert status_response.json()["effective_strategy_limit"] == 1
     assert update_response.status_code == 200
-    assert update_response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
-    assert update_response.json()["disabled_strategy_names"] == ["momentum_3bar"]
-    assert update_response.json()["strategy_priorities"] == {"ma_cross": 0, "momentum_3bar": 10}
-    assert update_response.json()["disabled_strategy_notes"] == {"momentum_3bar": "cooldown investigation"}
+    assert update_response.json()["strategy_names"] == ["ppo", "ppo"]
+    assert update_response.json()["disabled_strategy_names"] == ["ppo"]
+    assert update_response.json()["strategy_priorities"] == {"ppo": 0, "ppo": 10}
+    assert update_response.json()["disabled_strategy_notes"] == {"ppo": "cooldown investigation"}
     assert update_response.json()["effective_strategy_limit"] == 1
     assert captured == {
-        "active": ["ma_cross", "momentum_3bar"],
-        "disabled": ["momentum_3bar"],
-        "priorities": {"ma_cross": 0, "momentum_3bar": 10},
-        "notes": {"momentum_3bar": "cooldown investigation"},
+        "active": ["ppo", "ppo"],
+        "disabled": ["ppo"],
+        "priorities": {"ppo": 0, "ppo": 10},
+        "notes": {"ppo": "cooldown investigation"},
         "limit": 1,
         "active_kwargs": {
             "audit_action": "save_strategy_state",
@@ -5390,20 +6050,20 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
 
     def fake_get_strategy_status():
         return {
-            "strategy_name": "momentum_3bar",
-            "strategy_names": ["momentum_3bar"],
+            "strategy_name": "ppo",
+            "strategy_names": ["ppo"],
             "disabled_strategy_names": [],
-            "effective_strategy_names": ["momentum_3bar"],
+            "effective_strategy_names": ["ppo"],
             "effective_strategy_limit": None,
-            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 1},
+            "strategy_priorities": {"ppo": 0},
             "disabled_strategy_notes": {},
-            "default_strategy": "ma_cross",
+            "default_strategy": "ppo",
             "strategy_file": "runtime/scheduler.strategy",
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
             "priority_file": "runtime/scheduler.strategy.priority.json",
             "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
             "effective_limit_file": "runtime/scheduler.strategy.limit",
-            "available_strategies": ["ma_cross", "momentum_3bar"],
+            "available_strategies": ["ppo"],
         }
 
     def fake_set_strategy_priorities(strategy_priorities, **kwargs):
@@ -5420,10 +6080,10 @@ def test_scheduler_strategy_preset_endpoint(monkeypatch) -> None:
     response = client.post("/scheduler/strategy/preset", json={"preset": "active_first"})
 
     assert response.status_code == 200
-    assert captured["priorities"] == {"momentum_3bar": 0, "ma_cross": 1}
+    assert captured["priorities"] == {"ppo": 0}
     assert captured["kwargs"]["audit_action"] == "priority_preset:active_first"
     assert captured["kwargs"]["extra_payload"] == {"preset": "active_first"}
-    assert response.json()["strategy_names"] == ["momentum_3bar"]
+    assert response.json()["strategy_names"] == ["ppo"]
 
 
 def test_scheduler_symbol_endpoints_round_trip(monkeypatch) -> None:
@@ -5467,7 +6127,7 @@ def test_reclaim_stale_leased_jobs_resets_expired_lease() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ppo"]})
         leased = lease_next_job(connection, job_type="strategy")
         assert leased is not None
         assert leased["status"] == "leased"
@@ -5494,7 +6154,7 @@ def test_reclaim_stale_leased_jobs_ignores_fresh_leases() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        enqueue_job(connection, "strategy", payload={"strategy_names": ["ma_cross"]})
+        enqueue_job(connection, "strategy", payload={"strategy_names": ["ppo"]})
         leased = lease_next_job(connection, job_type="strategy")
         assert leased is not None
 
@@ -5526,6 +6186,32 @@ def test_reclaim_stale_leased_jobs_ignores_completed_and_failed() -> None:
         connection.close()
 
 
+def test_reclaim_stale_leased_jobs_supports_mixed_timestamp_formats() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "strategy", payload={})
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'leased', started_at = ?
+            WHERE id = ?;
+            """,
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+        connection.commit()
+
+        reclaimed = reclaim_stale_leased_jobs(connection, lease_timeout_seconds=300)
+        assert reclaimed == 1
+
+        job = get_job(connection, job_id)
+        assert job is not None
+        assert job["status"] == "queued"
+        assert job["started_at"] is None
+    finally:
+        connection.close()
+
+
 def test_job_queue_lifecycle_round_trip() -> None:
     connection = make_connection()
     try:
@@ -5534,13 +6220,13 @@ def test_job_queue_lifecycle_round_trip() -> None:
         first_job_id = enqueue_job(
             connection,
             "strategy",
-            payload={"strategy_names": ["ma_cross", "momentum_3bar"], "symbol_names": ["BTCUSDT", "ETHUSDT"]},
+            payload={"strategy_names": ["ppo", "ppo"], "symbol_names": ["BTCUSDT", "ETHUSDT"]},
         )
         second_job_id = enqueue_job(connection, "execution", payload={"symbol_names": ["ETHUSDT"]})
 
         listed_jobs = list_jobs(connection, limit=10)
         assert [job["id"] for job in listed_jobs] == [second_job_id, first_job_id]
-        assert listed_jobs[1]["payload"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert listed_jobs[1]["payload"]["strategy_names"] == ["ppo", "ppo"]
 
         leased_job = lease_next_job(connection, job_type="strategy")
         assert leased_job is not None
@@ -5590,6 +6276,56 @@ def test_job_queue_lifecycle_round_trip() -> None:
         connection.close()
 
 
+def test_backtest_loader_accepts_full_iso_utc_start() -> None:
+    from app.backtest.loader import load_candles_from_db
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        ensure_candles_table(connection)
+        save_klines(
+            connection,
+            [
+                make_kline(1_775_692_800_000, 100.0),
+                make_kline(1_775_692_860_000, 101.0),
+                make_kline(1_775_692_920_000, 102.0),
+            ],
+        )
+        candles = load_candles_from_db(
+            connection,
+            symbol="BTCUSDT",
+            start="2026-04-09T00:01:00+00:00",
+        )
+        assert len(candles) == 2
+        assert candles[0]["close"] == 101.0
+    finally:
+        connection.close()
+
+
+def test_job_queue_persists_utc_iso_timestamps() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ppo"]})
+        queued_job = get_job(connection, job_id)
+        assert queued_job is not None
+        assert "T" in str(queued_job["created_at"])
+        assert str(queued_job["created_at"]).endswith("+00:00")
+
+        leased_job = lease_next_job(connection, job_type="strategy")
+        assert leased_job is not None
+        assert "T" in str(leased_job["started_at"])
+        assert str(leased_job["started_at"]).endswith("+00:00")
+
+        complete_job(connection, job_id, result={"status": "ok"})
+        completed_job = get_job(connection, job_id)
+        assert completed_job is not None
+        assert "T" in str(completed_job["completed_at"])
+        assert str(completed_job["completed_at"]).endswith("+00:00")
+    finally:
+        connection.close()
+
+
 def test_run_next_queued_job_persists_structured_error_detail() -> None:
     connection = make_connection()
     try:
@@ -5617,6 +6353,21 @@ def test_run_next_queued_job_persists_structured_error_detail() -> None:
         assert failed_job["result"]["error_detail"]["status_code"] == 400
         assert failed_job["result"]["error_detail"]["binance_code"] == -2010
         assert failed_job["result"]["error_detail"]["binance_msg"] == "insufficient balance"
+    finally:
+        connection.close()
+
+
+def test_training_job_create_persists_utc_iso_created_at() -> None:
+    from app.training.job_service import create_job, get_job as get_training_job
+
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = create_job(connection, "SOLUSDT", "1m", "v1", params={"alpha": 1})
+        job = get_training_job(connection, job_id)
+        assert job is not None
+        assert "T" in str(job["created_at"])
+        assert str(job["created_at"]).endswith("+00:00")
     finally:
         connection.close()
 
@@ -5660,8 +6411,8 @@ def test_enqueue_pipeline_jobs_creates_ordered_queue_batch() -> None:
 
         jobs = __import__("app.core.job_queue", fromlist=["enqueue_pipeline_jobs"]).enqueue_pipeline_jobs(
             connection,
-            strategy_name="momentum_3bar",
-            strategy_names=["ma_cross", "momentum_3bar"],
+            strategy_name="ppo",
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT", "ETHUSDT"],
             payload={"source": "test_batch"},
         )
@@ -5670,7 +6421,7 @@ def test_enqueue_pipeline_jobs_creates_ordered_queue_batch() -> None:
         assert len({job["batch_id"] for job in jobs}) == 1
         queue_rows = list_jobs(connection, limit=10)
         assert [job["job_type"] for job in queue_rows] == ["execution", "risk", "strategy", "market_data"]
-        assert queue_rows[0]["payload"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert queue_rows[0]["payload"]["strategy_names"] == ["ppo"]
         assert queue_rows[0]["payload"]["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
         assert queue_rows[0]["payload"]["batch_id"] == jobs[0]["batch_id"]
         # dependency chain: market_data → strategy → risk → execution
@@ -5691,7 +6442,7 @@ def test_lease_next_job_respects_depends_on_job_id() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        jobs = enqueue_pipeline_jobs(connection, strategy_name="ma_cross")
+        jobs = enqueue_pipeline_jobs(connection, strategy_name="ppo")
         md_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "market_data")
         st_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "strategy")
         rk_job_id = next(j["job_id"] for j in jobs if j["job_type"] == "risk")
@@ -5754,10 +6505,10 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
                 "job_type": job_type or "strategy",
                 "status": status or "queued",
                 "payload_json": json.dumps(
-                    {"strategy_names": ["ma_cross"], "symbol_names": ["BTCUSDT"]},
+                    {"strategy_names": ["ppo"], "symbol_names": ["BTCUSDT"]},
                     sort_keys=True,
                 ),
-                "payload": {"strategy_names": ["ma_cross"], "symbol_names": ["BTCUSDT"]},
+                "payload": {"strategy_names": ["ppo"], "symbol_names": ["BTCUSDT"]},
                 "result_json": None,
                 "result": None,
                 "error_message": None,
@@ -5773,7 +6524,7 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
         "/queue/jobs",
         json={
             "job_type": "strategy",
-            "strategy_names": ["ma_cross", "ma_cross"],
+            "strategy_names": ["ppo", "ppo"],
             "symbol_names": ["BTCUSDT", "ETHUSDT", "BTCUSDT"],
             "payload": {"source": "admin"},
         },
@@ -5796,7 +6547,7 @@ def test_queue_job_endpoints_round_trip(monkeypatch) -> None:
             "status": "ok",
         },
         "source": "admin",
-        "strategy_names": ["ma_cross"],
+        "strategy_names": ["ppo"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
     }
     assert list_response.status_code == 200
@@ -5812,6 +6563,7 @@ def test_clear_queue_batch_endpoint(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("app.api.main.insert_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "app.api.main.fail_batch_jobs",
         lambda connection, batch_id, **kwargs: [
@@ -5853,8 +6605,8 @@ def test_enqueue_pipeline_queue_jobs_endpoint(monkeypatch) -> None:
     response = client.post(
         "/queue/jobs/enqueue-pipeline",
         json={
-            "strategy_name": "momentum_3bar",
-            "strategy_names": ["ma_cross", "momentum_3bar"],
+            "strategy_name": "ppo",
+            "strategy_names": ["ppo", "ppo"],
             "symbol_names": ["BTCUSDT", "ETHUSDT"],
             "payload": {"source": "api_test"},
         },
@@ -5864,8 +6616,8 @@ def test_enqueue_pipeline_queue_jobs_endpoint(monkeypatch) -> None:
     assert response.json()["status"] == "queued"
     assert response.json()["job_count"] == 4
     assert response.json()["job_types"] == ["market_data", "strategy", "risk", "execution"]
-    assert captured["strategy_name"] == "momentum_3bar"
-    assert captured["strategy_names"] == ["ma_cross", "momentum_3bar"]
+    assert captured["strategy_name"] == "ppo"
+    assert captured["strategy_names"] == ["ppo", "ppo"]
     assert captured["symbol_names"] == ["BTCUSDT", "ETHUSDT"]
     assert captured["payload"] == {"source": "api_test"}
 
@@ -5897,7 +6649,7 @@ def test_run_next_pipeline_batch_drains_oldest_job_in_batch(monkeypatch) -> None
         run_migrations(connection)
         jobs = __import__("app.core.job_queue", fromlist=["enqueue_pipeline_jobs"]).enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
         )
 
@@ -5926,13 +6678,13 @@ def test_run_next_pipeline_batch_targets_requested_batch(monkeypatch) -> None:
         run_migrations(connection)
         older_jobs = enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
             payload={"source": "older_batch"},
         )
         newer_jobs = enqueue_pipeline_jobs(
             connection,
-            strategy_names=["momentum_3bar"],
+            strategy_names=["ppo"],
             symbol_names=["ETHUSDT"],
             payload={"source": "newer_batch"},
         )
@@ -5967,12 +6719,12 @@ def test_fail_batch_jobs_marks_only_requested_batch_as_failed() -> None:
         run_migrations(connection)
         target_jobs = enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
         )
         other_jobs = enqueue_pipeline_jobs(
             connection,
-            strategy_names=["momentum_3bar"],
+            strategy_names=["ppo"],
             symbol_names=["ETHUSDT"],
         )
 
@@ -6009,7 +6761,7 @@ def test_run_pipeline_batch_drains_full_batch(monkeypatch) -> None:
         )
         jobs = enqueue_pipeline_jobs(
             connection,
-            strategy_names=["ma_cross"],
+            strategy_names=["ppo"],
             symbol_names=["BTCUSDT"],
         )
         completed = iter(
@@ -6068,7 +6820,7 @@ def test_run_pipeline_batch_drains_full_batch(monkeypatch) -> None:
         assert pipeline_heartbeat["status"] == "completed"
         assert pipeline_heartbeat["message"] == "Pipeline run completed."
         payload = json.loads(pipeline_heartbeat["payload_json"]) if pipeline_heartbeat["payload_json"] else {}
-        assert payload["strategy_names"] == ["ma_cross"]
+        assert payload["strategy_names"] == ["ppo"]
         assert payload["symbol_names"] == ["BTCUSDT"]
         assert payload["generated_signal_count"] == 1
         assert payload["approved_risk_count"] == 1
@@ -6084,17 +6836,17 @@ def test_run_next_queued_job_completes_strategy_job(monkeypatch) -> None:
         job_id = enqueue_job(
             connection,
             "strategy",
-            payload={"strategy_names": ["ma_cross", "momentum_3bar"], "symbol_names": ["BTCUSDT"]},
+            payload={"strategy_names": ["ppo", "ppo"], "symbol_names": ["BTCUSDT"]},
         )
 
         def fake_run_strategy_jobs(conn, strategy_names, symbol_names=None):
-            assert strategy_names == ["ma_cross", "momentum_3bar"]
+            assert strategy_names == ["ppo", "ppo"]
             assert symbol_names == ["BTCUSDT"]
             return {
                 "status": "ok",
                 "strategy_names": strategy_names,
                 "symbol_names": symbol_names,
-                "steps": [{"step": "generate_signal", "strategy_name": "ma_cross", "symbol": "BTCUSDT", "signal_type": "BUY"}],
+                "steps": [{"step": "generate_signal", "strategy_name": "ppo", "symbol": "BTCUSDT", "signal_type": "BUY"}],
             }
 
         monkeypatch.setattr("app.core.job_queue.run_strategy_jobs", fake_run_strategy_jobs)
@@ -6104,7 +6856,7 @@ def test_run_next_queued_job_completes_strategy_job(monkeypatch) -> None:
         assert result["status"] == "completed"
         assert result["job"]["id"] == job_id
         assert result["job"]["status"] == "completed"
-        assert result["result"]["strategy_names"] == ["ma_cross", "momentum_3bar"]
+        assert result["result"]["strategy_names"] == ["ppo", "ppo"]
         assert result["result"]["execution_backend_status"]["backend"] == "paper"
         assert result["execution_backend_status"]["backend"] == "paper"
         assert get_job(connection, job_id)["status"] == "completed"  # type: ignore[index]
@@ -6162,7 +6914,7 @@ def test_retry_queue_job_endpoint(monkeypatch) -> None:
             "id": job_id,
             "job_type": "strategy",
             "status": "queued",
-            "payload": {"strategy_names": ["ma_cross"]},
+            "payload": {"strategy_names": ["ppo"]},
         },
     )
 
@@ -6183,7 +6935,12 @@ def test_clear_queue_batch_endpoint_logs_audit_event(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
-    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+    monkeypatch.setattr(
+        "app.api.main.insert_event",
+        lambda connection, event_type, status, source, message, payload=None: audit_calls.append(
+            {"event_type": event_type, "status": status, "source": source, "message": message, "payload": payload}
+        ),
+    )
     monkeypatch.setattr(
         "app.api.main.fail_batch_jobs",
         lambda connection, batch_id, **kwargs: [
@@ -6219,12 +6976,18 @@ def test_reconcile_orders_endpoint(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr("app.api.main.get_connection", lambda: DummyConnection())
+    monkeypatch.setattr("app.api.main.reconcile_orphan_orders", lambda connection, **kwargs: [])
     monkeypatch.setattr("app.api.main.ensure_positions_table", lambda connection: None)
     monkeypatch.setattr("app.api.main.update_positions", lambda connection: 2)
     monkeypatch.setattr("app.api.main.ensure_pnl_table", lambda connection: None)
     monkeypatch.setattr("app.api.main.update_pnl_snapshots", lambda connection: 3)
     monkeypatch.setattr("app.api.main.get_orders", lambda connection, limit=5: [{"id": 11, "status": "PENDING"}])
-    monkeypatch.setattr("app.api.main.log_event", lambda **kwargs: audit_calls.append(kwargs))
+    monkeypatch.setattr(
+        "app.api.main.insert_event",
+        lambda connection, event_type, status, source, message, payload=None: audit_calls.append(
+            {"event_type": event_type, "status": status, "source": source, "message": message, "payload": payload}
+        ),
+    )
 
     response = client.post(
         "/orders/reconcile",
@@ -6282,20 +7045,20 @@ def test_scheduler_strategy_limit_preset_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.main.get_strategy_status",
         lambda: {
-            "strategy_name": "ma_cross",
-            "strategy_names": ["ma_cross", "momentum_3bar"],
+            "strategy_name": "ppo",
+            "strategy_names": ["ppo", "ppo"],
             "disabled_strategy_names": [],
-            "effective_strategy_names": ["ma_cross", "momentum_3bar"],
+            "effective_strategy_names": ["ppo", "ppo"],
             "effective_strategy_limit": None,
-            "strategy_priorities": {"ma_cross": 0, "momentum_3bar": 1},
+            "strategy_priorities": {"ppo": 0, "ppo": 1},
             "disabled_strategy_notes": {},
-            "default_strategy": "ma_cross",
+            "default_strategy": "ppo",
             "strategy_file": "runtime/scheduler.strategy",
             "disabled_strategy_file": "runtime/scheduler.strategy.disabled",
             "priority_file": "runtime/scheduler.strategy.priority.json",
             "disabled_reason_file": "runtime/scheduler.strategy.disabled.reason.json",
             "effective_limit_file": "runtime/scheduler.strategy.limit",
-            "available_strategies": ["ma_cross", "momentum_3bar"],
+            "available_strategies": ["ppo", "ppo"],
         },
     )
     def fake_set_effective_strategy_limit(limit, **kwargs):
@@ -6311,7 +7074,7 @@ def test_scheduler_strategy_limit_preset_endpoint(monkeypatch) -> None:
     assert captured["limit"] == 2
     assert captured["kwargs"]["audit_action"] == "limit_preset:top_2"
     assert captured["kwargs"]["extra_payload"] == {"preset": "top_2"}
-    assert response.json()["strategy_names"] == ["ma_cross", "momentum_3bar"]
+    assert response.json()["strategy_names"] == ["ppo", "ppo"]
 
 
 def test_favicon_returns_no_content() -> None:
@@ -6484,10 +7247,11 @@ def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
     finally:
         connection.close()
 
-    monkeypatch.setattr("app.api.main.DB_FILE", db_path)
+    monkeypatch.setattr("app.api.main._health_cache", {})
+    monkeypatch.setattr("app.api.main._health_cache_ts", 0.0)
     monkeypatch.setattr(
         "app.api.main.get_database_info",
-        lambda: {"backend": "sqlite", "sqlite_path": str(db_path)},
+        lambda: {"backend": "postgres", "database_url": "postgresql://test/db"},
     )
     monkeypatch.setattr("app.api.main.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr(
@@ -6505,8 +7269,8 @@ def test_health_reports_database_info(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["database_info"]["backend"] == "sqlite"
-    assert payload["database_info"]["sqlite_path"] == str(db_path)
+    assert payload["database_info"]["backend"] == "postgres"
+    assert payload["database_info"]["database_url"] == "postgresql://test/db"
     assert payload["checks"]["heartbeats"]["status"] == "ok"
 
 
@@ -6694,7 +7458,6 @@ def test_audit_events_endpoint_returns_logged_events(monkeypatch, tmp_path) -> N
 def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "pipeline-audit.db"
 
-    monkeypatch.setattr("app.pipeline.run_pipeline.DB_FILE", db_path)
     monkeypatch.setattr("app.pipeline.run_pipeline.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.audit.service.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
@@ -6705,6 +7468,14 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
         ],
     )
     monkeypatch.setattr("app.pipeline.run_pipeline.kill_switch_enabled", lambda: False)
+    from app.strategy.signal_service import insert_signal as _insert_signal
+    monkeypatch.setattr(
+        "app.pipeline.strategy_job.generate_registered_signal",
+        lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": _insert_signal(
+            conn, "BUY", symbol=symbol, timeframe=timeframe, strategy_name=strategy_name,
+            short_ma=12.0, long_ma=10.0,
+        ),
+    )
 
     run_pipeline_collect()
 
@@ -6729,6 +7500,7 @@ def test_run_pipeline_collect_writes_audit_events(monkeypatch, tmp_path) -> None
 def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
     connection = make_connection()
     try:
+        monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
         monkeypatch.setattr(
             "app.pipeline.market_data_job.fetch_klines",
             lambda symbol="BTCUSDT", interval="1m", limit=5: [
@@ -6737,7 +7509,7 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         )
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
+            lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": {
                 "id": 1,
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -6755,7 +7527,7 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
                     "signal_id": sid,
                     "symbol": "BTCUSDT",
                     "timeframe": "1m",
-                    "strategy_name": "ma_cross",
+                    "strategy_name": "ppo",
                     "signal_type": "BUY",
                     "decision": "APPROVED",
                     "reason": "Passed basic risk checks.",
@@ -6967,7 +7739,7 @@ def test_scan_orphan_orders_detects_unfilled_order() -> None:
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            ("test-coid-1", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+            ("test-coid-1", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "FILLED", 1),
         )
         connection.commit()
 
@@ -6993,7 +7765,7 @@ def test_scan_orphan_orders_ignores_terminal_orders() -> None:
             connection.execute(
                 "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-                (f"test-coid-{idx}", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, status, idx + 1),
+                (f"test-coid-{idx}", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, status, idx + 1),
             )
         connection.commit()
 
@@ -7015,7 +7787,7 @@ def test_execution_job_reconcile_step_synthesizes_fill_for_orphan() -> None:
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            ("test-coid-orphan", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+            ("test-coid-orphan", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "FILLED", 1),
         )
         connection.commit()
 
@@ -7045,7 +7817,7 @@ def test_execution_job_reconcile_step_skips_orphan_when_no_candle_data() -> None
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            ("test-coid-nocandle", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED", 1),
+            ("test-coid-nocandle", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "FILLED", 1),
         )
         connection.commit()
 
@@ -7080,7 +7852,7 @@ def test_execution_job_reconcile_flags_live_orphan_for_manual_review() -> None:
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status, risk_event_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            ("test-live-orphan", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "NEW", 1),
+            ("test-live-orphan", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "NEW", 1),
         )
         connection.commit()
 
@@ -7289,6 +8061,65 @@ def test_binance_broker_client_check_order_request_calls_test_endpoint(monkeypat
     }
 
 
+def test_binance_broker_client_retries_after_syncing_server_time_on_recv_window_error(monkeypatch) -> None:
+    from requests import HTTPError
+
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    calls: list[str] = []
+
+    class ErrorResponse:
+        status_code = 400
+        text = '{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+
+        def raise_for_status(self):
+            raise HTTPError("400 error")
+
+        def json(self):
+            return {"code": -1021, "msg": "Timestamp for this request is outside of the recvWindow."}
+
+    class TimeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"serverTime": 1700000005000}
+
+    class SuccessResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    def fake_request(method, url, headers=None, timeout=None, params=None):
+        calls.append(url)
+        if "/fapi/v1/userTrades" in url and len([item for item in calls if "/fapi/v1/userTrades" in item]) == 1:
+            return ErrorResponse()
+        if url.endswith("/fapi/v1/time"):
+            return TimeResponse()
+        return SuccessResponse()
+
+    monkeypatch.setattr("app.execution.binance_broker.requests.request", fake_request)
+    monkeypatch.setattr("app.execution.binance_broker.time.time", lambda: 1700000000.0)
+
+    client = BinanceBrokerClient(
+        api_key="test-key",
+        api_secret="test-secret",
+        futures=True,
+        futures_api_key="test-futures-key",
+        futures_api_secret="test-futures-secret",
+        testnet=True,
+    )
+
+    result = client.get_user_trades("SOLUSDT", start_time=1, end_time=2, limit=10)
+
+    assert result == []
+    assert any("/fapi/v1/time" in url for url in calls)
+    user_trade_calls = [url for url in calls if "/fapi/v1/userTrades" in url]
+    assert len(user_trade_calls) == 2
+
+
 def test_binance_broker_client_weighted_avg_fill_price() -> None:
     from app.execution.binance_broker import _weighted_avg_fill_price
 
@@ -7443,6 +8274,151 @@ def test_live_broker_persists_fill_commission_metadata() -> None:
         connection.close()
 
 
+def test_live_broker_execute_risk_event_id_keeps_new_order_unfilled() -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "BUY", symbol="BTCUSDT", strategy_name="manual_test")
+        risk = evaluate_signal_id(connection, int(signal["id"]), cooldown_seconds=0)
+        assert risk is not None
+
+        class FakeBroker:
+            broker_name = "binance"
+
+            def place_order(self, symbol, side, qty, ref_price):
+                return {
+                    "status": "NEW",
+                    "fill_price": 0.0,
+                    "fill_qty": 0.0,
+                    "order_id": "binance-new-1",
+                }
+
+        result = live_broker.execute_risk_event_id(connection, int(risk["id"]), FakeBroker())
+
+        assert result is not None
+        assert result["status"] == "NEW"
+        assert result["qty"] == pytest.approx(0.001)
+        assert result["fill_qty"] == pytest.approx(0.0)
+        assert result["fill_price"] is None
+
+        orders = get_orders(connection, limit=5)
+        assert len(orders) == 1
+        assert orders[0]["status"] == "NEW"
+        assert orders[0]["qty"] == pytest.approx(0.001)
+        assert orders[0]["price"] == pytest.approx(14.0)
+
+        fills = get_fills(connection, limit=5)
+        assert fills == []
+    finally:
+        connection.close()
+
+
+def test_risk_service_allows_binance_futures_short_entry_for_ppo(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+
+        signal = insert_signal(connection, "SELL", symbol="SOLUSDT", strategy_name="ppo")
+
+        monkeypatch.setattr("app.risk.risk_service.read_configured_execution_backend", lambda: "binance")
+        monkeypatch.setattr("app.risk.risk_service.BINANCE_FUTURES", True)
+        monkeypatch.setattr("app.risk.risk_service._get_exchange_position_qty", lambda symbol: 0.0)
+        monkeypatch.setattr(
+            "app.risk.risk_service._get_strategy_target_position",
+            lambda strategy_name, symbol, timeframe: -1,
+        )
+
+        risk = evaluate_signal_id(
+            connection,
+            int(signal["id"]),
+            order_qty=1.0,
+            max_position_qty=1.0,
+            cooldown_seconds=0,
+        )
+
+        assert risk is not None
+        assert risk["decision"] == "APPROVED"
+        assert risk["reason"] == "Passed basic risk checks."
+    finally:
+        connection.close()
+
+
+def test_live_broker_executes_binance_futures_reversal_to_short(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        seed_candles(connection, [10.0, 11.0, 12.0, 13.0, 14.0])
+        ensure_signals_table(connection)
+        ensure_risk_table(connection)
+        ensure_execution_tables(connection)
+
+        signal = insert_signal(connection, "SELL", symbol="BTCUSDT", strategy_name="ppo")
+        connection.execute(
+            """
+            INSERT INTO risk_events (
+                signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(signal["id"]), "BTCUSDT", "1m", "ppo", "SELL", "APPROVED", "ok"),
+        )
+        connection.commit()
+
+        class FakeBroker:
+            broker_name = "binance"
+
+            def __init__(self) -> None:
+                self.calls: list[dict[str, float | str]] = []
+
+            def get_positions(self, *, symbol=None, include_flat=False):
+                return [{"symbol": "BTCUSDT", "qty": 1.0}]
+
+            def place_order(self, symbol, side, qty, ref_price):
+                self.calls.append(
+                    {"symbol": symbol, "side": side, "qty": qty, "ref_price": ref_price}
+                )
+                return {
+                    "status": "FILLED",
+                    "fill_price": ref_price,
+                    "fill_qty": qty,
+                    "order_id": "reversal-1",
+                }
+
+        broker = FakeBroker()
+        monkeypatch.setattr("app.execution.live_broker.read_configured_execution_backend", lambda: "binance")
+        monkeypatch.setattr("app.execution.live_broker.BINANCE_FUTURES", True)
+        monkeypatch.setattr(
+            "app.execution.live_broker._get_strategy_target_position",
+            lambda strategy_name, symbol, timeframe: -1,
+        )
+        monkeypatch.setattr(
+            "app.execution.live_broker.get_risk_config",
+            lambda connection, strategy_name: (SimpleNamespace(order_qty=1.0), None),
+        )
+
+        result = live_broker.execute_risk_event_id(connection, 1, broker, order_qty=1.0)
+
+        assert result is not None
+        assert broker.calls == [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "qty": pytest.approx(2.0),
+                    "ref_price": pytest.approx(14.0),
+            }
+        ]
+        assert result["side"] == "SELL"
+        assert result["qty"] == pytest.approx(2.0)
+        assert result["target_position"] == -1
+        assert result["current_position_qty"] == pytest.approx(1.0)
+        assert result["target_qty"] == pytest.approx(-1.0)
+    finally:
+        connection.close()
+
+
 def test_live_broker_logs_structured_failure_event() -> None:
     connection = make_connection()
     try:
@@ -7557,6 +8533,45 @@ def test_simulated_live_adapter_execute_risk_event_ids() -> None:
         connection.close()
 
 
+def test_binance_broker_client_futures_new_order_without_exchange_trade_stays_unfilled(monkeypatch) -> None:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_signed_request(self, method, endpoint, params):
+        calls.append((method, endpoint))
+        if method == "POST":
+            return {
+                "orderId": 123,
+                "status": "NEW",
+                "executedQty": "0",
+                "avgPrice": "0",
+                "cumQuote": "0",
+            }
+        return []
+
+    monkeypatch.setattr(BinanceBrokerClient, "_signed_request", fake_signed_request)
+
+    client = BinanceBrokerClient(
+        api_key="test-key",
+        api_secret="test-secret",
+        futures=True,
+        futures_api_key="test-futures-key",
+        futures_api_secret="test-futures-secret",
+        testnet=True,
+    )
+    result = client.place_order(symbol="SOLUSDT", side="BUY", qty=1.0, ref_price=84.5)
+
+    assert result["status"] == "NEW"
+    assert result["fill_qty"] == pytest.approx(0.0)
+    assert result["fill_price"] == pytest.approx(0.0)
+    assert result["order_id"] == "123"
+    assert calls == [
+        ("POST", "/fapi/v1/order"),
+        ("GET", "/fapi/v1/userTrades"),
+    ]
+
+
 def test_simulated_live_adapter_is_not_placeholder() -> None:
     adapter = SimulatedLiveExecutionAdapter()
     assert adapter.placeholder is False
@@ -7586,9 +8601,10 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
     connection = make_connection()
     try:
         monkeypatch.setattr("app.pipeline.strategy_job.ensure_signals_table", lambda conn: None)
+        monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
+            lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": {
                 "id": 11,
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -7599,10 +8615,10 @@ def test_run_strategy_job_uses_registry_strategy_name(monkeypatch) -> None:
             },
         )
 
-        result = run_strategy_job(connection, strategy_name="ma_cross")
+        result = run_strategy_job(connection, strategy_name="ppo")
 
         assert result["status"] == "ok"
-        assert result["steps"][0]["strategy_name"] == "ma_cross"
+        assert result["steps"][0]["strategy_name"] == "ppo"
         assert result["steps"][0]["symbol"] == "BTCUSDT"
         assert result["signal_ids"] == [11]
         assert all(step["step"] == "generate_signal" for step in result["steps"])
@@ -7615,7 +8631,7 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
     try:
         monkeypatch.setattr(
             "app.pipeline.strategy_job.run_strategy_job",
-            lambda conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None: {
+            lambda conn, strategy_name="ppo", symbol_names=None, timeframe_names=None: {
                 "status": "ok",
                 "signal_ids": [1],
                 "steps": [
@@ -7624,14 +8640,13 @@ def test_run_strategy_jobs_runs_multiple_registered_strategies(monkeypatch) -> N
             },
         )
 
-        result = run_strategy_jobs(connection, ["ma_cross", "momentum_3bar"])
+        result = run_strategy_jobs(connection, ["ppo"])
 
         assert result["status"] == "ok"
-        assert result["strategy_names"] == ["ma_cross", "momentum_3bar"]
-        assert result["signal_ids"] == [1, 1]
+        assert result["strategy_names"] == ["ppo"]
+        assert result["signal_ids"] == [1]
         assert [step["strategy_name"] for step in result["steps"] if step["step"] == "generate_signal"] == [
-            "ma_cross",
-            "momentum_3bar",
+            "ppo",
         ]
     finally:
         connection.close()
@@ -7642,7 +8657,7 @@ def test_run_strategy_jobs_continues_after_one_strategy_crashes(monkeypatch) -> 
     connection = make_connection()
     try:
 
-        def fake_run_strategy_job(conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None):
+        def fake_run_strategy_job(conn, strategy_name="ppo", symbol_names=None, timeframe_names=None):
             if strategy_name == "bad_strategy":
                 raise RuntimeError("simulated strategy crash")
             return {
@@ -7654,10 +8669,10 @@ def test_run_strategy_jobs_continues_after_one_strategy_crashes(monkeypatch) -> 
 
         monkeypatch.setattr("app.pipeline.strategy_job.run_strategy_job", fake_run_strategy_job)
 
-        result = run_strategy_jobs(connection, ["bad_strategy", "ma_cross"])
+        result = run_strategy_jobs(connection, ["bad_strategy", "ppo"])
 
         assert result["status"] == "partial_error"
-        assert result["strategy_names"] == ["bad_strategy", "ma_cross"]
+        assert result["strategy_names"] == ["bad_strategy", "ppo"]
         assert result["signal_ids"] == []
         error_result = next(r for r in result["results"] if r["strategy_name"] == "bad_strategy")
         assert error_result["status"] == "error"
@@ -7674,16 +8689,16 @@ def test_run_strategy_jobs_all_errors_returns_partial_error(monkeypatch) -> None
     try:
         call_count = {"n": 0}
 
-        def always_crash(conn, strategy_name="ma_cross", symbol_names=None, timeframe_names=None):
+        def always_crash(conn, strategy_name="ppo", symbol_names=None, timeframe_names=None):
             call_count["n"] += 1
             raise ValueError(f"crash in {strategy_name}")
 
         monkeypatch.setattr("app.pipeline.strategy_job.run_strategy_job", always_crash)
 
-        result = run_strategy_jobs(connection, ["ma_cross", "momentum_3bar"])
+        result = run_strategy_jobs(connection, ["ppo"])
 
         assert result["status"] == "partial_error"
-        assert call_count["n"] == 2
+        assert call_count["n"] == 1
         assert all(r["status"] == "error" for r in result["results"])
         assert {r["error_type"] for r in result["results"]} == {"ValueError"}
     finally:
@@ -7696,7 +8711,7 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
         monkeypatch.setattr("app.pipeline.strategy_job.ensure_signals_table", lambda conn: None)
         monkeypatch.setattr(
             "app.pipeline.strategy_job.generate_registered_signal",
-            lambda conn, strategy_name="ma_cross", symbol="BTCUSDT", timeframe="1m": {
+            lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": {
                 "id": 11 if symbol == "BTCUSDT" else 12,
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -7707,7 +8722,7 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
             },
         )
 
-        result = run_strategy_job(connection, strategy_name="ma_cross", symbol_names=["BTCUSDT", "ETHUSDT"])
+        result = run_strategy_job(connection, strategy_name="ppo", symbol_names=["BTCUSDT", "ETHUSDT"])
 
         assert result["status"] == "ok"
         assert [step["step"] for step in result["steps"]] == ["generate_signal", "generate_signal"]
@@ -7725,8 +8740,8 @@ def test_evaluate_signal_id_uses_specific_signal(monkeypatch) -> None:
             """
             INSERT INTO signals (id, symbol, timeframe, strategy_name, signal_type, short_ma, long_ma, created_at)
             VALUES
-                (1, 'BTCUSDT', '1m', 'ma_cross', 'BUY', 11.0, 10.0, '2026-03-19 10:00:00'),
-                (2, 'ETHUSDT', '1m', 'ma_cross', 'SELL', 9.0, 10.0, '2026-03-19 10:01:00');
+                (1, 'BTCUSDT', '1m', 'ppo', 'BUY', 11.0, 10.0, '2026-03-19 10:00:00'),
+                (2, 'ETHUSDT', '1m', 'ppo', 'SELL', 9.0, 10.0, '2026-03-19 10:01:00');
             """
         )
         connection.commit()
@@ -7757,11 +8772,11 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
     monkeypatch.setattr("scripts.run_strategy_job.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "scripts.run_strategy_job.parse_args",
-        lambda: SimpleNamespace(strategy="momentum_3bar"),
+        lambda: SimpleNamespace(strategy="ppo"),
     )
     monkeypatch.setattr(
         "scripts.run_strategy_job.run_strategy_job",
-        lambda connection, strategy_name="ma_cross": {
+        lambda connection, strategy_name="ppo": {
             "status": "ok",
             "steps": [{"step": "generate_signal", "strategy_name": strategy_name}],
         },
@@ -7785,7 +8800,7 @@ def test_job_scripts_call_backend_aware_job_modules(monkeypatch) -> None:
         outputs.append(buffer.getvalue())
 
     assert '"saved_klines": 5' in outputs[0]
-    assert '"strategy_name": "momentum_3bar"' in outputs[1]
+    assert '"strategy_name": "ppo"' in outputs[1]
     assert '"paper_execute"' in outputs[2]
 
 
@@ -7840,31 +8855,6 @@ def test_check_binance_order_script_prints_validation_result(monkeypatch) -> Non
     }
 
 
-def test_paper_execute_sqlite_uses_execution_adapter(monkeypatch) -> None:
-    class DummyConnection:
-        def close(self) -> None:
-            pass
-
-    class FakeExecutionAdapter:
-        def ensure_tables(self, connection) -> None:
-            pass
-
-        def execute_latest_risk(self, connection):
-            return {"decision": "SKIPPED"}
-
-    monkeypatch.setattr("scripts.paper_execute_sqlite.get_connection", lambda: DummyConnection())
-    monkeypatch.setattr("scripts.paper_execute_sqlite.get_execution_adapter", lambda: FakeExecutionAdapter())
-    monkeypatch.setattr("scripts.paper_execute_sqlite.get_execution_adapter_name", lambda: "noop")
-
-    from scripts.paper_execute_sqlite import main as legacy_execute_main
-
-    buffer = StringIO()
-    with contextlib.redirect_stdout(buffer):
-        legacy_execute_main()
-
-    output = buffer.getvalue()
-    assert "execution_backend=noop" in output
-    assert "Latest risk event is not executable: SKIPPED" in output
 
 
 def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
@@ -7876,11 +8866,11 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.scheduler.runner.stop_requested", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr(
         "app.scheduler.runner.run_pipeline_collect",
-        lambda strategy_name="ma_cross", symbol_names=None: {
+        lambda strategy_name="ppo", symbol_names=None: {
             "steps": [
                 {"step": "generate_signal", "signal_type": "BUY"},
                 {"step": "evaluate_risk", "decision": "APPROVED"},
@@ -7897,7 +8887,7 @@ def test_run_scheduler_records_soak_snapshot(monkeypatch, tmp_path) -> None:
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
-    assert "run=1 mode=pipeline strategy=ma_cross symbols=BTCUSDT,ETHUSDT signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
+    assert "run=1 mode=pipeline strategy=ppo symbols=BTCUSDT,ETHUSDT signal=BUY risk=APPROVED execution=FILLED BUY" in log_text
     assert "soak_snapshot status=ok" in log_text
 
     connection = sqlite3.connect(db_path)
@@ -7919,7 +8909,7 @@ def test_run_scheduler_uses_queue_batch_default_for_pipeline_mode(monkeypatch, t
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
@@ -7955,17 +8945,17 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo", "ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
     monkeypatch.setattr(
         "app.scheduler.runner.run_strategy_jobs",
         lambda connection, strategy_names=None, symbol_names=None: {
             "status": "ok",
-            "strategy_names": strategy_names or ["ma_cross"],
+            "strategy_names": strategy_names or ["ppo"],
             "steps": [
-                {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross"},
-                {"step": "generate_signal", "signal_type": "SELL", "strategy_name": "momentum_3bar"},
+                {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ppo"},
+                {"step": "generate_signal", "signal_type": "SELL", "strategy_name": "ppo"},
             ],
         },
     )
@@ -7974,14 +8964,14 @@ def test_run_scheduler_supports_strategy_only_mode(monkeypatch, tmp_path) -> Non
         lambda: recorded.append({"status": "ok"}) or {"status": "ok"},
     )
 
-    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only", strategy_name="momentum_3bar")
+    run_scheduler(interval_seconds=0, iterations=1, mode="strategy-only", strategy_name="ppo")
 
     assert recorded == [{"status": "ok"}]
     log_text = log_path.read_text(encoding="utf-8")
     assert "mode=strategy-only" in log_text
-    assert "strategies=ma_cross,momentum_3bar" in log_text
+    assert "strategies=ppo,ppo" in log_text
     assert "symbols=BTCUSDT,ETHUSDT" in log_text
-    assert "signal=ma_cross=BUY;momentum_3bar=SELL" in log_text
+    assert "signal=ppo=BUY;ppo=SELL" in log_text
     assert "risk=n/a" in log_text
 
     connection = sqlite3.connect(db_path)
@@ -8003,7 +8993,7 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo", "ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
 
@@ -8033,8 +9023,8 @@ def test_run_scheduler_supports_queue_dispatch_for_strategy_mode(monkeypatch, tm
             "placeholder": False,
             "status": "ok",
         },
-        "strategy_name": "ma_cross",
-        "strategy_names": ["ma_cross", "momentum_3bar"],
+        "strategy_name": "ppo",
+        "strategy_names": ["ppo"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
     }
     log_text = log_path.read_text(encoding="utf-8")
@@ -8065,7 +9055,7 @@ def test_run_scheduler_supports_queue_dispatch_for_pipeline_mode(monkeypatch, tm
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo", "ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
 
@@ -8089,8 +9079,8 @@ def test_run_scheduler_supports_queue_dispatch_for_pipeline_mode(monkeypatch, tm
     assert recorded == [{"status": "ok"}]
     assert captured == {
         "payload": {"orchestration": "queue_dispatch", "source": "scheduler_pipeline"},
-        "strategy_name": "ma_cross",
-        "strategy_names": ["ma_cross", "momentum_3bar"],
+        "strategy_name": "ppo",
+        "strategy_names": ["ppo", "ppo"],
         "symbol_names": ["BTCUSDT", "ETHUSDT"],
     }
     log_text = log_path.read_text(encoding="utf-8")
@@ -8122,7 +9112,7 @@ def test_run_scheduler_uses_default_pipeline_orchestration_setting(monkeypatch, 
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
 
@@ -8141,8 +9131,8 @@ def test_run_scheduler_uses_default_pipeline_orchestration_setting(monkeypatch, 
     assert recorded == [{"status": "ok"}]
     assert captured["kwargs"] == {
         "payload": {"orchestration": "queue_dispatch", "source": "scheduler_pipeline"},
-        "strategy_name": "ma_cross",
-        "strategy_names": ["ma_cross"],
+        "strategy_name": "ppo",
+        "strategy_names": ["ppo"],
         "symbol_names": ["BTCUSDT"],
     }
     log_text = log_path.read_text(encoding="utf-8")
@@ -8160,7 +9150,7 @@ def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_p
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo", "ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
 
@@ -8172,7 +9162,7 @@ def test_run_scheduler_supports_queue_drain_for_strategy_mode(monkeypatch, tmp_p
             "result": {
                 "status": "ok",
                 "steps": [
-                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ppo", "symbol": "BTCUSDT"},
                 ],
             },
         }
@@ -8224,8 +9214,8 @@ def test_run_scheduler_supports_risk_only_mode(monkeypatch, tmp_path) -> None:
             "status": "ok",
             "risk_event_ids": [11, 12],
             "steps": [
-                {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
-                {"step": "evaluate_risk", "decision": "REJECTED", "strategy_name": "momentum_3bar", "symbol": "ETHUSDT"},
+                {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ppo", "symbol": "BTCUSDT"},
+                {"step": "evaluate_risk", "decision": "REJECTED", "strategy_name": "ppo", "symbol": "ETHUSDT"},
             ],
         },
     )
@@ -8308,7 +9298,7 @@ def test_run_scheduler_supports_queue_drain_for_risk_mode(monkeypatch, tmp_path)
             "result": {
                 "status": "ok",
                 "steps": [
-                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ppo", "symbol": "BTCUSDT"},
                 ],
             },
         }
@@ -8340,7 +9330,7 @@ def test_run_scheduler_supports_queue_drain_for_pipeline_mode(monkeypatch, tmp_p
     monkeypatch.setattr("app.scheduler.runner.kill_switch_enabled", lambda: False)
     monkeypatch.setattr("app.scheduler.runner.get_connection", lambda: sqlite3.connect(db_path))
     monkeypatch.setattr("app.system.heartbeat.get_connection", lambda: sqlite3.connect(db_path))
-    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ma_cross", "momentum_3bar"])
+    monkeypatch.setattr("app.scheduler.control.read_effective_active_strategies", lambda: ["ppo", "ppo"])
     monkeypatch.setattr("app.scheduler.control.read_active_symbols", lambda: ["BTCUSDT", "ETHUSDT"])
     monkeypatch.setattr("app.scheduler.runner.run_migrations", lambda connection: None)
 
@@ -8360,8 +9350,8 @@ def test_run_scheduler_supports_queue_drain_for_pipeline_mode(monkeypatch, tmp_p
             "result": {
                 "status": "ok",
                 "steps": [
-                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
-                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ma_cross", "symbol": "BTCUSDT"},
+                    {"step": "generate_signal", "signal_type": "BUY", "strategy_name": "ppo", "symbol": "BTCUSDT"},
+                    {"step": "evaluate_risk", "decision": "APPROVED", "strategy_name": "ppo", "symbol": "BTCUSDT"},
                 ],
             },
         }
@@ -8453,9 +9443,9 @@ def test_read_effective_active_strategies_respects_priority_and_disabled(monkeyp
     priority_file = tmp_path / "scheduler.strategy.priority.json"
     limit_file = tmp_path / "scheduler.strategy.limit"
 
-    strategy_file.write_text("momentum_3bar\nma_cross\n", encoding="utf-8")
+    strategy_file.write_text("ppo\nppo\n", encoding="utf-8")
     disabled_file.write_text("", encoding="utf-8")
-    priority_file.write_text(json.dumps({"ma_cross": 1, "momentum_3bar": 5}), encoding="utf-8")
+    priority_file.write_text(json.dumps({"ppo": 5}), encoding="utf-8")
     limit_file.write_text("1\n", encoding="utf-8")
 
     monkeypatch.setattr("app.scheduler.control.STRATEGY_FILE", strategy_file)
@@ -8463,7 +9453,7 @@ def test_read_effective_active_strategies_respects_priority_and_disabled(monkeyp
     monkeypatch.setattr("app.scheduler.control.PRIORITY_FILE", priority_file)
     monkeypatch.setattr("app.scheduler.control.EFFECTIVE_LIMIT_FILE", limit_file)
 
-    assert read_effective_active_strategies() == ["ma_cross"]
+    assert read_effective_active_strategies() == ["ppo"]
 
 
 def test_run_scheduler_skips_when_no_enabled_active_strategies(monkeypatch, tmp_path) -> None:
@@ -9032,7 +10022,7 @@ def test_metrics_service_risk_summary_counts_correctly() -> None:
             connection.execute(
                 "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?);",
-                (1, "BTCUSDT", "1m", "ma_cross", "BUY", decision, reason),
+                (1, "BTCUSDT", "1m", "ppo", "BUY", decision, reason),
             )
         connection.commit()
 
@@ -9105,16 +10095,17 @@ def test_metrics_service_queue_summary_handles_backend_neutral_timestamps() -> N
 def test_get_risk_config_returns_global_defaults_when_no_row() -> None:
     from app.core.migrations import run_migrations
     from app.risk.risk_config import get_risk_config
-    from app.core.settings import DEFAULT_ORDER_QTY, MAX_POSITION_QTY, COOLDOWN_SECONDS, MAX_DAILY_LOSS
+    from app.core.settings import DEFAULT_ORDER_QTY, MAX_POSITION_QTY, COOLDOWN_SECONDS, STOP_LOSS_PCT, MAX_DAILY_LOSS
 
     connection = make_connection()
     try:
         run_migrations(connection)
-        cfg, is_default = get_risk_config(connection, "ma_cross")
+        cfg, is_default = get_risk_config(connection, "ppo")
         assert is_default is True
         assert cfg.order_qty == DEFAULT_ORDER_QTY
         assert cfg.max_position_qty == MAX_POSITION_QTY
         assert cfg.cooldown_seconds == COOLDOWN_SECONDS
+        assert cfg.stop_loss_pct == STOP_LOSS_PCT
         assert cfg.max_daily_loss == MAX_DAILY_LOSS
     finally:
         connection.close()
@@ -9127,14 +10118,15 @@ def test_set_and_get_risk_config_per_strategy() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        set_risk_config(connection, "ma_cross", order_qty=0.005, cooldown_seconds=600)
-        cfg, is_default = get_risk_config(connection, "ma_cross")
+        set_risk_config(connection, "ppo", order_qty=0.005, cooldown_seconds=600)
+        cfg, is_default = get_risk_config(connection, "ppo")
         assert is_default is False
         assert cfg.order_qty == 0.005
         assert cfg.cooldown_seconds == 600
         # Unset fields fall back to global defaults
-        from app.core.settings import MAX_POSITION_QTY, MAX_DAILY_LOSS
+        from app.core.settings import MAX_POSITION_QTY, STOP_LOSS_PCT, MAX_DAILY_LOSS
         assert cfg.max_position_qty == MAX_POSITION_QTY
+        assert cfg.stop_loss_pct == STOP_LOSS_PCT
         assert cfg.max_daily_loss == MAX_DAILY_LOSS
     finally:
         connection.close()
@@ -9147,14 +10139,14 @@ def test_delete_risk_config_reverts_to_defaults() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        set_risk_config(connection, "ma_cross", order_qty=0.005)
-        _, is_default_before = get_risk_config(connection, "ma_cross")
+        set_risk_config(connection, "ppo", order_qty=0.005)
+        _, is_default_before = get_risk_config(connection, "ppo")
         assert is_default_before is False
 
-        deleted = delete_risk_config(connection, "ma_cross")
+        deleted = delete_risk_config(connection, "ppo")
         assert deleted is True
 
-        _, is_default_after = get_risk_config(connection, "ma_cross")
+        _, is_default_after = get_risk_config(connection, "ppo")
         assert is_default_after is True
     finally:
         connection.close()
@@ -9165,7 +10157,7 @@ def test_evaluate_signal_id_uses_per_strategy_risk_config() -> None:
     from app.core.migrations import run_migrations
     from app.risk.risk_config import set_risk_config
     from app.risk.risk_service import evaluate_signal_id
-    from app.strategy.ma_cross import ensure_table as ensure_signals_table, insert_signal
+    from app.strategy.signal_service import ensure_table as ensure_signals_table, insert_signal
 
     connection = make_connection()
     try:
@@ -9177,12 +10169,12 @@ def test_evaluate_signal_id_uses_per_strategy_risk_config() -> None:
         signal_id = insert_and_get_rowid(
             connection,
             "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma) VALUES (?,?,?,?,?,?);",
-            ("BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 0.9),
+            ("BTCUSDT", "1m", "ppo", "BUY", 1.0, 0.9),
         )
         connection.commit()
 
         # Set per-strategy config with max_position_qty=0 — every BUY should be rejected
-        set_risk_config(connection, "ma_cross", max_position_qty=0.0, order_qty=0.001)
+        set_risk_config(connection, "ppo", max_position_qty=0.0, order_qty=0.001)
 
         result = evaluate_signal_id(connection, signal_id)
         assert result is not None
@@ -9215,18 +10207,20 @@ def test_risk_config_api_list_and_crud() -> None:
     assert cfg["strategy_name"] == strategy
 
     # Post — set override
-    resp = client.post(f"/risk-config/{strategy}", json={"order_qty": 0.005, "cooldown_seconds": 600})
+    resp = client.post(f"/risk-config/{strategy}", json={"order_qty": 0.005, "cooldown_seconds": 600, "stop_loss_pct": 0.01})
     assert resp.status_code == 200
     saved = resp.json()
     assert saved["status"] == "ok"
     assert saved["config"]["order_qty"] == 0.005
     assert saved["config"]["cooldown_seconds"] == 600
+    assert saved["config"]["stop_loss_pct"] == 0.01
 
     # Get — now returns non-default
     resp = client.get(f"/risk-config/{strategy}")
     assert resp.status_code == 200
     assert resp.json()["is_default"] is False
     assert resp.json()["order_qty"] == 0.005
+    assert resp.json()["stop_loss_pct"] == 0.01
 
     # Delete — revert to defaults
     resp = client.delete(f"/risk-config/{strategy}")
@@ -9299,7 +10293,7 @@ def test_check_portfolio_limits_no_enforcement_when_capital_zero() -> None:
     connection = make_connection()
     try:
         run_migrations(connection)
-        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        approved, reason = check_portfolio_limits(connection, "ppo", "BTCUSDT", 1.0)
         assert approved is True
         assert reason == ""
     finally:
@@ -9330,7 +10324,7 @@ def test_check_portfolio_limits_rejects_when_total_exposure_exceeded() -> None:
         connection.commit()
 
         # Any additional BUY should be rejected: 9.0 + 0.001*9.0 > 8.0
-        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 0.001)
+        approved, reason = check_portfolio_limits(connection, "ppo", "BTCUSDT", 0.001)
         assert approved is False
         assert "Portfolio total exposure limit" in reason
     finally:
@@ -9356,13 +10350,13 @@ def test_check_portfolio_limits_includes_pending_approved_buys_in_total_exposure
         connection.execute(
             "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
             " VALUES (?,?,?,?,?,?,?);",
-            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "test"),
+            (1, "BTCUSDT", "1m", "ppo", "BUY", "APPROVED", "test"),
         )
         connection.commit()
 
         # Now try another BUY of 1.0 @ 5.0 = 5.0 notional.
         # pending(5.0) + proposed(5.0) = 10.0 > limit(8.0) → must be rejected.
-        approved, reason = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        approved, reason = check_portfolio_limits(connection, "ppo", "BTCUSDT", 1.0)
         assert approved is False
         assert "Portfolio total exposure limit" in reason
     finally:
@@ -9388,25 +10382,25 @@ def test_check_portfolio_limits_pending_clears_after_order_placed() -> None:
             connection,
             "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
             " VALUES (?,?,?,?,?,?,?);",
-            (1, "BTCUSDT", "1m", "ma_cross", "BUY", "APPROVED", "test"),
+            (1, "BTCUSDT", "1m", "ppo", "BUY", "APPROVED", "test"),
         )
         connection.commit()
 
         # Before order is placed: pending notional = 5.0 (1 BTC @ 5.0)
         # proposed = 1.0 @ 5.0 = 5.0; total = 10.0 ≤ 16.0 → approved
-        approved, _ = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        approved, _ = check_portfolio_limits(connection, "ppo", "BTCUSDT", 1.0)
         assert approved is True
 
         # Place the order linking to the risk event
         connection.execute(
             "INSERT INTO orders (client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status)"
             " VALUES (?,?,?,?,?,?,?,?,?);",
-            ("o1", risk_event_id, "BTCUSDT", "1m", "ma_cross", "BUY", 1.0, 5.0, "FILLED"),
+            ("o1", risk_event_id, "BTCUSDT", "1m", "ppo", "BUY", 1.0, 5.0, "FILLED"),
         )
         connection.commit()
 
         # Now risk event has an order — no longer pending; same check should still pass
-        approved2, _ = check_portfolio_limits(connection, "ma_cross", "BTCUSDT", 1.0)
+        approved2, _ = check_portfolio_limits(connection, "ppo", "BTCUSDT", 1.0)
         assert approved2 is True
     finally:
         connection.close()
@@ -9426,7 +10420,7 @@ def test_position_open_close_emits_audit_events() -> None:
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status)"
             " VALUES (?,?,?,?,?,?,?,?);",
-            ("o1", "BTCUSDT", "1m", "ma_cross", "BUY", 0.001, 50000.0, "FILLED"),
+            ("o1", "BTCUSDT", "1m", "ppo", "BUY", 0.001, 50000.0, "FILLED"),
         )
         order_id = connection.execute("SELECT last_insert_rowid();").fetchone()[0]
         connection.execute(
@@ -9448,7 +10442,7 @@ def test_position_open_close_emits_audit_events() -> None:
         connection.execute(
             "INSERT INTO orders (client_order_id, symbol, timeframe, strategy_name, side, qty, price, status)"
             " VALUES (?,?,?,?,?,?,?,?);",
-            ("o2", "BTCUSDT", "1m", "ma_cross", "SELL", 0.001, 51000.0, "FILLED"),
+            ("o2", "BTCUSDT", "1m", "ppo", "SELL", 0.001, 51000.0, "FILLED"),
         )
         order_id2 = connection.execute("SELECT last_insert_rowid();").fetchone()[0]
         connection.execute(
@@ -9494,7 +10488,7 @@ def test_daily_loss_breach_emits_audit_event(monkeypatch) -> None:
         signal_id = insert_and_get_rowid(
             connection,
             "INSERT INTO signals (symbol,timeframe,strategy_name,signal_type,short_ma,long_ma) VALUES (?,?,?,?,?,?);",
-            ("BTCUSDT", "1m", "ma_cross", "BUY", 200.0, 100.0),
+            ("BTCUSDT", "1m", "ppo", "BUY", 200.0, 100.0),
         )
         connection.commit()
 
@@ -9530,7 +10524,7 @@ def test_daily_loss_zero_limit_does_not_trigger(monkeypatch) -> None:
         signal_id = insert_and_get_rowid(
             connection,
             "INSERT INTO signals (symbol,timeframe,strategy_name,signal_type,short_ma,long_ma) VALUES (?,?,?,?,?,?);",
-            ("BTCUSDT", "1m", "ma_cross", "BUY", 200.0, 100.0),
+            ("BTCUSDT", "1m", "ppo", "BUY", 200.0, 100.0),
         )
         connection.commit()
 
@@ -9616,20 +10610,20 @@ def _make_signal_quality_db(tmp_path, signals=None, risk_events=None, fills=None
             conn.execute(
                 "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma)"
                 " VALUES (?, ?, ?, ?, 0, 0)",
-                (sig.get("symbol", "BTCUSDT"), "1m", sig.get("strategy", "ma_cross"), sig["type"]),
+                (sig.get("symbol", "BTCUSDT"), "1m", sig.get("strategy", "ppo"), sig["type"]),
             )
     if risk_events:
         for re in risk_events:
             conn.execute(
                 "INSERT INTO risk_events (signal_id, symbol, timeframe, strategy_name, signal_type, decision, reason)"
                 " VALUES (NULL, 'BTCUSDT', '1m', ?, ?, ?, ?)",
-                (re.get("strategy", "ma_cross"), re["signal_type"], re["decision"], re.get("reason", "ok")),
+                (re.get("strategy", "ppo"), re["signal_type"], re["decision"], re.get("reason", "ok")),
             )
     if fills:
         conn.execute(
             "INSERT INTO orders (client_order_id, risk_event_id, broker_name, symbol, timeframe,"
             " strategy_name, side, qty, price, status)"
-            " VALUES ('c1', NULL, 'paper', 'BTCUSDT', '1m', 'ma_cross', 'BUY', 0.001, 100.0, 'FILLED')"
+            " VALUES ('c1', NULL, 'paper', 'BTCUSDT', '1m', 'ppo', 'BUY', 0.001, 100.0, 'FILLED')"
         )
         order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         for _ in range(fills):
@@ -9720,20 +10714,18 @@ def test_signal_quality_check_by_strategy_breakdown(tmp_path) -> None:
     db_path = _make_signal_quality_db(
         tmp_path,
         signals=[
-            {"type": "BUY", "strategy": "ma_cross"},
-            {"type": "SELL", "strategy": "ma_cross"},
-            {"type": "BUY", "strategy": "rsi"},
+            {"type": "BUY", "strategy": "ppo"},
+            {"type": "SELL", "strategy": "ppo"},
+            {"type": "BUY", "strategy": "ppo"},
         ],
     )
     conn = sqlite3.connect(db_path)
     result = _signal_quality_check(conn)
     conn.close()
-    assert "ma_cross" in result["by_strategy"]
-    assert "rsi" in result["by_strategy"]
-    assert result["by_strategy"]["ma_cross"]["signals"] == 2
-    assert result["by_strategy"]["rsi"]["signals"] == 1
-    assert result["by_strategy"]["ma_cross"]["buy"] == 1
-    assert result["by_strategy"]["ma_cross"]["sell"] == 1
+    assert "ppo" in result["by_strategy"]
+    assert result["by_strategy"]["ppo"]["signals"] == 3
+    assert result["by_strategy"]["ppo"]["buy"] == 2
+    assert result["by_strategy"]["ppo"]["sell"] == 1
 
 
 def test_signal_quality_check_all_hold_gives_zero_actionable_rate(tmp_path) -> None:
@@ -9776,7 +10768,7 @@ def test_build_soak_report_flags_low_actionable_rate_as_issue(monkeypatch, tmp_p
     for _ in range(10):
         conn.execute(
             "INSERT INTO signals (symbol, timeframe, strategy_name, signal_type, short_ma, long_ma)"
-            " VALUES ('BTCUSDT', '1m', 'ma_cross', 'HOLD', 0, 0)"
+            " VALUES ('BTCUSDT', '1m', 'ppo', 'HOLD', 0, 0)"
         )
     conn.commit()
     conn.close()
@@ -9846,12 +10838,12 @@ def test_audit_log_risk_config_update(monkeypatch) -> None:
     conn = _make_audit_conn()
     _patch_conn(monkeypatch, conn)
     client = TestClient(app)
-    resp = client.post("/risk-config/ma_cross", json={"order_qty": 0.002})
+    resp = client.post("/risk-config/ppo", json={"order_qty": 0.002})
     assert resp.status_code == 200
     rows = _audit_rows(conn, "risk_config")
     assert len(rows) == 1
     assert rows[0][1] == "ok"
-    assert "ma_cross" in rows[0][3]
+    assert "ppo" in rows[0][3]
     conn.really_close()
 
 
@@ -9860,8 +10852,8 @@ def test_audit_log_risk_config_delete(monkeypatch) -> None:
     _patch_conn(monkeypatch, conn)
     client = TestClient(app)
     # First create an override, then delete it
-    client.post("/risk-config/ma_cross", json={"order_qty": 0.002})
-    resp = client.delete("/risk-config/ma_cross")
+    client.post("/risk-config/ppo", json={"order_qty": 0.002})
+    resp = client.delete("/risk-config/ppo")
     assert resp.status_code == 200
     rows = _audit_rows(conn, "risk_config")
     assert len(rows) == 2  # one for update, one for delete
@@ -9879,18 +10871,18 @@ def test_audit_log_param_sync(monkeypatch) -> None:
         """INSERT INTO backtest_runs
            (run_type, symbol, strategy_name, timeframe, candle_count, trade_count,
             fill_on, sharpe_ratio, params_json)
-           VALUES ('sweep', 'BTCUSDT', 'ma_cross', '1m', 100, 5, 'close', 1.5, ?)""",
+           VALUES ('sweep', 'BTCUSDT', 'ppo', '1m', 100, 5, 'close', 1.5, ?)""",
         (_json.dumps(params),),
     )
     conn._conn.commit()
     _patch_conn(monkeypatch, conn)
     client = TestClient(app)
-    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    resp = client.post("/backtest/sweep/ppo/apply-best-params", json={})
     assert resp.status_code == 200
     rows = _audit_rows(conn, "param_sync")
     assert len(rows) == 1
     assert rows[0][1] == "ok"
-    assert "ma_cross" in rows[0][3]
+    assert "ppo" in rows[0][3]
     payload = _json.loads(rows[0][4])
     assert payload["params_applied"]["order_qty"] == 0.003
     conn.really_close()
@@ -10071,3 +11063,49 @@ def test_market_data_fetch_endpoint_respects_limit(monkeypatch) -> None:
     client.post("/market-data/fetch", json={"limit": 500})
     assert captured["limit"] == 500
     pconn.really_close()
+
+
+def test_futures_collectors_config_endpoint_reports_enabled_flags(monkeypatch) -> None:
+    monkeypatch.setattr("app.data.futures_orderbook_service.is_futures_orderbook_collection_enabled", lambda: True)
+    monkeypatch.setattr("app.data.futures_aggtrade_service.is_futures_aggtrade_collection_enabled", lambda: False)
+    monkeypatch.setattr("app.data.futures_premium_service.is_futures_premium_collection_enabled", lambda: True)
+    monkeypatch.setattr("app.data.futures_open_interest_service.is_futures_open_interest_collection_enabled", lambda: False)
+    monkeypatch.setattr("app.data.futures_liquidation_service.is_futures_liquidation_collection_enabled", lambda: True)
+    client = TestClient(app)
+    resp = client.get("/collectors/futures/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled_collectors"] == [
+        "futures_orderbook",
+        "futures_premium",
+        "futures_liquidation",
+    ]
+
+
+def test_futures_collectors_config_endpoint_applies_selection(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("app.data.futures_orderbook_service.enable_futures_orderbook_collection", lambda: calls.append(("futures_orderbook", "enable")))
+    monkeypatch.setattr("app.data.futures_orderbook_service.disable_futures_orderbook_collection", lambda: calls.append(("futures_orderbook", "disable")))
+    monkeypatch.setattr("app.data.futures_aggtrade_service.enable_futures_aggtrade_collection", lambda: calls.append(("futures_aggtrade", "enable")))
+    monkeypatch.setattr("app.data.futures_aggtrade_service.disable_futures_aggtrade_collection", lambda: calls.append(("futures_aggtrade", "disable")))
+    monkeypatch.setattr("app.data.futures_premium_service.enable_futures_premium_collection", lambda: calls.append(("futures_premium", "enable")))
+    monkeypatch.setattr("app.data.futures_premium_service.disable_futures_premium_collection", lambda: calls.append(("futures_premium", "disable")))
+    monkeypatch.setattr("app.data.futures_open_interest_service.enable_futures_open_interest_collection", lambda: calls.append(("futures_open_interest", "enable")))
+    monkeypatch.setattr("app.data.futures_open_interest_service.disable_futures_open_interest_collection", lambda: calls.append(("futures_open_interest", "disable")))
+    monkeypatch.setattr("app.data.futures_liquidation_service.enable_futures_liquidation_collection", lambda: calls.append(("futures_liquidation", "enable")))
+    monkeypatch.setattr("app.data.futures_liquidation_service.disable_futures_liquidation_collection", lambda: calls.append(("futures_liquidation", "disable")))
+
+    client = TestClient(app)
+    resp = client.post(
+        "/collectors/futures/config",
+        json={"enabled_collectors": ["futures_orderbook", "futures_premium"]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["enabled_collectors"] == ["futures_orderbook", "futures_premium"]
+    assert calls == [
+        ("futures_orderbook", "enable"),
+        ("futures_aggtrade", "disable"),
+        ("futures_premium", "enable"),
+        ("futures_open_interest", "disable"),
+        ("futures_liquidation", "disable"),
+    ]

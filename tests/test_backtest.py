@@ -139,7 +139,7 @@ def test_compute_metrics_profit_factor() -> None:
 # ---------------------------------------------------------------------------
 
 def test_run_backtest_empty_candles_returns_empty_result() -> None:
-    result = run_backtest(symbol="BTCUSDT", strategy_name="ma_cross", candles=[])
+    result = run_backtest(symbol="BTCUSDT", strategy_name="ppo", candles=[])
     assert result["candle_count"] == 0
     assert result["trade_count"] == 0
     assert result["equity_curve"] == []
@@ -147,11 +147,11 @@ def test_run_backtest_empty_candles_returns_empty_result() -> None:
 
 
 def test_run_backtest_fewer_candles_than_strategy_window_returns_no_trades() -> None:
-    # ma_cross needs long_window=5 candles; 3 candles → no signal
+    # ppo needs long_window=5 candles; 3 candles → no signal
     candles = _make_candles([100.0, 101.0, 102.0])
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
     )
@@ -163,7 +163,7 @@ def test_run_backtest_produces_equity_curve_for_every_candle() -> None:
     candles = _make_candles([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
     )
     # equity_curve has one entry per candle
@@ -171,11 +171,11 @@ def test_run_backtest_produces_equity_curve_for_every_candle() -> None:
 
 
 def test_run_backtest_equity_starts_at_initial_capital_before_any_trade() -> None:
-    # 3 candles — no trade will happen (need 5 for ma_cross)
+    # 3 candles — no trade will happen (need 5 for ppo)
     candles = _make_candles([100.0, 101.0, 102.0])
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         initial_capital=5000.0,
     )
@@ -183,13 +183,19 @@ def test_run_backtest_equity_starts_at_initial_capital_before_any_trade() -> Non
         assert point["equity"] == pytest.approx(5000.0, abs=1e-6)
 
 
-def test_run_backtest_buy_signal_increases_qty_in_equity_curve() -> None:
-    # Rising prices → ma_cross short_ma > long_ma → BUY signal after candle 5
+def test_run_backtest_buy_signal_increases_qty_in_equity_curve(monkeypatch) -> None:
+    from app.strategy.signal_service import insert_signal as _insert_signal
+    monkeypatch.setattr(
+        "app.backtest.runner.generate_registered_signal",
+        lambda conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m": _insert_signal(
+            conn, "BUY", symbol=symbol, timeframe=timeframe, strategy_name=strategy_name,
+        ),
+    )
     prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
     candles = _make_candles(prices)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
         max_position_qty=0.002,
@@ -199,14 +205,23 @@ def test_run_backtest_buy_signal_increases_qty_in_equity_curve() -> None:
     assert max(qtys) > 0, "Expected at least one candle with a position open"
 
 
-def test_run_backtest_sell_closes_position() -> None:
+def test_run_backtest_sell_closes_position(monkeypatch) -> None:
+    from app.strategy.signal_service import insert_signal as _insert_signal
+    call_count = [0]
+
+    def fake_generate(conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m"):
+        call_count[0] += 1
+        signal_type = "BUY" if call_count[0] <= 5 else "SELL"
+        return _insert_signal(conn, signal_type, symbol=symbol, timeframe=timeframe, strategy_name=strategy_name)
+
+    monkeypatch.setattr("app.backtest.runner.generate_registered_signal", fake_generate)
     # BUY first (rising), then SELL (falling)
     prices_up = [100.0, 101.0, 102.0, 103.0, 104.0]       # triggers BUY
     prices_down = [104.0, 103.0, 102.0, 101.0, 100.0, 99.0]  # triggers SELL
     candles = _make_candles(prices_up + prices_down)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
         max_position_qty=0.002,
@@ -224,7 +239,7 @@ def test_run_backtest_realized_pnl_after_sell() -> None:
     candles = _make_candles(prices_up + prices_down)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
         max_position_qty=0.002,
@@ -243,7 +258,7 @@ def test_run_backtest_metrics_populated() -> None:
     candles = _make_candles(prices)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         initial_capital=10000.0,
         order_qty=0.001,
@@ -260,13 +275,13 @@ def test_run_backtest_fill_on_next_open_defers_fill() -> None:
     candles = _make_candles(prices)
     result_close = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         fill_on="close",
     )
     result_next = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         fill_on="next_open",
     )
@@ -278,12 +293,12 @@ def test_run_backtest_fill_on_next_open_defers_fill() -> None:
 
 
 def test_run_backtest_fill_on_next_open_fills_at_next_candle_open() -> None:
-    # Use enough candles for ma_cross to fire a BUY
+    # Use enough candles for ppo to fire a BUY
     prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
     candles = _make_candles(prices)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         fill_on="next_open",
         order_qty=0.001,
@@ -300,19 +315,18 @@ def test_run_backtest_fill_on_next_open_fills_at_next_candle_open() -> None:
             assert idx >= 1  # fill happens on candle >= 1 (never candle 0)
 
 
-@pytest.mark.skip(reason="momentum_3bar strategy was intentionally removed from the registry")
-def test_run_backtest_momentum_3bar_strategy() -> None:
-    # momentum_3bar needs 3 bars; rising prices → BUY
+def test_run_backtest_ppo_strategy() -> None:
+    # ppo needs 3 bars; rising prices → BUY
     prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
     candles = _make_candles(prices)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="momentum_3bar",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
         max_position_qty=0.002,
     )
-    assert result["strategy_name"] == "momentum_3bar"
+    assert result["strategy_name"] == "ppo"
     assert result["candle_count"] == len(prices)
 
 
@@ -322,7 +336,7 @@ def test_run_backtest_respects_max_position_qty() -> None:
     candles = _make_candles(prices)
     result = run_backtest(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         order_qty=0.001,
         max_position_qty=0.001,  # exactly one order allowed
@@ -335,8 +349,8 @@ def test_run_backtest_candles_sorted_regardless_of_input_order() -> None:
     prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
     candles = _make_candles(prices)
     shuffled = candles[::-1]  # reverse order
-    result_forward = run_backtest("BTCUSDT", "ma_cross", candles)
-    result_shuffled = run_backtest("BTCUSDT", "ma_cross", shuffled)
+    result_forward = run_backtest("BTCUSDT", "ppo", candles)
+    result_shuffled = run_backtest("BTCUSDT", "ppo", shuffled)
     # Both should produce identical trade counts and final equity
     assert result_forward["trade_count"] == result_shuffled["trade_count"]
     if result_forward["equity_curve"] and result_shuffled["equity_curve"]:
@@ -347,7 +361,7 @@ def test_run_backtest_candles_sorted_regardless_of_input_order() -> None:
 
 def test_run_backtest_result_keys_present() -> None:
     candles = _make_candles([100.0, 101.0, 102.0])
-    result = run_backtest("BTCUSDT", "ma_cross", candles)
+    result = run_backtest("BTCUSDT", "ppo", candles)
     for key in ("symbol", "strategy_name", "candle_count", "trade_count",
                 "metrics", "equity_curve", "trades"):
         assert key in result
@@ -355,7 +369,7 @@ def test_run_backtest_result_keys_present() -> None:
 
 def test_run_backtest_equity_curve_fields() -> None:
     candles = _make_candles([100.0, 101.0, 102.0])
-    result = run_backtest("BTCUSDT", "ma_cross", candles)
+    result = run_backtest("BTCUSDT", "ppo", candles)
     for point in result["equity_curve"]:
         for field in ("timestamp", "open_time", "close", "equity",
                       "realized_pnl", "unrealized_pnl", "qty"):
@@ -483,7 +497,7 @@ def test_run_parameter_sweep_single_combination() -> None:
     candles = _make_candles([100.0 + i for i in range(10)])
     results = run_parameter_sweep(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         param_grid={"order_qty": [0.001]},
     )
@@ -497,7 +511,7 @@ def test_run_parameter_sweep_multiple_combinations() -> None:
     candles = _make_candles([100.0 + i for i in range(15)])
     results = run_parameter_sweep(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         param_grid={"order_qty": [0.001, 0.002], "max_position_qty": [0.002, 0.004]},
     )
@@ -511,7 +525,7 @@ def test_run_parameter_sweep_sorted_by_sharpe() -> None:
     candles = _make_candles([100.0 + i for i in range(15)])
     results = run_parameter_sweep(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         param_grid={"order_qty": [0.001, 0.002]},
         sort_by="sharpe_ratio",
@@ -528,7 +542,7 @@ def test_run_parameter_sweep_sorted_by_max_drawdown() -> None:
     candles = _make_candles([100.0 + i for i in range(15)])
     results = run_parameter_sweep(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         param_grid={"order_qty": [0.001, 0.002]},
         sort_by="max_drawdown_pct",
@@ -541,13 +555,13 @@ def test_run_parameter_sweep_sorted_by_max_drawdown() -> None:
 def test_run_parameter_sweep_unknown_param_raises() -> None:
     candles = _make_candles([100.0, 101.0])
     with pytest.raises(ValueError, match="Unknown sweep parameter"):
-        run_parameter_sweep("BTCUSDT", "ma_cross", candles, param_grid={"bad_param": [1]})
+        run_parameter_sweep("BTCUSDT", "ppo", candles, param_grid={"bad_param": [1]})
 
 
 def test_run_parameter_sweep_result_contains_trade_count() -> None:
     candles = _make_candles([100.0 + i for i in range(10)])
     results = run_parameter_sweep(
-        "BTCUSDT", "ma_cross", candles,
+        "BTCUSDT", "ppo", candles,
         param_grid={"order_qty": [0.001]},
     )
     assert "trade_count" in results[0]
@@ -561,7 +575,7 @@ def test_run_walk_forward_basic_structure() -> None:
     candles = _make_candles([100.0 + i * 0.5 for i in range(30)])
     result = run_walk_forward(
         symbol="BTCUSDT",
-        strategy_name="ma_cross",
+        strategy_name="ppo",
         candles=candles,
         n_splits=3,
     )
@@ -573,13 +587,13 @@ def test_run_walk_forward_basic_structure() -> None:
 
 def test_run_walk_forward_splits_count() -> None:
     candles = _make_candles([100.0 + i for i in range(40)])
-    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=4)
+    result = run_walk_forward("BTCUSDT", "ppo", candles, n_splits=4)
     assert len(result["splits"]) == 4
 
 
 def test_run_walk_forward_split_fields() -> None:
     candles = _make_candles([100.0 + i for i in range(20)])
-    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=2)
+    result = run_walk_forward("BTCUSDT", "ppo", candles, n_splits=2)
     for split in result["splits"]:
         for key in ("fold", "train_candle_count", "test_candle_count",
                     "train_metrics", "test_metrics",
@@ -589,7 +603,7 @@ def test_run_walk_forward_split_fields() -> None:
 
 def test_run_walk_forward_expanding_window() -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
-    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=2)
+    result = run_walk_forward("BTCUSDT", "ppo", candles, n_splits=2)
     splits = result["splits"]
     # Each fold's training set is larger than the previous
     assert splits[1]["train_candle_count"] > splits[0]["train_candle_count"]
@@ -597,7 +611,7 @@ def test_run_walk_forward_expanding_window() -> None:
 
 def test_run_walk_forward_oos_metrics_keys() -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
-    result = run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=3)
+    result = run_walk_forward("BTCUSDT", "ppo", candles, n_splits=3)
     oos = result["oos_metrics"]
     for key in ("total_return_pct_mean", "total_return_pct_std",
                 "max_drawdown_pct_mean", "max_drawdown_pct_std"):
@@ -607,13 +621,13 @@ def test_run_walk_forward_oos_metrics_keys() -> None:
 def test_run_walk_forward_too_few_candles_raises() -> None:
     candles = _make_candles([100.0, 101.0])  # 2 candles, n_splits=5 → chunk_size=0
     with pytest.raises(ValueError, match="Too few candles"):
-        run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=5)
+        run_walk_forward("BTCUSDT", "ppo", candles, n_splits=5)
 
 
 def test_run_walk_forward_invalid_n_splits_raises() -> None:
     candles = _make_candles([100.0 + i for i in range(10)])
     with pytest.raises(ValueError, match="n_splits must be >= 1"):
-        run_walk_forward("BTCUSDT", "ma_cross", candles, n_splits=0)
+        run_walk_forward("BTCUSDT", "ppo", candles, n_splits=0)
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +668,7 @@ def _patched_client(monkeypatch, candles: List[Dict], symbol: str = "BTCUSDT"):
 def test_get_backtest_returns_metrics(monkeypatch) -> None:
     prices = [100.0 + i for i in range(20)]
     client = _patched_client(monkeypatch, _make_candles(prices))
-    response = client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&days=1")
+    response = client.get("/backtest?symbol=BTCUSDT&strategy=ppo&days=1")
     assert response.status_code == 200
     data = response.json()
     for key in ("symbol", "strategy_name", "candle_count", "trade_count", "metrics", "equity_curve", "trades"):
@@ -703,7 +717,7 @@ def test_post_backtest_sweep_returns_combinations(monkeypatch) -> None:
     client = _patched_client(monkeypatch, _make_candles(prices))
     payload = {
         "symbol": "BTCUSDT",
-        "strategy": "ma_cross",
+        "strategy": "ppo",
         "days": 1,
         "param_grid": {"order_qty": [0.001, 0.002]},
         "sort_by": "total_return_pct",
@@ -735,7 +749,7 @@ def test_post_backtest_sweep_unknown_param_returns_error(monkeypatch) -> None:
 def test_post_backtest_walk_forward_returns_splits(monkeypatch) -> None:
     prices = [100.0 + i * 0.5 for i in range(40)]
     client = _patched_client(monkeypatch, _make_candles(prices))
-    payload = {"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 1, "n_splits": 3}
+    payload = {"symbol": "BTCUSDT", "strategy": "ppo", "days": 1, "n_splits": 3}
     response = client.post("/backtest/walk-forward", json=payload)
     assert response.status_code == 200
     data = response.json()
@@ -950,7 +964,7 @@ def test_macd_generate_signal_returns_hold_on_flat_prices() -> None:
 
 def test_registry_contains_all_five_strategies() -> None:
     strategies = list_registered_strategies()
-    for name in ("ma_cross", "ppo"):
+    for name in ("ppo", "ppo"):
         assert name in strategies
 
 
@@ -1019,7 +1033,7 @@ def _make_history_conn():
 
 def test_persist_run_returns_id() -> None:
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     run_id = persist_run(conn, "single", result, days=30)
     assert isinstance(run_id, int) and run_id > 0
     conn.close()
@@ -1027,13 +1041,13 @@ def test_persist_run_returns_id() -> None:
 
 def test_persist_run_stored_values() -> None:
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     persist_run(conn, "single", result, days=7, fill_on="next_open")
     history = list_runs(conn)
     assert history["total"] == 1
     row = history["runs"][0]
     assert row["symbol"] == "BTCUSDT"
-    assert row["strategy_name"] == "ma_cross"
+    assert row["strategy_name"] == "ppo"
     assert row["run_type"] == "single"
     assert row["fill_on"] == "next_open"
     assert row["days"] == 7
@@ -1042,8 +1056,8 @@ def test_persist_run_stored_values() -> None:
 
 def test_list_runs_filter_by_symbol() -> None:
     conn = _make_history_conn()
-    r1 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
-    r2 = run_backtest("ETHUSDT", "ma_cross", _make_candles([100.0] * 5))
+    r1 = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
+    r2 = run_backtest("ETHUSDT", "ppo", _make_candles([100.0] * 5))
     persist_run(conn, "single", r1)
     persist_run(conn, "single", r2)
     btc_history = list_runs(conn, symbol="BTCUSDT")
@@ -1054,7 +1068,7 @@ def test_list_runs_filter_by_symbol() -> None:
 
 def test_list_runs_filter_by_run_type() -> None:
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     persist_run(conn, "single", result)
     persist_run(conn, "sweep", result, params={"order_qty": 0.001})
     assert list_runs(conn, run_type="single")["total"] == 1
@@ -1065,7 +1079,7 @@ def test_list_runs_filter_by_run_type() -> None:
 
 def test_list_runs_pagination() -> None:
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     for _ in range(5):
         persist_run(conn, "single", result)
     page = list_runs(conn, limit=2, offset=0)
@@ -1079,7 +1093,7 @@ def test_list_runs_pagination() -> None:
 def test_persist_run_handles_infinite_profit_factor() -> None:
     """profit_factor=inf must not raise (coerced to NULL)."""
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     result["metrics"]["profit_factor"] = float("inf")
     run_id = persist_run(conn, "single", result)
     row = list_runs(conn)["runs"][0]
@@ -1089,7 +1103,7 @@ def test_persist_run_handles_infinite_profit_factor() -> None:
 
 def test_persist_run_params_json_stored() -> None:
     conn = _make_history_conn()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0] * 5))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0] * 5))
     params = {"order_qty": 0.002, "max_position_qty": 0.004}
     persist_run(conn, "sweep", result, params=params)
     import json
@@ -1154,7 +1168,7 @@ def test_get_backtest_history_appears_after_run(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
-    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&days=30")
+    client.get("/backtest?symbol=BTCUSDT&strategy=ppo&days=30")
     resp = client.get("/backtest/history")
     assert resp.status_code == 200
     data = resp.json()
@@ -1180,8 +1194,8 @@ def test_get_backtest_history_filter_by_symbol(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
-    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
-    client.get("/backtest?symbol=ETHUSDT&strategy=ma_cross")
+    client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
+    client.get("/backtest?symbol=ETHUSDT&strategy=ppo")
     resp = client.get("/backtest/history?symbol=BTCUSDT")
     assert resp.status_code == 200
     data = resp.json()
@@ -1197,7 +1211,7 @@ def test_get_backtest_history_pagination(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     for _ in range(5):
-        client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
+        client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
     resp = client.get("/backtest/history?limit=2&offset=0")
     assert resp.status_code == 200
     data = resp.json()
@@ -1225,7 +1239,7 @@ def test_apply_best_sweep_params_no_runs_returns_404(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    resp = client.post("/backtest/sweep/ppo/apply-best-params", json={})
     assert resp.status_code == 404
     assert "No sweep runs found" in resp.json()["detail"]
     conn.really_close()
@@ -1236,14 +1250,14 @@ def test_apply_best_sweep_params_invalid_sort_by_returns_422(monkeypatch) -> Non
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post(
-        "/backtest/sweep/ma_cross/apply-best-params",
+        "/backtest/sweep/ppo/apply-best-params",
         json={"sort_by": "not_a_metric"},
     )
     assert resp.status_code == 422
 
 
 def _persist_sweep_run(
-    conn, strategy: str = "ma_cross", symbol: str = "BTCUSDT",
+    conn, strategy: str = "ppo", symbol: str = "BTCUSDT",
     order_qty: float = 0.003, sharpe: float = 1.5, trade_count: int = 5,
 ) -> None:
     """Insert a synthetic sweep row without needing real candles."""
@@ -1273,11 +1287,11 @@ def test_apply_best_sweep_params_golden_path(monkeypatch) -> None:
     _persist_sweep_run(conn, order_qty=0.003)
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.post("/backtest/sweep/ma_cross/apply-best-params", json={})
+    resp = client.post("/backtest/sweep/ppo/apply-best-params", json={})
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["strategy"] == "ma_cross"
+    assert data["strategy"] == "ppo"
     assert data["source_run"]["params_applied"]["order_qty"] == 0.003
     assert "config" in data
     assert data["config"]["order_qty"] == 0.003
@@ -1292,7 +1306,7 @@ def test_apply_best_sweep_params_min_trade_count_filter(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post(
-        "/backtest/sweep/ma_cross/apply-best-params",
+        "/backtest/sweep/ppo/apply-best-params",
         json={"min_trade_count": 5},
     )
     assert resp.status_code == 404
@@ -1310,7 +1324,7 @@ def _make_history_conn_with_migrations():
     return conn
 
 
-def _insert_run(conn, strategy="ma_cross", symbol="BTCUSDT", run_type="single", experiment_name=None):
+def _insert_run(conn, strategy="ppo", symbol="BTCUSDT", run_type="single", experiment_name=None):
     result = run_backtest(strategy, strategy, _make_candles([100.0 + i for i in range(5)]))
     result["symbol"] = symbol
     result["strategy_name"] = strategy
@@ -1350,7 +1364,7 @@ def test_get_backtest_experiments_endpoint(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     conn._conn.execute(
         "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe, candle_count,"
-        " trade_count, fill_on, experiment_name) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close','exp_x')"
+        " trade_count, fill_on, experiment_name) VALUES ('single','BTCUSDT','ppo','1m',0,0,'close','exp_x')"
     )
     conn._conn.commit()
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
@@ -1367,7 +1381,7 @@ def test_backtest_history_experiment_name_filter(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
-    client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross&experiment_name=exp_test")
+    client.get("/backtest?symbol=BTCUSDT&strategy=ppo&experiment_name=exp_test")
     resp = client.get("/backtest/history?experiment_name=exp_test")
     assert resp.status_code == 200
     data = resp.json()
@@ -1408,7 +1422,7 @@ def test_patch_run_endpoint(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     conn._conn.execute(
         "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe, candle_count,"
-        " trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+        " trade_count, fill_on) VALUES ('single','BTCUSDT','ppo','1m',0,0,'close')"
     )
     conn._conn.commit()
     run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1435,10 +1449,10 @@ def test_patch_run_endpoint_not_found(monkeypatch) -> None:
 
 
 def _seed_two_runs(conn):
-    r1 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    r1 = run_backtest("BTCUSDT", "ppo", _make_candles([100.0 + i for i in range(5)]))
     r1["metrics"]["sharpe_ratio"] = 1.0
     id1 = persist_run(conn, "single", r1)
-    r2 = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    r2 = run_backtest("BTCUSDT", "ppo", _make_candles([100.0 + i for i in range(5)]))
     r2["metrics"]["sharpe_ratio"] = 2.0
     id2 = persist_run(conn, "single", r2)
     return id1, id2
@@ -1473,7 +1487,7 @@ def test_compare_endpoint(monkeypatch) -> None:
     for _ in range(2):
         conn._conn.execute(
             "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
-            " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+            " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ppo','1m',0,0,'close')"
         )
     conn._conn.commit()
     rows = conn._conn.execute("SELECT id FROM backtest_runs ORDER BY id").fetchall()
@@ -1489,7 +1503,7 @@ def test_compare_endpoint(monkeypatch) -> None:
 def test_leaderboard_runs_service() -> None:
     conn = _make_history_conn_with_migrations()
     id1, id2 = _seed_two_runs(conn)
-    top = leaderboard_runs(conn, strategy_name="ma_cross", sort_by="sharpe_ratio", limit=5)
+    top = leaderboard_runs(conn, strategy_name="ppo", sort_by="sharpe_ratio", limit=5)
     assert top[0]["id"] == id2  # higher sharpe first
     conn.close()
 
@@ -1499,15 +1513,15 @@ def test_leaderboard_endpoint(monkeypatch) -> None:
     conn._conn.execute(
         "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
         " candle_count, trade_count, fill_on, sharpe_ratio)"
-        " VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close', 1.5)"
+        " VALUES ('single','BTCUSDT','ppo','1m',0,0,'close', 1.5)"
     )
     conn._conn.commit()
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.get("/backtest/leaderboard/ma_cross?sort_by=sharpe_ratio&limit=5")
+    resp = client.get("/backtest/leaderboard/ppo?sort_by=sharpe_ratio&limit=5")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["strategy_name"] == "ma_cross"
+    assert data["strategy_name"] == "ppo"
     assert len(data["runs"]) >= 1
     conn.really_close()
 
@@ -1516,7 +1530,7 @@ def test_leaderboard_invalid_sort_by(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.get("/backtest/leaderboard/ma_cross?sort_by=bad_metric")
+    resp = client.get("/backtest/leaderboard/ppo?sort_by=bad_metric")
     assert resp.status_code == 422
     conn.really_close()
 
@@ -1552,7 +1566,7 @@ def test_get_champion_run_returns_latest() -> None:
     id2 = _insert_run(conn)
     promote_run(conn, id1)
     promote_run(conn, id2)
-    champion = get_champion_run(conn, "ma_cross")
+    champion = get_champion_run(conn, "ppo")
     assert champion["id"] == id2
     conn.close()
 
@@ -1568,7 +1582,7 @@ def test_promote_endpoint(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     conn._conn.execute(
         "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
-        " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close')"
+        " candle_count, trade_count, fill_on) VALUES ('single','BTCUSDT','ppo','1m',0,0,'close')"
     )
     conn._conn.commit()
     run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1592,14 +1606,14 @@ def test_champion_endpoint(monkeypatch) -> None:
     conn._conn.execute(
         "INSERT INTO backtest_runs (run_type, symbol, strategy_name, timeframe,"
         " candle_count, trade_count, fill_on, promoted_at)"
-        " VALUES ('single','BTCUSDT','ma_cross','1m',0,0,'close', CURRENT_TIMESTAMP)"
+        " VALUES ('single','BTCUSDT','ppo','1m',0,0,'close', CURRENT_TIMESTAMP)"
     )
     conn._conn.commit()
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.get("/backtest/champion/ma_cross")
+    resp = client.get("/backtest/champion/ppo")
     assert resp.status_code == 200
-    assert resp.json()["strategy_name"] == "ma_cross"
+    assert resp.json()["strategy_name"] == "ppo"
     conn.really_close()
 
 
@@ -1607,7 +1621,7 @@ def test_champion_endpoint_not_found(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
     client = TestClient(app)
-    resp = client.get("/backtest/champion/ma_cross")
+    resp = client.get("/backtest/champion/ppo")
     assert resp.status_code == 404
     conn.really_close()
 
@@ -1617,7 +1631,7 @@ def test_champion_endpoint_not_found(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_wf_group(conn, strategy="ma_cross", symbol="BTCUSDT", n_folds=3, group_id="wfg-001"):
+def _seed_wf_group(conn, strategy="ppo", symbol="BTCUSDT", n_folds=3, group_id="wfg-001"):
     """Insert n_folds walk_forward rows sharing the same wf_group_id."""
     for i in range(n_folds):
         conn.execute(
@@ -1633,7 +1647,7 @@ def _seed_wf_group(conn, strategy="ma_cross", symbol="BTCUSDT", n_folds=3, group
 
 def test_persist_run_stores_wf_group_id() -> None:
     conn = _make_history_conn_with_migrations()
-    result = run_backtest("BTCUSDT", "ma_cross", _make_candles([100.0 + i for i in range(5)]))
+    result = run_backtest("BTCUSDT", "ppo", _make_candles([100.0 + i for i in range(5)]))
     run_id = persist_run(conn, "walk_forward", result, wf_group_id="wfg-test", fold_index=0)
     row = get_run(conn, run_id)
     assert row["wf_group_id"] == "wfg-test"
@@ -1727,7 +1741,7 @@ def test_walk_forward_endpoint_returns_wf_group_id(monkeypatch) -> None:
     client = TestClient(app)
     resp = client.post(
         "/backtest/walk-forward",
-        json={"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 30, "n_splits": 3},
+        json={"symbol": "BTCUSDT", "strategy": "ppo", "days": 30, "n_splits": 3},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -1748,7 +1762,7 @@ def test_walk_forward_endpoint_returns_wf_group_id(monkeypatch) -> None:
 def test_persist_run_stores_equity_curve() -> None:
     conn = _make_history_conn_with_migrations()
     candles = _make_candles([100.0 + i for i in range(10)])
-    result = run_backtest("BTCUSDT", "ma_cross", candles)
+    result = run_backtest("BTCUSDT", "ppo", candles)
     curve = result.get("equity_curve", [])
     run_id = persist_run(conn, "single", result, equity_curve=curve)
     stored = get_equity_curve(conn, run_id)
@@ -1781,7 +1795,7 @@ def test_equity_curve_endpoint_returns_curve(monkeypatch) -> None:
     monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     # run a backtest — should persist equity_curve
-    resp = client.get("/backtest?symbol=BTCUSDT&strategy=ma_cross")
+    resp = client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
     assert resp.status_code == 200
     # get the run id from history
     history = client.get("/backtest/history").json()
@@ -1813,7 +1827,7 @@ def test_walk_forward_folds_store_equity_curve(monkeypatch) -> None:
     client = TestClient(app)
     resp = client.post(
         "/backtest/walk-forward",
-        json={"symbol": "BTCUSDT", "strategy": "ma_cross", "days": 30, "n_splits": 2},
+        json={"symbol": "BTCUSDT", "strategy": "ppo", "days": 30, "n_splits": 2},
     )
     assert resp.status_code == 200
     wf_group_id = resp.json()["wf_group_id"]

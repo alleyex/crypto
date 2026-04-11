@@ -13,7 +13,7 @@ Binance API → candles → signals → risk_events → orders → fills → pos
 | Module | Purpose |
 |---|---|
 | `app/data` | Binance kline fetch, candle storage |
-| `app/strategy` | Signal generation (`ma_cross`, `momentum_3bar`) |
+| `app/strategy` | Signal generation (`ppo`, etc.) |
 | `app/risk` | Risk rule evaluation |
 | `app/execution` | Order execution (`paper`, `noop`, `simulated_live`, `binance`) |
 | `app/pipeline` | End-to-end pipeline orchestration |
@@ -70,7 +70,8 @@ export CRYPTO_ORDER_STALENESS_SECONDS=300
 export CRYPTO_RISK_REJECTION_STREAK_THRESHOLD=3
 export CRYPTO_CANDLE_STALENESS_SECONDS=600
 
-# Database (defaults to SQLite)
+# Database
+# If CRYPTO_DATABASE_URL is set and CRYPTO_DB_BACKEND is omitted, runtime now auto-selects Postgres.
 export CRYPTO_DB_BACKEND=sqlite
 export CRYPTO_SQLITE_PATH=storage/market_data.db
 export CRYPTO_DATABASE_URL=          # PostgreSQL DSN when using postgres backend
@@ -130,7 +131,7 @@ LaunchAgent label: `com.alleyex.crypto.scheduler`
 python scripts/run_scheduler.py                              # continuous loop
 python scripts/run_scheduler.py --interval 60 --iterations 1 # one cycle
 python scripts/run_scheduler.py --mode market-data-only
-python scripts/run_scheduler.py --mode strategy-only --strategy momentum_3bar
+python scripts/run_scheduler.py --mode strategy-only --strategy ppo
 python scripts/run_futures_orderbook_collector.py --interval 60
 ```
 
@@ -160,7 +161,7 @@ Split worker environment variables:
 export CRYPTO_DATA_INTERVAL=60
 export CRYPTO_STRATEGY_INTERVAL=60
 export CRYPTO_EXECUTION_INTERVAL=60
-export CRYPTO_STRATEGY_NAME=momentum_3bar
+export CRYPTO_STRATEGY_NAME=ppo
 ```
 
 ## API Reference

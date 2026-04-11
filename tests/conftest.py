@@ -13,7 +13,35 @@ The execution backend reads a runtime file (runtime/execution.backend) that
 may contain "binance" on the developer's machine.  All tests default to the
 "paper" backend to avoid unintended live network calls.
 """
+import sqlite3
+import os
+
+# Force PyTorch to use CPU in tests.  On Apple Silicon the MPS backend
+# accumulates state across multiple neural-network initialisations within
+# the same process and eventually triggers a SIGSEGV in torch.nn.init.orthogonal_().
+# Disabling MPS before torch is first imported keeps every PPO model on the CPU
+# path and avoids the crash when running the full test suite together.
+try:
+    import torch as _torch
+    if hasattr(_torch.backends, "mps"):
+        _torch.backends.mps.is_available = lambda: False  # type: ignore[method-assign]
+        _torch.backends.mps.is_built = lambda: False  # type: ignore[method-assign]
+    del _torch
+except ImportError:
+    pass
+
 import pytest
+
+from app.core.migrations import run_migrations
+
+# Capture the value of CRYPTO_DATABASE_URL at conftest import time — before any
+# test modules (including scripts) are collected and imported.  Some scripts call
+# load_dotenv_file() at module level, which can set CRYPTO_DATABASE_URL from the
+# local .env file and pollute os.environ for all tests that run afterwards.
+# By snapshotting the value here we can distinguish "real postgres was explicitly
+# configured by the caller" (should not patch) from "load_dotenv_file set it
+# incidentally during collection" (should patch with SQLite).
+_DATABASE_URL_AT_STARTUP: str | None = os.environ.get("CRYPTO_DATABASE_URL")
 
 
 @pytest.fixture(autouse=True)
@@ -30,3 +58,34 @@ def _reset_execution_backend_for_tests(monkeypatch, tmp_path):
     # or creating their own backend file via a separate monkeypatch.
     monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND_FILE", tmp_path / "execution.backend")
     monkeypatch.setattr("app.execution.runtime.EXECUTION_BACKEND", "paper")
+
+
+@pytest.fixture(autouse=True)
+def _patch_get_connection_for_tests(monkeypatch, tmp_path):
+    """When CRYPTO_DATABASE_URL is not set, patch all module-level get_connection
+    references to return a per-test file-backed SQLite connection.
+
+    Tests that explicitly call monkeypatch.setattr("app.some.module.get_connection", ...)
+    will override this patch for those specific paths.
+    """
+    if _DATABASE_URL_AT_STARTUP:
+        return  # Real postgres was configured at startup — do not interfere.
+
+    db_path = tmp_path / "test_shared.db"
+
+    def make_conn():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        run_migrations(conn)
+        return conn
+
+    # Patch every module that imports get_connection at the module level.
+    for module_path in (
+        "app.api.main.get_connection",
+        "app.audit.service.get_connection",
+        "app.system.heartbeat.get_connection",
+        "app.scheduler.runner.get_connection",
+        "app.pipeline.run_pipeline.get_connection",
+        "app.validation.soak_report.get_connection",
+    ):
+        monkeypatch.setattr(module_path, make_conn)

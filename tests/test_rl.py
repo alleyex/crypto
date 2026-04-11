@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.main import app
 from app.core.migrations import run_migrations
 from app.features.compute import MIN_CANDLES, compute_features_for_candles
+from app.features.crypto_features import get_feature_columns
 from app.features.store import materialize_features
 from app.rl.agent import ReinforceAgent
 from app.rl.environment import (
@@ -23,6 +24,7 @@ from app.rl.experiment import (
     run_rl_experiment,
 )
 from app.training.dataset import FEATURE_NAMES
+from app.rl.crypto_env import CryptoTradingEnv
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +421,46 @@ def test_extract_rows_and_closes_filters_none():
     assert closes[0] == 100.0
 
 
+def test_crypto_env_supports_reward_horizon_separate_from_decision_interval():
+    import pandas as pd
+
+    feat_cols = get_feature_columns()
+    rows = []
+    for i in range(8):
+        row = {name: 0.0 for name in feat_cols}
+        row["log_ret_1"] = 0.01
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    env = CryptoTradingEnv(df, episode_length=6, deterministic=True, decision_interval=1, reward_horizon=5)
+    _, _ = env.reset()
+    _, reward, done, _, info = env.step(1)
+
+    assert done is False
+    assert info["decision_bar"] is True
+    assert reward == pytest.approx(0.05 - 0.0005)
+
+
+def test_crypto_env_hold_bars_skip_reward_until_next_decision():
+    import pandas as pd
+
+    feat_cols = get_feature_columns()
+    rows = []
+    for i in range(8):
+        row = {name: 0.0 for name in feat_cols}
+        row["log_ret_1"] = 0.01
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    env = CryptoTradingEnv(df, episode_length=6, deterministic=True, decision_interval=3, reward_horizon=3)
+    _, _ = env.reset()
+    env.step(1)
+    _, reward_hold, _, _, info_hold = env.step(2)
+
+    assert info_hold["decision_bar"] is False
+    assert reward_hold == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # Group 4: API endpoint
 # ---------------------------------------------------------------------------
@@ -603,6 +645,213 @@ def test_api_rl_job_failed_job_has_no_registry_model(monkeypatch):
     assert resp.json()["status"] == "failed"
     assert resp.json()["registry_model_id"] is None
     assert resp.json()["registry_status"] is None
+
+
+def test_api_ppo_job_accepts_separate_decision_interval_and_reward_horizon(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+    enqueued: list[dict[str, Any]] = []
+
+    def _fake_enqueue(connection, job_type, payload=None, depends_on_job_id=None):
+        assert job_type == "training_ppo"
+        enqueued.append(
+            {
+                "job_type": job_type,
+                "payload": dict(payload or {}),
+                "depends_on_job_id": depends_on_job_id,
+            }
+        )
+        return 1
+
+    def _fake_training(**kwargs):
+        assert kwargs["decision_interval"] == 1
+        assert kwargs["reward_horizon"] == 5
+        return {
+            "symbol": kwargs["symbol"],
+            "timeframe": kwargs["timeframe"],
+            "total_steps": kwargs["total_steps"],
+            "eval_windows": kwargs["eval_windows"],
+            "n_total": 100,
+            "n_train": 70,
+            "fee_rate": kwargs["fee_rate"],
+            "decision_interval": kwargs["decision_interval"],
+            "reward_horizon": kwargs["reward_horizon"],
+            "verdict": "PASS",
+            "win_rate": 0.8,
+            "avg_ppo_pct": 0.01,
+            "avg_bnh_pct": 0.0,
+            "avg_edge": 0.01,
+            "walk_forward": [],
+            "model_path": "/tmp/model.zip",
+        }
+
+    monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.training.ppo_trainer.run_ppo_training", _fake_training)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending"
+    assert enqueued == [
+        {
+            "job_type": "training_ppo",
+            "payload": {"training_job_id": resp.json()["id"]},
+            "depends_on_job_id": None,
+        }
+    ]
+    job = client.get(f"/training/jobs/{resp.json()['id']}").json()
+    assert job["status"] == "pending"
+    assert job["params"]["decision_interval"] == 1
+    assert job["params"]["reward_horizon"] == 5
+    assert job["params"]["action_interval"] == 1
+
+    result = _fake_training(
+        symbol=job["symbol"],
+        timeframe=job["timeframe"],
+        total_steps=job["params"]["total_steps"],
+        eval_windows=job["params"]["eval_windows"],
+        fee_rate=job["params"]["fee_rate"],
+        learning_rate=job["params"]["learning_rate"],
+        n_steps=job["params"]["n_steps"],
+        batch_size=job["params"]["batch_size"],
+        n_epochs=job["params"]["n_epochs"],
+        gamma=job["params"]["gamma"],
+        gae_lambda=job["params"]["gae_lambda"],
+        clip_range=job["params"]["clip_range"],
+        ent_coef=job["params"]["ent_coef"],
+        seed=job["params"]["seed"],
+        frame_stack=job["params"]["frame_stack"],
+        holding_bonus=job["params"]["holding_bonus"],
+        decision_interval=job["params"]["decision_interval"],
+        reward_horizon=job["params"]["reward_horizon"],
+        train_frac=job["params"]["train_frac"],
+        job_id=job["id"],
+        on_progress=lambda *_args, **_kwargs: None,
+    )
+    assert result["decision_interval"] == 1
+    assert result["reward_horizon"] == 5
+
+
+def test_api_ppo_job_legacy_action_interval_maps_to_both_fields(monkeypatch):
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+    enqueued: list[dict[str, Any]] = []
+
+    def _fake_enqueue(connection, job_type, payload=None, depends_on_job_id=None):
+        assert job_type == "training_ppo"
+        enqueued.append(
+            {
+                "job_type": job_type,
+                "payload": dict(payload or {}),
+                "depends_on_job_id": depends_on_job_id,
+            }
+        )
+        return 1
+
+    def _fake_training(**kwargs):
+        assert kwargs["decision_interval"] == 5
+        assert kwargs["reward_horizon"] == 5
+        return {
+            "symbol": kwargs["symbol"],
+            "timeframe": kwargs["timeframe"],
+            "total_steps": kwargs["total_steps"],
+            "eval_windows": kwargs["eval_windows"],
+            "n_total": 100,
+            "n_train": 70,
+            "fee_rate": kwargs["fee_rate"],
+            "decision_interval": kwargs["decision_interval"],
+            "reward_horizon": kwargs["reward_horizon"],
+            "verdict": "PASS",
+            "win_rate": 0.8,
+            "avg_ppo_pct": 0.01,
+            "avg_bnh_pct": 0.0,
+            "avg_edge": 0.01,
+            "walk_forward": [],
+            "model_path": "/tmp/model.zip",
+        }
+
+    monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.training.ppo_trainer.run_ppo_training", _fake_training)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "action_interval": 5},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending"
+    assert enqueued == [
+        {
+            "job_type": "training_ppo",
+            "payload": {"training_job_id": resp.json()["id"]},
+            "depends_on_job_id": None,
+        }
+    ]
+    job = client.get(f"/training/jobs/{resp.json()['id']}").json()
+    assert job["params"]["decision_interval"] == 5
+    assert job["params"]["reward_horizon"] == 5
+
+
+def test_queue_backed_ppo_job_runner_marks_job_done(monkeypatch):
+    from app.training.ppo_queue_job import run_ppo_training_job
+
+    client, pconn = _rl_client(monkeypatch)
+    monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.training.ppo_queue_job.get_connection", lambda: pconn)
+
+    def _fake_enqueue(connection, job_type, payload=None, depends_on_job_id=None):
+        assert job_type == "training_ppo"
+        return 1
+
+    def _fake_training(**kwargs):
+        assert kwargs["decision_interval"] == 1
+        assert kwargs["reward_horizon"] == 5
+        kwargs["on_progress"](250_000, 1_000_000)
+        return {
+            "symbol": kwargs["symbol"],
+            "timeframe": kwargs["timeframe"],
+            "total_steps": kwargs["total_steps"],
+            "eval_windows": kwargs["eval_windows"],
+            "n_total": 100,
+            "n_train": 70,
+            "fee_rate": kwargs["fee_rate"],
+            "decision_interval": kwargs["decision_interval"],
+            "reward_horizon": kwargs["reward_horizon"],
+            "verdict": "PASS",
+            "win_rate": 0.8,
+            "avg_ppo_pct": 0.01,
+            "avg_bnh_pct": 0.0,
+            "avg_edge": 0.01,
+            "walk_forward": [],
+            "model_path": "/tmp/model.zip",
+        }
+
+    monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.training.ppo_queue_job.run_ppo_training", _fake_training)
+
+    resp = client.post(
+        "/training/ppo-jobs",
+        json={"symbol": "BTCUSDT", "timeframe": "1m", "decision_interval": 1, "reward_horizon": 5},
+    )
+
+    assert resp.status_code == 200
+    job_id = int(resp.json()["id"])
+
+    result = run_ppo_training_job(job_id)
+    assert result["status"] == "ok"
+    assert result["training_job_id"] == job_id
+
+    job = client.get(f"/training/jobs/{job_id}").json()
+    assert job["status"] == "done"
+    assert job["metrics"]["verdict"] == "PASS"
+    assert job["dataset"]["n_total"] == 100
+    assert job["model"]["job_type"] == "ppo"
+    progress_row = pconn.execute("SELECT progress_json FROM training_jobs WHERE id=?;", (job_id,)).fetchone()
+    assert progress_row is not None
+    assert '"pct": 100' in str(progress_row["progress_json"])
 
 
 def test_api_rl_champion_served_by_inference(monkeypatch):
