@@ -2307,6 +2307,25 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <div class="message" id="market-fetch-message" style="display:none"></div>
         </article>
 
+        <article class="panel data-card fetch-panel">
+          <div class="fetch-panel-header">
+            <div>
+              <h2>Futures Collector Controls</h2>
+              <p class="fetch-panel-desc">Choose which futures collectors keep running in the background. Unchecked collectors stay paused until re-enabled.</p>
+            </div>
+          </div>
+          <div class="fetch-field">
+            <div class="fetch-field-label">Collectors <span class="fetch-field-hint">changes apply on the next collector loop, usually within 60 seconds</span></div>
+            <div id="futures-collector-checkboxes" class="toggle-pill-group"></div>
+            <div id="futures-collector-summary" class="selection-summary"></div>
+          </div>
+          <div class="fetch-actions">
+            <button class="fetch-btn-primary" data-action="market-futures-collectors-apply">Apply</button>
+            <button class="secondary" data-action="market-futures-collectors-refresh">Refresh</button>
+          </div>
+          <div class="message" id="futures-collectors-message" style="display:none"></div>
+        </article>
+
       </section>
 
       <article class="panel data-card" id="market-candles-panel" style="display:none; margin-top:20px">
@@ -2350,38 +2369,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       <article class="panel data-card" style="margin-top:20px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
           <div>
-            <h2>Order Book Collection</h2>
-            <p>Binance top-10 depth snapshots, collected every minute.</p>
+            <h2>Futures Order Book Collection</h2>
+            <p>Binance USDT perpetual top-10 depth snapshots for the configured futures symbols.</p>
           </div>
           <div class="button-row" style="gap:8px">
-            <span id="ob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
-            <button class="secondary" id="ob-enable-btn" data-action="ob-enable" style="display:none">Enable Collection</button>
-            <button class="secondary" id="ob-refresh-btn" data-action="ob-refresh">Refresh</button>
+            <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
+            <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
+            <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh</button>
           </div>
         </div>
-        <div id="ob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
-        <div id="ob-stats-board" style="margin-top:14px">
+        <div id="fob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+        <div id="fob-stats-board" style="margin-top:14px">
           <span style="color:var(--muted);font-size:13px">Loading…</span>
         </div>
-        <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-            <div>
-              <h3 style="margin:0 0 4px 0">Futures Order Book Collection</h3>
-              <p style="margin:0;color:var(--muted)">Binance USDT perpetual top-10 depth snapshots for the configured futures symbols.</p>
-            </div>
-            <div class="button-row" style="gap:8px">
-              <span id="fob-status-badge" class="status-badge" style="font-size:12px">Loading…</span>
-              <button class="secondary" id="fob-enable-btn" data-action="fob-enable" style="display:none">Enable Collection</button>
-              <button class="secondary" id="fob-refresh-btn" data-action="fob-refresh">Refresh</button>
-            </div>
-          </div>
-          <div id="fob-refresh-meta" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
-          <div id="fob-stats-board" style="margin-top:14px">
-            <span style="color:var(--muted);font-size:13px">Loading…</span>
-          </div>
-          <div id="fob-detail-board" style="margin-top:14px">
-            <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>
-          </div>
+        <div id="fob-detail-board" style="margin-top:14px">
+          <span style="color:var(--muted);font-size:13px">Click a symbol to view the latest 5 snapshots.</span>
         </div>
       </article>
 
@@ -2754,6 +2756,18 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <label for="ppo-frame-stack-input">Frame Stack</label>
                 <input id="ppo-frame-stack-input" type="number" value="1" min="1" max="20" step="1" />
               </div>
+              <div class="training-field">
+                <label for="ppo-decision-interval-input">Decision Interval (bars)</label>
+                <input id="ppo-decision-interval-input" type="number" value="1" min="1" max="60" step="1" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-reward-horizon-input">Reward Horizon (bars)</label>
+                <input id="ppo-reward-horizon-input" type="number" value="1" min="1" max="60" step="1" />
+              </div>
+              <div class="training-field">
+                <label for="ppo-holding-bonus-input">Holding Bonus</label>
+                <input id="ppo-holding-bonus-input" type="number" value="0.0" min="0" max="0.1" step="0.001" />
+              </div>
             </div>
           </details>
           <div class="button-row">
@@ -2843,7 +2857,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       <section class="grid">
         <article class="panel data-card">
           <h2>Report Filters</h2>
-          <p>Query the latest execution report for a symbol and optional strategy window.</p>
+          <p>Query Binance-aligned execution history for a symbol, strategy, and fixed date window.</p>
           <div class="training-form-grid">
             <div class="training-field">
               <label for="report-symbol-input">Symbol</label>
@@ -2854,8 +2868,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <input id="report-strategy-input" type="text" value="ppo" placeholder="ppo or leave blank" />
             </div>
             <div class="training-field">
-              <label for="report-days-input">Days</label>
-              <input id="report-days-input" type="number" value="7" min="1" max="30" />
+              <label for="report-start-date-input">Start Date</label>
+              <input id="report-start-date-input" type="date" />
+            </div>
+            <div class="training-field">
+              <label for="report-end-date-input">End Date</label>
+              <input id="report-end-date-input" type="date" />
             </div>
           </div>
           <div class="button-row">
@@ -2914,8 +2932,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         </article>
 
         <article class="panel data-card">
-          <h2>Recent Closed Trades</h2>
-          <p>Latest closed trade outcomes for the selected report scope.</p>
+          <h2>Exchange Realized Trades</h2>
+          <p>Realized Binance trade outcomes in the selected date window.</p>
           <div class="trade-list" id="report-closed-trades-board">
             <div class="strategy-card">Loading...</div>
           </div>
@@ -2926,6 +2944,39 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           <p>Latest fills contributing to this report.</p>
           <div class="trade-list" id="report-fills-board">
             <div class="strategy-card">Loading...</div>
+          </div>
+        </article>
+
+        <article class="panel data-card">
+          <h2>Exchange Trade History</h2>
+          <p>Direct Binance trade history for the selected symbol. Use this table as the platform-aligned source of truth.</p>
+          <div class="ops-card" style="margin-bottom:14px">
+            <div class="ops-card-grid" id="report-exchange-summary-grid">
+              <div><strong>Source</strong>Loading...</div>
+              <div><strong>Activity</strong>Loading...</div>
+              <div><strong>Fees</strong>Loading...</div>
+              <div><strong>Realized PnL</strong>Loading...</div>
+            </div>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table" id="report-exchange-trades-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Time</th>
+                  <th>Contract</th>
+                  <th>Direction</th>
+                  <th class="num">Avg Price</th>
+                  <th class="num">Amount</th>
+                  <th class="num">Fee</th>
+                  <th>Role</th>
+                  <th class="num">Realized PnL</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="9" class="table-note">Loading...</td></tr>
+              </tbody>
+            </table>
           </div>
           <details class="collapsible">
             <summary>View raw report payload</summary>
@@ -3079,15 +3130,22 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       </div>
 
       <div class="footer-note">
-        Auto refresh runs every 10 seconds. Use Pause Auto Refresh before inspecting a fixed snapshot.
+        Auto refresh is paused by default. Resume it only when you need live updates.
       </div>
     </main>
 
     <script>
       const el = (id) => document.getElementById(id);
-      const AUTO_REFRESH_INTERVAL_MS = 10000;
+      const AUTO_REFRESH_INTERVAL_MS = 15000;
+      const COLLECTOR_REFRESH_INTERVAL_MS = 60000;
+      const STRATEGY_ACTIVITY_REFRESH_INTERVAL_MS = 60000;
       let autoRefreshTimer = null;
-      let autoRefreshEnabled = true;
+      let autoRefreshEnabled = false;
+      let refreshAllInFlight = null;
+      let collectorRefreshInFlight = null;
+      let collectorRefreshTimer = null;
+      let strategyActivityRefreshTimer = null;
+      let strategyActivityRefreshInFlight = null;
       let _schedulerPillsDirty = false;
       let schedulerLogsMode = "all";
       let schedulerControlFilterMode = "all";
@@ -3102,6 +3160,44 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       function formatJson(value) {
         return JSON.stringify(value, null, 2);
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      function renderDashboardLoadFailure(message) {
+        const strategyBoard = el("strategy-summary-board");
+        if (strategyBoard) {
+          strategyBoard.innerHTML = `<div class="strategy-card">Failed to load strategy activity: ${message}</div>`;
+        }
+        const closedTradesBoard = el("strategy-closed-trades-board");
+        if (closedTradesBoard) {
+          closedTradesBoard.innerHTML = `<div class="strategy-card">Failed to load closed trades: ${message}</div>`;
+        }
+        const positionsJson = el("positions-json");
+        if (positionsJson) positionsJson.textContent = `Failed to load positions: ${message}`;
+        const heartbeatsJson = el("heartbeats-json");
+        if (heartbeatsJson) heartbeatsJson.textContent = `Failed to load runtime heartbeats: ${message}`;
+        const statusIds = [
+          "health-status",
+          "scheduler-status",
+          "pipeline-status",
+          "queue-status",
+          "alerts-status",
+          "market-data-status",
+          "alerting-runtime-status",
+          "data-worker-status",
+          "strategy-worker-status",
+          "risk-worker-status",
+          "execution-worker-status",
+        ];
+        statusIds.forEach((id) => {
+          const node = el(id);
+          if (!node) return;
+          node.textContent = "ERROR";
+          node.className = "value bad";
+        });
       }
 
       function syntaxHighlightJson(value) {
@@ -3186,18 +3282,33 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       }
 
       async function api(path, options = {}) {
-        const response = await fetch(path, {
-          headers: { "Content-Type": "application/json" },
-          ...options,
-        });
-        const contentType = response.headers.get("content-type") || "";
-        const payload = contentType.includes("application/json")
-          ? await response.json()
-          : await response.text();
-        if (!response.ok) {
-          throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload));
+        const method = String(options.method || "GET").toUpperCase();
+        const maxAttempts = method === "GET" ? 2 : 1;
+        let lastError = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            const response = await fetch(path, {
+              headers: { "Content-Type": "application/json" },
+              ...options,
+            });
+            const contentType = response.headers.get("content-type") || "";
+            const payload = contentType.includes("application/json")
+              ? await response.json()
+              : await response.text();
+            if (!response.ok) {
+              throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload));
+            }
+            return payload;
+          } catch (error) {
+            lastError = error;
+            const isNetworkError = error instanceof TypeError;
+            if (!isNetworkError || attempt >= maxAttempts) {
+              throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 750));
+          }
         }
-        return payload;
+        throw lastError || new Error("Request failed");
       }
 
       function updateHeadline(health) {
@@ -3321,7 +3432,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
         el("broker-context-detail").innerHTML = brokerContextLines.join("");
 
-        el("last-refresh").textContent = new Date().toLocaleTimeString();
+        el("last-refresh").textContent = utcTimeLabel();
 
         const strip = el("status-strip");
         strip.innerHTML = "";
@@ -3636,8 +3747,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (!board) return;
         const global = data.global_defaults || {};
         const overrides = data.overrides || [];
-        const fields = ["order_qty", "max_position_qty", "cooldown_seconds", "max_daily_loss"];
-        const fieldLabels = { order_qty: "Order Qty", max_position_qty: "Max Pos Qty", cooldown_seconds: "Cooldown (s)", max_daily_loss: "Max Daily Loss" };
+        const fields = ["order_qty", "max_position_qty", "cooldown_seconds", "stop_loss_pct", "max_daily_loss"];
+        const fieldLabels = { order_qty: "Order Qty", max_position_qty: "Max Pos Qty", cooldown_seconds: "Cooldown (s)", stop_loss_pct: "Stop Loss %", max_daily_loss: "Max Daily Loss" };
 
         const rows = overrides.map((cfg) => {
           const cells = fields.map((f) => {
@@ -3733,6 +3844,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       function updateStrategySummary(strategySummary) {
         const board = el("strategy-summary-board");
         if (!Array.isArray(strategySummary) || strategySummary.length === 0) {
+          window.__strategySummary = [];
           board.innerHTML = '<div class="strategy-card">No strategy activity recorded yet.</div>';
           updateSelectedStrategyDetails([], []);
           return;
@@ -3740,7 +3852,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         const strategyEntries = window.__schedulerStrategyStatus?.strategy_entries || [];
         const strategyEntryMap = Object.fromEntries(strategyEntries.map((item) => [item.strategy_name, item]));
-        const filteredStrategies = strategySummary.filter((item) => matchesStrategyFilter(item, classifyStrategyActivity(item)));
+        const allowedStrategyNames = new Set(
+          (window.__schedulerStrategyStatus?.available_strategies || []).map((name) => String(name))
+        );
+        const visibleStrategies = strategySummary.filter((item) =>
+          !allowedStrategyNames.size || allowedStrategyNames.has(String(item.strategy_name))
+        );
+        window.__strategySummary = visibleStrategies;
+        const filteredStrategies = visibleStrategies.filter((item) => matchesStrategyFilter(item, classifyStrategyActivity(item)));
 
         const sortedStrategies = [...filteredStrategies].sort((left, right) => {
           if (strategySortMode === "strategy_name") {
@@ -3751,8 +3870,19 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (sortedStrategies.length === 0) {
           board.innerHTML = '<div class="strategy-card">No strategies match the current filter.</div>';
-          updateSelectedStrategyDetails(strategySummary, []);
+          updateSelectedStrategyDetails(visibleStrategies, []);
           return;
+        }
+
+        if (sortedStrategies.length === 1) {
+          const beforeSymbol = reportSymbol();
+          const beforeStrategy = reportStrategy();
+          syncReportFiltersToStrategy(sortedStrategies[0], { overwriteDefaultSymbol: true });
+          if (reportSymbol() !== beforeSymbol || reportStrategy() !== beforeStrategy) {
+            loadExecutionReportWithStatus().catch((error) => {
+              setReportMessage(`Failed to load report: ${error.message}`, "bad");
+            });
+          }
         }
 
         board.innerHTML = sortedStrategies.map((item, index) => {
@@ -3774,7 +3904,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const openEntryPrice = item.open_entry_price != null
             ? Number(item.open_entry_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : null;
-          const latestClosedTrade = item.latest_closed_trade || null;
+          const latestExchangeClosedTrade = item.latest_exchange_closed_trade || null;
+          const latestClosedTrade = latestExchangeClosedTrade || item.latest_closed_trade || null;
+          const lastTradeLabel = latestExchangeClosedTrade ? "Latest Exchange Trade" : "Last Trade";
           const latestClosedSymbol = latestClosedTrade?.symbol || "none";
           const latestClosedStatus = latestClosedTrade?.status || "none";
           const latestClosedAt = latestClosedTrade?.closed_at || "none";
@@ -3826,11 +3958,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
           const netQty = Number(item.net_position_qty || 0);
           const isLong = netQty > 0;
+          const isShort = netQty < 0;
           const sigClass = latestSignal === "BUY" ? "sig-buy" : latestSignal === "SELL" ? "sig-sell" : "sig-hold";
           const netQtyStr = netQty === 0 ? "0" : parseFloat(netQty.toFixed(8)).toString();
+          const positionSymbol = item.open_position_symbol || item.price_symbol || "";
           const positionLabel = isLong
-            ? `${netQtyStr} BTC${openEntryPrice != null ? " @ " + openEntryPrice : ""}`
-            : "—";
+            ? `${netQtyStr} ${positionSymbol}${openEntryPrice != null ? " @ " + openEntryPrice : ""}`
+            : isShort
+              ? `${netQtyStr} ${positionSymbol}${openEntryPrice != null ? " @ " + openEntryPrice : ""}`
+              : "—";
+          const openPositionOpenedAt = item.open_position_opened_at || item.exchange_current_position?.updated_at || null;
           const currentPrice = item.current_price != null
             ? Number(item.current_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : null;
@@ -3847,9 +3984,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             ? (spreadValue / Number(item.current_price)) * 10000
             : null;
           const priceSymbol = item.price_symbol || null;
-          const unrealizedPnl = (isLong && item.open_entry_price != null && item.current_price != null)
-            ? (Number(item.current_price) - Number(item.open_entry_price)) * netQty
+          // For Binance Futures, use exchange-provided unrealized PnL if available
+          const exchangeUnrealizedPnl = (item.exchange_current_position != null)
+            ? Number(item.exchange_current_position.unrealized_pnl || 0)
             : null;
+          const unrealizedPnl = exchangeUnrealizedPnl != null && (isLong || isShort)
+            ? exchangeUnrealizedPnl
+            : (isLong && item.open_entry_price != null && item.current_price != null)
+              ? (Number(item.current_price) - Number(item.open_entry_price)) * netQty
+              : (isShort && item.open_entry_price != null && item.current_price != null)
+                ? (Number(item.open_entry_price) - Number(item.current_price)) * Math.abs(netQty)
+                : null;
           const unrealizedPnlStr = unrealizedPnl != null
             ? (unrealizedPnl >= 0 ? "+" : "") + parseFloat(unrealizedPnl.toFixed(4)).toString() + " USDT"
             : null;
@@ -3925,7 +4070,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <div class="strategy-info-row">
                 <div class="strategy-info-cell">
                   <span class="strategy-info-label">Position</span>
-                  <span class="strategy-info-value ${isLong ? "ok" : "muted"}">${isLong ? "LONG  " + positionLabel : "Flat"}</span>
+                  <span class="strategy-info-value ${isLong ? "ok" : isShort ? "bad" : "muted"}">
+                    ${isLong ? "LONG  " + positionLabel : isShort ? "SHORT " + positionLabel : "Flat"}
+                    ${(isLong || isShort) && openPositionOpenedAt ? `<span class="strategy-price-book-spread">Opened ${utcDateTimeLabel(openPositionOpenedAt)}</span>` : ""}
+                  </span>
                 </div>
                 <div class="strategy-info-cell">
                   <span class="strategy-info-label">Bid / Ask</span>
@@ -3947,7 +4095,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               </div>
               <div class="strategy-info-row">
                 <div class="strategy-info-cell">
-                  <span class="strategy-info-label">Last Trade</span>
+                  <span class="strategy-info-label">${lastTradeLabel}</span>
                   <span class="strategy-info-value ${latestClosedTrade ? latestClosedPnlClass : "muted"}">
                     ${latestClosedTrade ? latestClosedPnl + " USDT  (" + latestClosedStatus + ")" : "—"}
                   </span>
@@ -3958,16 +4106,16 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div class="strategy-footer-left">
                   <div class="strategy-footer-item">
                     <span>Volume</span>
-                    <span>${Number(item.filled_qty_total).toFixed(4)} BTC</span>
+                    <span>${Number(item.filled_qty_total).toFixed(4)} ${(item.price_symbol || "").replace(/USDT$|BUSD$|BTC$/i, "") || "units"}</span>
                   </div>
                   <div class="strategy-footer-item">
                     <span>Last Active</span>
-                    <span>${latestActivityAt}</span>
+                    <span>${utcDateTimeLabel(latestActivityAt)}</span>
                   </div>
                   ${latestClosedTrade ? `
                   <div class="strategy-footer-item">
                     <span>Closed At</span>
-                    <span>${latestClosedAt}</span>
+                    <span>${utcDateTimeLabel(latestClosedAt)}</span>
                   </div>` : ""}
                 </div>
               </div>
@@ -3976,7 +4124,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           `;
         }).join("");
 
-        updateSelectedStrategyDetails(strategySummary, window.__strategyClosedTrades || []);
+        updateSelectedStrategyDetails(visibleStrategies, window.__strategyClosedTrades || []);
       }
 
       function updateSelectedStrategyDetails(strategySummary, closedTrades) {
@@ -3997,7 +4145,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
 
         const activityState = classifyStrategyActivity(selected);
-        const latestClosedTrade = selected.latest_closed_trade || null;
+        const latestExchangeClosedTrade = selected.latest_exchange_closed_trade || null;
+        const latestClosedTrade = latestExchangeClosedTrade || selected.latest_closed_trade || null;
+        const lastTradeLabel = latestExchangeClosedTrade ? "Latest Exchange Trade" : "Latest Closed PnL";
         const pnlClass = Number(selected.gross_realized_pnl || 0) > 0
           ? "ok"
           : Number(selected.gross_realized_pnl || 0) < 0
@@ -4025,7 +4175,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                   : "warn";
               return `
                 <div class="strategy-metric">
-                  <strong>${item.symbol} · ${item.closed_at}</strong>
+                  <strong>${item.symbol} · ${utcDateTimeLabel(item.closed_at)}</strong>
                   <span class="${itemPnlClass}">${item.status} / ${Number(item.realized_pnl || 0).toFixed(6)}</span>
                 </div>
               `;
@@ -4060,10 +4210,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               <div class="strategy-metric"><strong>Latest Order</strong>${selected.latest_order?.status || "none"}</div>
               <div class="strategy-metric"><strong>Latest Fill</strong>${selected.latest_fill?.side || "none"}</div>
               <div class="strategy-metric"><strong>Realized Trades</strong>${selected.realized_trade_count}</div>
-              <div class="strategy-metric"><strong>Latest Activity</strong>${selected.latest_activity_at || "none"}</div>
-              <div class="strategy-metric"><strong>Latest Fill At</strong>${selected.latest_fill_at || "none"}</div>
+              <div class="strategy-metric"><strong>Latest Activity</strong>${utcDateTimeLabel(selected.latest_activity_at)}</div>
+              <div class="strategy-metric"><strong>Latest Fill At</strong>${utcDateTimeLabel(selected.latest_fill_at)}</div>
               <div class="strategy-metric"><strong>Latest Closed Symbol</strong>${latestClosedTrade?.symbol || "none"}</div>
-              <div class="strategy-metric"><strong>Latest Closed PnL</strong>${latestClosedTrade ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6) : "n/a"}</div>
+              <div class="strategy-metric"><strong>${lastTradeLabel}</strong>${latestClosedTrade ? Number(latestClosedTrade.realized_pnl || 0).toFixed(6) : "n/a"}</div>
             </div>
             <div class="mini-trade-grid">${recentClosedTradesHtml}</div>
           </div>
@@ -4095,7 +4245,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
                 <div><strong>Entry</strong>${Number(item.entry_price).toFixed(4)}</div>
                 <div><strong>Exit</strong>${Number(item.exit_price).toFixed(4)}</div>
               </div>
-              <div class="ops-card-note">${item.closed_at}</div>
+              <div class="ops-card-note">${utcDateTimeLabel(item.closed_at)}</div>
             </div>
           `;
         }).join("");
@@ -4197,9 +4347,46 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           select.value = strategyName;
         }
         closedTradesStrategyFilter = strategyName;
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
         });
+      }
+
+      function inferStrategyReportSymbol(item) {
+        if (!item || typeof item !== "object") return "";
+        return (
+          item.open_position_symbol ||
+          item.price_symbol ||
+          item.latest_fill?.symbol ||
+          item.latest_order?.symbol ||
+          item.latest_risk?.symbol ||
+          item.latest_signal?.symbol ||
+          item.latest_closed_trade?.symbol ||
+          ""
+        );
+      }
+
+      function syncReportFiltersToStrategy(item, options = {}) {
+        const reportStrategyInput = el("report-strategy-input");
+        const reportSymbolInput = el("report-symbol-input");
+        if (reportStrategyInput && item?.strategy_name) {
+          reportStrategyInput.value = item.strategy_name;
+        }
+        if (reportSymbolInput) {
+          const inferredSymbol = inferStrategyReportSymbol(item);
+          const currentValue = reportSymbolInput.value.trim().toUpperCase();
+          if (
+            inferredSymbol &&
+            (
+              options.overwriteDefaultSymbol ||
+              options.force ||
+              !currentValue ||
+              currentValue === "BTCUSDT"
+            )
+          ) {
+            reportSymbolInput.value = inferredSymbol;
+          }
+        }
       }
 
       function collectSchedulerStrategyPayload() {
@@ -4248,7 +4435,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify(payload),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function demoteStrategyPriority(strategyName) {
@@ -4265,7 +4452,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify(payload),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function disableStrategy(strategyName) {
@@ -4282,7 +4469,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify(payload),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function enableStrategy(strategyName) {
@@ -4298,7 +4485,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify(payload),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function applySchedulerPreset(limit) {
@@ -4308,7 +4495,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify({ preset }),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function resetStrategyPriorities() {
@@ -4317,7 +4504,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify({ preset: "reset" }),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function applyPriorityPreset(mode) {
@@ -4327,7 +4514,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify({ preset }),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       async function clearDisabledStrategyNotes() {
@@ -4343,7 +4530,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           body: JSON.stringify(payload),
         });
         el("scheduler-message").textContent = formatJson(result);
-        await refreshAll();
+        await runRefreshAll();
       }
 
       function updateHeartbeats(health) {
@@ -4494,7 +4681,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (!button) return;
         button.textContent = autoRefreshEnabled ? "Pause Auto Refresh" : "Resume Auto Refresh";
         el("auto-refresh-status").textContent = autoRefreshEnabled
-          ? "Auto refresh every 10 seconds."
+          ? `Auto refresh every ${Math.round(AUTO_REFRESH_INTERVAL_MS / 1000)} seconds.`
           : "Auto refresh paused.";
       }
 
@@ -4503,16 +4690,58 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           clearInterval(autoRefreshTimer);
           autoRefreshTimer = null;
         }
+        scheduleCollectorRefresh();
         if (!autoRefreshEnabled) {
           updateAutoRefreshStatus();
           return;
         }
         autoRefreshTimer = setInterval(() => {
-          refreshAll().catch((error) => {
+          runRefreshAll().catch((error) => {
             el("health-json").textContent = `Failed to load data: ${error.message}`;
           });
         }, AUTO_REFRESH_INTERVAL_MS);
         updateAutoRefreshStatus();
+      }
+
+      async function runRefreshAll() {
+        if (refreshAllInFlight) return refreshAllInFlight;
+        refreshAllInFlight = refreshAll().finally(() => {
+          refreshAllInFlight = null;
+        });
+        return refreshAllInFlight;
+      }
+
+      async function refreshStrategyActivityPanel() {
+        const [strategySummary, closedTrades] = await Promise.all([
+          api("/strategies/summary"),
+          api(`/strategies/closed-trades?limit=10${closedTradesStrategyFilter !== "all" ? `&strategy_name=${encodeURIComponent(closedTradesStrategyFilter)}` : ""}`),
+        ]);
+        updateStrategySummary(strategySummary);
+        updateClosedTrades(closedTrades);
+      }
+
+      async function runStrategyActivityRefresh() {
+        if (strategyActivityRefreshInFlight) return strategyActivityRefreshInFlight;
+        strategyActivityRefreshInFlight = refreshStrategyActivityPanel().catch((error) => {
+          const board = el("strategy-summary-board");
+          if (board) {
+            board.innerHTML = `<div class="strategy-card">Failed to refresh strategy activity: ${error.message}</div>`;
+          }
+          throw error;
+        }).finally(() => {
+          strategyActivityRefreshInFlight = null;
+        });
+        return strategyActivityRefreshInFlight;
+      }
+
+      function scheduleStrategyActivityRefresh() {
+        if (strategyActivityRefreshTimer) {
+          clearInterval(strategyActivityRefreshTimer);
+          strategyActivityRefreshTimer = null;
+        }
+        strategyActivityRefreshTimer = setInterval(() => {
+          runStrategyActivityRefresh().catch(() => {});
+        }, STRATEGY_ACTIVITY_REFRESH_INTERVAL_MS);
       }
 
       async function refreshAll() {
@@ -4522,26 +4751,32 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedTradesStrategyFilter !== "all") {
           closedTradesQuery.set("strategy_name", closedTradesStrategyFilter);
         }
-        const [health, positions, orders, fills, strategySummary, closedTrades, pnl, logs, auditEvents, alertStatus, soakReport, soakHistory, soakSummary, strategies, schedulerStrategy, schedulerSymbols, queueSummary, riskConfig, portfolio] = await Promise.all([
+        const [health, positions, schedulerStrategy, schedulerSymbols] = await Promise.all([
           api("/health"),
-          api("/positions?limit=10"),
+          api("/positions?limit=10").catch(() => []),
+          api("/scheduler/strategy"),
+          api("/scheduler/symbols"),
+        ]);
+        const [strategies, queueSummary, riskConfig, portfolio, alertStatus] = await Promise.all([
+          api("/strategies"),
+          api("/queue/summary"),
+          api("/risk-config").catch(() => ({ global_defaults: {}, overrides: [] })),
+          api("/portfolio").catch(() => ({ config: {}, open_positions: [], per_strategy: {}, violations: [], within_limits: true })),
+          api("/alerts/status"),
+        ]);
+        const [orders, fills, strategySummary, closedTrades, pnl] = await Promise.all([
           api("/orders?limit=10"),
           api("/fills?limit=10"),
           api("/strategies/summary"),
           api(`/strategies/closed-trades?${closedTradesQuery.toString()}`),
           api("/pnl?limit=10"),
+        ]);
+        const [logs, auditEvents, soakReport, soakHistory, soakSummary] = await Promise.all([
           api(`/scheduler/logs?lines=20&mode=${encodeURIComponent(schedulerLogsMode)}`),
           api("/audit-events?limit=20"),
-          api("/alerts/status"),
           api("/validation/soak"),
           api("/validation/soak/history?limit=10"),
           api("/validation/soak/history/summary"),
-          api("/strategies"),
-          api("/scheduler/strategy"),
-          api("/scheduler/symbols"),
-          api("/queue/summary"),
-          api("/risk-config").catch(() => ({ global_defaults: {}, overrides: [] })),
-          api("/portfolio").catch(() => ({ config: {}, open_positions: [], per_strategy: {}, violations: [], within_limits: true })),
         ]);
 
         window.__latestHealth = health;
@@ -4655,6 +4890,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               });
             });
             updateMarketFetchSelectionSummary();
+          } catch (_) {}
+        }
+        const futuresCollectorPills = el("futures-collector-checkboxes");
+        if (futuresCollectorPills) {
+          try {
+            const config = await api("/collectors/futures/config");
+            renderFuturesCollectorControls(config);
           } catch (_) {}
         }
         const fsPills = el("market-fs-symbol-pills");
@@ -4780,7 +5022,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               if (msgEl) { msgEl.textContent = `Error: ${err.message}`; msgEl.className = "message bad"; msgEl.style.display = "block"; }
               if (resultEl) resultEl.style.display = "none";
             }
-            await refreshAll();
+            await runRefreshAll();
             return;
           } else if (type === "scheduler-start") {
             result = await api("/scheduler/start", { method: "POST" });
@@ -4943,7 +5185,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             return;
           }
           target.textContent = formatJson(result);
-          await refreshAll();
+          await runRefreshAll();
         } catch (error) {
           target.textContent = `Error:\\n${error.message}`;
         }
@@ -5013,6 +5255,39 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
       }
 
+      async function refreshCollectorPanels() {
+        if (collectorRefreshInFlight) return collectorRefreshInFlight;
+        collectorRefreshInFlight = (async () => {
+          await refreshFetchHistory();
+          await sleep(250);
+          await refreshFuturesObStatus();
+          await sleep(250);
+          await refreshFuturesAggStatus();
+          await sleep(250);
+          await refreshFuturesPremiumStatus();
+          await sleep(250);
+          await refreshFuturesOpenInterestStatus();
+          await sleep(250);
+          await refreshFuturesLiquidationStatus();
+        })().finally(() => {
+          collectorRefreshInFlight = null;
+        });
+        return collectorRefreshInFlight;
+      }
+
+      function scheduleCollectorRefresh() {
+        if (collectorRefreshTimer) {
+          clearInterval(collectorRefreshTimer);
+          collectorRefreshTimer = null;
+        }
+        if (!autoRefreshEnabled) {
+          return;
+        }
+        collectorRefreshTimer = setInterval(() => {
+          refreshCollectorPanels().catch(() => {});
+        }, COLLECTOR_REFRESH_INTERVAL_MS);
+      }
+
       document.addEventListener("click", (e) => {
         if (e.target.dataset?.action === "market-fetch-history-refresh") refreshFetchHistory();
       });
@@ -5029,7 +5304,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           button.disabled = true;
           button.textContent = "Refreshing...";
           try {
-            await refreshAll();
+            await runRefreshAll();
           } finally {
             button.disabled = false;
             button.textContent = orig;
@@ -5038,14 +5313,14 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       });
 
       el("logs-mode-select")?.addEventListener("change", () => {
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("logs-json").textContent = `Failed to load logs: ${error.message}`;
         });
       });
 
       el("scheduler-control-filter-select")?.addEventListener("change", (event) => {
         schedulerControlFilterMode = event.target.value;
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to filter scheduler control activity: ${error.message}</div>`;
         });
       });
@@ -5056,7 +5331,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (select) {
           select.value = "all";
         }
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("scheduler-control-board").innerHTML = `<div class="strategy-card">Failed to reset scheduler control activity filter: ${error.message}</div>`;
         });
       });
@@ -5079,7 +5354,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               });
             }
             el("scheduler-message").textContent = `Replayed scheduler preset: ${action}`;
-            await refreshAll();
+            await runRefreshAll();
           } catch (error) {
             el("scheduler-message").textContent = `Failed to replay scheduler preset: ${error.message}`;
           }
@@ -5102,21 +5377,21 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       el("strategy-sort-select")?.addEventListener("change", (event) => {
         strategySortMode = event.target.value;
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("strategy-summary-board").innerHTML = `<div class="strategy-card">Failed to sort strategies: ${error.message}</div>`;
         });
       });
 
       el("strategy-filter-select")?.addEventListener("change", (event) => {
         strategyFilterMode = event.target.value;
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("strategy-summary-board").innerHTML = `<div class="strategy-card">Failed to filter strategies: ${error.message}</div>`;
         });
       });
 
       el("closed-trades-strategy-select")?.addEventListener("change", (event) => {
         closedTradesStrategyFilter = event.target.value;
-        refreshAll().catch((error) => {
+        runRefreshAll().catch((error) => {
           el("strategy-closed-trades-board").innerHTML = `<div class="strategy-card">Failed to filter closed trades: ${error.message}</div>`;
         });
       });
@@ -5161,6 +5436,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
         const card = event.target.closest("[data-strategy-name]");
         if (!card) return;
+        const selectedStrategy = (window.__strategySummary || []).find((item) => item.strategy_name === card.dataset.strategyName);
+        if (selectedStrategy) {
+          syncReportFiltersToStrategy(selectedStrategy, { force: true });
+          loadExecutionReportWithStatus().catch((error) => {
+            setReportMessage(`Failed to load report: ${error.message}`, "bad");
+          });
+        }
         const nextStrategy = closedTradesStrategyFilter === card.dataset.strategyName ? "all" : card.dataset.strategyName;
         applyClosedTradesStrategyFilter(nextStrategy);
       });
@@ -5170,6 +5452,13 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const card = event.target.closest("[data-strategy-name]");
         if (!card) return;
         event.preventDefault();
+        const selectedStrategy = (window.__strategySummary || []).find((item) => item.strategy_name === card.dataset.strategyName);
+        if (selectedStrategy) {
+          syncReportFiltersToStrategy(selectedStrategy, { force: true });
+          loadExecutionReportWithStatus().catch((error) => {
+            setReportMessage(`Failed to load report: ${error.message}`, "bad");
+          });
+        }
         const nextStrategy = closedTradesStrategyFilter === card.dataset.strategyName ? "all" : card.dataset.strategyName;
         applyClosedTradesStrategyFilter(nextStrategy);
       });
@@ -5178,39 +5467,37 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         applyClosedTradesStrategyFilter("all");
       });
 
+      document.querySelector('[data-action="report-refresh"]')?.addEventListener("click", () => {
+        loadExecutionReportWithStatus().catch((error) => {
+          setReportMessage(`Failed to load report: ${error.message}`, "bad");
+        });
+      });
+
       updateAutoRefreshStatus();
       scheduleAutoRefresh();
-      refreshAll().catch((error) => {
+      scheduleStrategyActivityRefresh();
+      runRefreshAll().catch((error) => {
+        renderDashboardLoadFailure(error.message);
         el("health-json").textContent = `Failed to load data: ${error.message}`;
       });
       refreshMarketStatus();
-      refreshFetchHistory();
-      refreshObStatus();
-      refreshFuturesObStatus();
-      refreshFuturesAggStatus();
-      refreshFuturesPremiumStatus();
-      refreshFuturesOpenInterestStatus();
-      refreshFuturesLiquidationStatus();
-      refreshPPOJobs().catch((error) => {
-        const msg = el("ppo-train-message");
-        if (msg) {
-          msg.textContent = `Failed to load PPO jobs: ${error.message}`;
-          msg.className = "message bad";
-        }
-      });
-      refreshExecutionReport().then((report) => {
-        const msg = el("report-message");
-        if (msg) {
-          msg.textContent = `Loaded ${report.summary?.symbol ?? "n/a"} report for the last ${report.summary?.days ?? "n/a"} days.`;
-          msg.className = "message ok";
-        }
-      }).catch((error) => {
-        const msg = el("report-message");
-        if (msg) {
-          msg.textContent = `Failed to load report: ${error.message}`;
-          msg.className = "message bad";
-        }
-      });
+      setTimeout(() => {
+        refreshCollectorPanels().catch(() => {});
+      }, 1200);
+      setTimeout(() => {
+        refreshPPOJobs().catch((error) => {
+          const msg = el("ppo-train-message");
+          if (msg) {
+            msg.textContent = `Failed to load PPO jobs: ${error.message}`;
+            msg.className = "message bad";
+          }
+        });
+      }, 6000);
+      setTimeout(() => {
+        loadExecutionReportWithStatus().catch((error) => {
+          setReportMessage(`Failed to load report: ${error.message}`, "bad");
+        });
+      }, 8000);
       (function() {
         const d = new Date();
         d.setDate(d.getDate() - 7);
@@ -5236,18 +5523,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             });
           }
           if (tabId === "reports") {
-            refreshExecutionReport().then((report) => {
-              const msg = el("report-message");
-              if (msg) {
-                msg.textContent = `Loaded ${report.summary?.symbol ?? "n/a"} report for the last ${report.summary?.days ?? "n/a"} days.`;
-                msg.className = "message ok";
-              }
-            }).catch((error) => {
-              const msg = el("report-message");
-              if (msg) {
-                msg.textContent = `Failed to load report: ${error.message}`;
-                msg.className = "message bad";
-              }
+            loadExecutionReportWithStatus().catch((error) => {
+              setReportMessage(`Failed to load report: ${error.message}`, "bad");
             });
           }
         });
@@ -5329,6 +5606,40 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
       function trainingRlTimeframe() { return el("training-rl-timeframe-input")?.value.trim() || "1m"; }
       function reportSymbol() { return el("report-symbol-input")?.value.trim() || "BTCUSDT"; }
       function reportStrategy() { return el("report-strategy-input")?.value.trim() || ""; }
+      function reportStartDate() { return el("report-start-date-input")?.value || ""; }
+      function reportEndDate() { return el("report-end-date-input")?.value || ""; }
+
+      function ensureReportDateDefaults() {
+        const startInput = el("report-start-date-input");
+        const endInput = el("report-end-date-input");
+        if (!startInput || !endInput) return;
+        if (startInput.value && endInput.value) return;
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(endDate.getDate() - 7);
+        const toDateInputValue = (date) => {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, "0");
+          const day = String(date.getDate()).padStart(2, "0");
+          return `${year}-${month}-${day}`;
+        };
+        if (!startInput.value) startInput.value = toDateInputValue(startDate);
+        if (!endInput.value) endInput.value = toDateInputValue(endDate);
+      }
+
+      function setReportMessage(text, tone = "ok") {
+        const msg = el("report-message");
+        if (!msg) return;
+        msg.textContent = text;
+        msg.className = `message ${tone}`;
+      }
+
+      function setReportMessage(text, tone = "ok") {
+        const msg = el("report-message");
+        if (!msg) return;
+        msg.textContent = text;
+        msg.className = `message ${tone}`;
+      }
 
       function showMlJson(preId, msgId, data, msgText) {
         const pre = el(preId);
@@ -5342,6 +5653,17 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (msg) { msg.textContent = String(err); msg.className = "message bad"; }
       }
 
+      function utcTimeLabel(date = new Date()) {
+        return `${date.toISOString().slice(11, 19)} UTC`;
+      }
+
+      function utcDateTimeLabel(value) {
+        if (!value) return "n/a";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return String(value);
+        return `${date.toISOString().replace("T", " ").slice(0, 19)} UTC`;
+      }
+
       function renderExecutionReport(report) {
         const summary = report?.summary || {};
         const kpis = el("report-summary-kpis");
@@ -5350,7 +5672,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         const failedBoard = el("report-failed-board");
         const closedBoard = el("report-closed-trades-board");
         const fillsBoard = el("report-fills-board");
+        const exchangeSummaryGrid = el("report-exchange-summary-grid");
+        const exchangeTradesTableBody = document.querySelector("#report-exchange-trades-table tbody");
         const raw = el("report-json");
+
+        const formatUtcDateTime = (value) => utcDateTimeLabel(value);
 
         if (kpis) {
           const gross = Number(summary.gross_pnl || 0);
@@ -5366,8 +5692,9 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
         if (grid) {
           const pos = summary.current_position || {};
+          const windowLabel = summary.window_label || `${summary.symbol || "n/a"} · ${summary.days || 0}d`;
           grid.innerHTML = `
-            <div><strong>Window</strong>${summary.symbol || "n/a"} · strategy=${summary.strategy_name || "all"} · ${summary.days || 0}d</div>
+            <div><strong>Window</strong>${windowLabel} · symbol=${summary.symbol || "n/a"} · strategy=${summary.strategy_name || "all"}</div>
             <div><strong>Activity</strong>${summary.fills || 0} fills · ${summary.closed_trades || 0} closed trades · notional=${Number(summary.notional || 0).toFixed(4)}</div>
             <div><strong>Holding</strong>avg=${summary.avg_hold_minutes == null ? "n/a" : `${Number(summary.avg_hold_minutes).toFixed(2)} min`} · best=${summary.best_trade == null ? "n/a" : Number(summary.best_trade).toFixed(6)} · worst=${summary.worst_trade == null ? "n/a" : Number(summary.worst_trade).toFixed(6)}</div>
             <div><strong>Current Position</strong>${pos.qty != null ? `${pos.qty} @ ${pos.avg_price || 0}` : "n/a"}</div>`;
@@ -5411,19 +5738,28 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         if (closedBoard) {
           const trades = Array.isArray(report?.recent_closed_trades) ? report.recent_closed_trades : [];
           closedBoard.innerHTML = trades.length
-            ? trades.map((trade) => `<div class="ops-card">
-                <div class="ops-card-header">
-                  <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}/${trade.timeframe || "1m"}</div>
-                  <div class="chip"><span class="${Number(trade.realized_pnl || 0) >= 0 ? "ok" : "bad"}">${Number(trade.realized_pnl || 0).toFixed(6)}</span></div>
-                </div>
-                <div class="ops-card-grid">
-                  <div><strong>Closed At</strong>${trade.closed_at}</div>
-                  <div><strong>Hold</strong>${trade.hold_minutes == null ? "n/a" : `${trade.hold_minutes} min`}</div>
-                  <div><strong>Entry</strong>${Number(trade.entry_price || 0).toFixed(2)}</div>
-                  <div><strong>Exit</strong>${Number(trade.exit_price || 0).toFixed(2)}</div>
-                </div>
-              </div>`).join("")
-            : '<div class="strategy-card">No closed trades in the selected window.</div>';
+            ? trades.map((trade) => {
+                const gross = Number(trade.realized_pnl || 0);
+                const exitFee = Number(trade.exit_fee || 0);
+                const netAfterExitFee = trade.net_after_exit_fee == null ? null : Number(trade.net_after_exit_fee);
+                return `<div class="ops-card">
+                  <div class="ops-card-header">
+                    <div class="ops-card-title">${trade.strategy_name} · ${trade.symbol}/${trade.timeframe || "1m"}</div>
+                    <div class="chip"><span class="${gross >= 0 ? "ok" : "bad"}">${gross.toFixed(6)}</span></div>
+                  </div>
+                  <div class="ops-card-grid">
+                    <div><strong>Closed At</strong>${formatUtcDateTime(trade.closed_at)}</div>
+                    <div><strong>Role</strong>${trade.source === "binance_user_trades" ? "exchange realized" : trade.hold_minutes == null ? "n/a" : `${trade.hold_minutes} min`}</div>
+                    <div><strong>Entry</strong>${trade.entry_price == null ? "n/a" : Number(trade.entry_price).toFixed(2)}</div>
+                    <div><strong>Exit</strong>${trade.exit_price == null ? "n/a" : Number(trade.exit_price).toFixed(2)}</div>
+                    <div><strong>Gross Realized</strong><span class="${gross >= 0 ? "ok" : "bad"}">${gross.toFixed(6)}</span></div>
+                    <div><strong>Exit Fee</strong>${exitFee.toFixed(8)} ${trade.exit_fee_asset || ""}</div>
+                    <div><strong>Net After Exit Fee</strong>${netAfterExitFee == null ? "n/a" : `<span class="${netAfterExitFee >= 0 ? "ok" : "bad"}">${netAfterExitFee.toFixed(6)}</span>`}</div>
+                    <div><strong>Round-trip Net</strong>${trade.source === "binance_user_trades" ? "n/a (entry fee not linked)" : "n/a"}</div>
+                  </div>
+                </div>`;
+              }).join("")
+            : '<div class="strategy-card">No realized exchange trades in the selected window.</div>';
         }
 
         if (fillsBoard) {
@@ -5432,10 +5768,10 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             ? fills.map((fill) => `<div class="ops-card">
                 <div class="ops-card-header">
                   <div class="ops-card-title">${fill.symbol} · ${fill.side}</div>
-                  <div class="chip">fill #${fill.id}</div>
+                  <div class="chip">fill #${fill.id ?? fill.trade_id ?? "n/a"}</div>
                 </div>
                 <div class="ops-card-grid">
-                  <div><strong>Recorded</strong>${fill.created_at}</div>
+                  <div><strong>Recorded</strong>${formatUtcDateTime(fill.created_at)}</div>
                   <div><strong>Price</strong>${Number(fill.price || 0).toFixed(2)}</div>
                   <div><strong>Commission</strong>${fill.commission == null ? "n/a" : `${Number(fill.commission).toFixed(8)} ${fill.commission_asset || ""}`}</div>
                   <div><strong>Quote Qty</strong>${fill.quote_qty == null ? "n/a" : Number(fill.quote_qty).toFixed(6)}</div>
@@ -5445,19 +5781,157 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
 
         if (raw) raw.textContent = formatJson(report);
+
+        const exchange = report?.exchange_trades || {};
+        const exchangeSummary = exchange?.summary || {};
+        if (exchangeSummaryGrid) {
+          const fees = Number(exchangeSummary.fees || 0);
+          const realized = Number(exchangeSummary.realized_pnl || 0);
+          const realizedCount = Array.isArray(exchange?.trades)
+            ? exchange.trades.filter((trade) => Number(trade.realized_pnl || 0) !== 0).length
+            : 0;
+          exchangeSummaryGrid.innerHTML = `
+            <div><strong>Source</strong>${exchangeSummary.source || "binance_user_trades"}</div>
+            <div><strong>Activity</strong>${exchangeSummary.fills || 0} fills · ${realizedCount} realized · notional=${Number(exchangeSummary.notional || 0).toFixed(4)}</div>
+            <div><strong>Fees</strong>${fees.toFixed(6)}</div>
+            <div><strong>Realized PnL</strong><span class="${realized > 0 ? "ok" : realized < 0 ? "bad" : ""}">${realized.toFixed(8)}</span></div>`;
+        }
+
+        if (exchangeTradesTableBody) {
+          const trades = Array.isArray(exchange?.trades) ? exchange.trades : [];
+          exchangeTradesTableBody.innerHTML = trades.length
+            ? trades.map((trade) => {
+                const realized = Number(trade.realized_pnl || 0);
+                const fee = `${Number(trade.commission || 0).toFixed(8)} ${trade.commission_asset || ""}`.trim();
+                const directionLabel = trade.side === "BUY" ? "Buy" : trade.side === "SELL" ? "Sell" : String(trade.side || "n/a");
+                const roleLabel = trade.role === "maker" ? "Maker" : trade.role === "taker" ? "Taker" : String(trade.role || "n/a");
+                return `<tr>
+                  <td>${trade.order_id || "n/a"}</td>
+                  <td>${formatUtcDateTime(trade.created_at)}</td>
+                  <td>${trade.symbol || "n/a"}</td>
+                  <td><span class="${trade.side === "BUY" ? "ok" : trade.side === "SELL" ? "bad" : ""}">${directionLabel}</span></td>
+                  <td class="num">${Number(trade.price || 0).toFixed(4)}</td>
+                  <td class="num">${Number(trade.qty || 0).toFixed(2)} ${trade.symbol ? trade.symbol.replace("USDT", "") : ""}</td>
+                  <td class="num">${fee}</td>
+                  <td>${roleLabel}</td>
+                  <td class="num" style="color:${realized > 0 ? "var(--ok)" : realized < 0 ? "var(--bad)" : "var(--text)"}">${realized.toFixed(8)}</td>
+                </tr>`;
+              }).join("")
+            : `<tr><td colspan="9" class="table-note">No exchange trades in the selected window.</td></tr>`;
+        }
+      }
+
+      function renderExecutionReportPlaceholder(message, tone = "Loading...") {
+        const kpis = el("report-summary-kpis");
+        const grid = el("report-summary-grid");
+        const dailyTableBody = document.querySelector("#report-daily-table tbody");
+        const failedBoard = el("report-failed-board");
+        const closedBoard = el("report-closed-trades-board");
+        const fillsBoard = el("report-fills-board");
+        const exchangeSummaryGrid = el("report-exchange-summary-grid");
+        const exchangeTradesTableBody = document.querySelector("#report-exchange-trades-table tbody");
+        const raw = el("report-json");
+
+        if (kpis) {
+          kpis.innerHTML = `
+            <div class="training-kpi-card"><label>Gross PnL</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Fees</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Net PnL</label><div class="value">n/a</div></div>
+            <div class="training-kpi-card"><label>Win Rate</label><div class="value">n/a</div></div>`;
+        }
+        if (grid) {
+          grid.innerHTML = `
+            <div><strong>Window</strong>${message}</div>
+            <div><strong>Activity</strong>${message}</div>
+            <div><strong>Holding</strong>${message}</div>
+            <div><strong>Current Position</strong>${message}</div>`;
+        }
+        if (dailyTableBody) {
+          dailyTableBody.innerHTML = `<tr><td colspan="6" class="table-note">${message}</td></tr>`;
+        }
+        if (failedBoard) {
+          failedBoard.innerHTML = `<div class="strategy-card">${message}</div>`;
+        }
+        if (closedBoard) {
+          closedBoard.innerHTML = `<div class="strategy-card">${message}</div>`;
+        }
+        if (fillsBoard) {
+          fillsBoard.innerHTML = `<div class="strategy-card">${message}</div>`;
+        }
+        if (exchangeSummaryGrid) {
+          exchangeSummaryGrid.innerHTML = `
+            <div><strong>Source</strong>${message}</div>
+            <div><strong>Activity</strong>${message}</div>
+            <div><strong>Fees</strong>${message}</div>
+            <div><strong>Realized PnL</strong>${message}</div>`;
+        }
+        if (exchangeTradesTableBody) {
+          exchangeTradesTableBody.innerHTML = `<tr><td colspan="9" class="table-note">${message}</td></tr>`;
+        }
+        if (raw) raw.textContent = tone === "error" ? `Error: ${message}` : message;
       }
 
       async function refreshExecutionReport() {
+        renderExecutionReportPlaceholder("Loading report...", "loading");
+        ensureReportDateDefaults();
         const params = new URLSearchParams({
           symbol: reportSymbol(),
-          days: String(parseInt(el("report-days-input")?.value || "7")),
           limit: "10",
         });
+        const startDate = reportStartDate();
+        const endDate = reportEndDate();
+        if (startDate && endDate) {
+          params.set("start_date", startDate);
+          params.set("end_date", endDate);
+        } else {
+          params.set("days", "7");
+        }
         const strategyName = reportStrategy();
         if (strategyName) params.set("strategy_name", strategyName);
         const report = await api(`/reports/testnet-execution?${params.toString()}`);
+        try {
+          const exchangeParams = new URLSearchParams({
+            symbol: reportSymbol(),
+            limit: "20",
+          });
+          if (startDate && endDate) {
+            exchangeParams.set("start_date", startDate);
+            exchangeParams.set("end_date", endDate);
+          } else {
+            exchangeParams.set("days", params.get("days") || "7");
+          }
+          report.exchange_trades = await api(`/reports/exchange-trades?${exchangeParams.toString()}`);
+        } catch (error) {
+          report.exchange_trades = {
+            summary: {
+              symbol: reportSymbol(),
+              days: parseInt(params.get("days") || "7", 10),
+              start_date: startDate || null,
+              end_date: endDate || null,
+              window_label: startDate && endDate ? `${startDate} -> ${endDate}` : `last ${params.get("days") || "7"} days`,
+              fills: 0,
+              notional: 0,
+              fees: 0,
+              realized_pnl: 0,
+              source: "binance_user_trades_unavailable",
+            },
+            trades: [],
+            error: String(error),
+          };
+        }
         renderExecutionReport(report);
         return report;
+      }
+
+      async function loadExecutionReportWithStatus() {
+        try {
+          const report = await refreshExecutionReport();
+          setReportMessage(`Loaded ${report.summary?.symbol ?? "n/a"} report for ${report.summary?.window_label ?? `last ${report.summary?.days ?? "n/a"} days`}.`, "ok");
+          return report;
+        } catch (error) {
+          renderExecutionReportPlaceholder("Failed to load report.", "error");
+          throw error;
+        }
       }
 
       // ---- PPO Training ----
@@ -5498,6 +5972,8 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           ["clip_range", params.clip_range ?? "n/a"],
           ["ent_coef", params.ent_coef ?? "n/a"],
           ["frame_stack", params.frame_stack ?? 1],
+          ["decision_interval", params.decision_interval ?? params.action_interval ?? 1],
+          ["reward_horizon", params.reward_horizon ?? params.action_interval ?? 1],
           ["fee_rate", params.fee_rate ?? "n/a"],
           ["seed", params.seed ?? "n/a"],
         ];
@@ -5742,8 +6218,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               gamma:         parseFloat(el("ppo-gamma-input")?.value || "0.99"),
               gae_lambda:    parseFloat(el("ppo-gae-lambda-input")?.value || "0.95"),
               clip_range:    parseFloat(el("ppo-clip-range-input")?.value || "0.2"),
-              ent_coef:      parseFloat(el("ppo-ent-coef-input")?.value || "0.01"),
-              frame_stack:   parseInt(el("ppo-frame-stack-input")?.value || "1"),
+              ent_coef:        parseFloat(el("ppo-ent-coef-input")?.value || "0.01"),
+              frame_stack:     parseInt(el("ppo-frame-stack-input")?.value || "1"),
+              decision_interval: parseInt(el("ppo-decision-interval-input")?.value || "1"),
+              reward_horizon: parseInt(el("ppo-reward-horizon-input")?.value || "1"),
+              holding_bonus:   parseFloat(el("ppo-holding-bonus-input")?.value || "0.0"),
             };
             const result = await api("/training/ppo-jobs", { method: "POST", body: JSON.stringify(body) });
             ppoSelectedJobId = result.id;
@@ -5818,8 +6297,11 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           setVal("ppo-gamma-input",        p.gamma);
           setVal("ppo-gae-lambda-input",   p.gae_lambda);
           setVal("ppo-clip-range-input",   p.clip_range);
-          setVal("ppo-ent-coef-input",     p.ent_coef);
-          setVal("ppo-frame-stack-input",  p.frame_stack);
+          setVal("ppo-ent-coef-input",          p.ent_coef);
+          setVal("ppo-frame-stack-input",       p.frame_stack);
+          setVal("ppo-decision-interval-input", p.decision_interval ?? p.action_interval ?? 1);
+          setVal("ppo-reward-horizon-input",    p.reward_horizon ?? p.action_interval ?? 1);
+          setVal("ppo-holding-bonus-input",     p.holding_bonus ?? 0.0);
           const msg = document.getElementById("ppo-train-message");
           if (msg) { msg.textContent = `Parameters loaded from Job #${jobId}.`; msg.className = "message ok"; }
           return;
@@ -6038,57 +6520,55 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
         }
       }
 
-      // ── Order Book Collection ────────────────────────────────────────────
-      async function refreshObStatus() {
-        try {
-          const r = await api("/orderbook/status");
-          const badge = el("ob-status-badge");
-          const enableBtn = el("ob-enable-btn");
-          if (badge) {
-            badge.textContent = r.enabled ? "● Collecting" : "○ Paused";
-            badge.className = "status-badge " + (r.enabled ? "badge-live" : "badge-paused");
-          }
-          if (enableBtn) enableBtn.style.display = r.enabled ? "none" : "inline-flex";
+      function renderFuturesCollectorControls(config) {
+        const board = el("futures-collector-checkboxes");
+        if (!board) return;
+        const collectors = Array.isArray(config?.collectors) ? config.collectors : [];
+        const prevSelected = new Set(
+          Array.from(board.querySelectorAll(".toggle-pill.selected")).map((pill) => pill.dataset.key)
+        );
+        board.innerHTML = collectors.map((collector) => {
+          const key = collector.key;
+          const selected = prevSelected.size > 0 ? prevSelected.has(key) : !!collector.enabled;
+          const statusText = collector.enabled ? "running" : "paused";
+          return `<button type="button" class="toggle-pill${selected ? " selected" : ""}" data-key="${key}" title="${collector.label} (${statusText})">
+            ${selected ? "✓ " : ""}${collector.label}
+          </button>`;
+        }).join("");
+        board.querySelectorAll(".toggle-pill").forEach((pill) => {
+          pill.addEventListener("click", () => {
+            pill.classList.toggle("selected");
+            updateFuturesCollectorSelectionSummary();
+          });
+        });
+        window.__futuresCollectorConfig = config || { collectors: [] };
+        updateFuturesCollectorSelectionSummary();
+      }
 
-          const board = el("ob-stats-board");
-          if (!board) return;
-          if (!r.symbols || r.symbols.length === 0) {
-            board.innerHTML = `<span style="color:var(--muted);font-size:13px">No data collected yet. Enable collection to start.</span>`;
-            return;
-          }
-          const rows = r.symbols.map(s => {
-            const staleLabel = s.is_stale
-              ? `<span style="color:#f87171">${s.stale_seconds}s ago</span>`
-              : `<span style="color:#4ade80">${s.stale_seconds}s ago</span>`;
-            return `<tr>
-              <td>${s.symbol}</td>
-              <td class="num">${s.total.toLocaleString()}</td>
-              <td class="num">${s.coverage_pct}%</td>
-              <td class="num">${staleLabel}</td>
-              <td class="num">${s.latest}</td>
-            </tr>`;
-          }).join("");
-          board.innerHTML = `
-            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-              Total snapshots: <strong style="color:var(--text)">${(r.total_snapshots||0).toLocaleString()}</strong>
-            </div>
-            <div class="data-table-wrap">
-              <table class="data-table">
-                <thead><tr>
-                  <th>Symbol</th><th class="num">Snapshots</th>
-                  <th class="num">Coverage</th><th class="num">Last Seen</th>
-                  <th class="num">Latest (UTC)</th>
-                </tr></thead>
-                <tbody>${rows}</tbody>
-              </table>
-            </div>`;
-          const meta = el("ob-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
-        } catch(e) {
-          const board = el("ob-stats-board");
-          if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
-          const meta = el("ob-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+      function updateFuturesCollectorSelectionSummary() {
+        const selected = Array.from(
+          el("futures-collector-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
+        ).map((pill) => pill.dataset.key);
+        const collectors = Array.isArray(window.__futuresCollectorConfig?.collectors)
+          ? window.__futuresCollectorConfig.collectors
+          : [];
+        const selectedLabels = collectors
+          .filter((collector) => selected.includes(collector.key))
+          .map((collector) => collector.label);
+        const summary = el("futures-collector-summary");
+        if (summary) {
+          summary.innerHTML = `<strong>Enabled collectors:</strong> ${selectedLabels.length ? selectedLabels.join(", ") : "none"}`;
+        }
+      }
+
+      async function refreshFuturesCollectorControls() {
+        const config = await api("/collectors/futures/config");
+        renderFuturesCollectorControls(config);
+        const msg = el("futures-collectors-message");
+        if (msg) {
+          msg.textContent = `Collector control state updated at ${utcTimeLabel()}`;
+          msg.className = "message ok";
+          msg.style.display = "block";
         }
       }
 
@@ -6148,7 +6628,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               </table>
             </div>`;
           const meta = el("fob-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Status updated at ${utcTimeLabel()}`;
           if (futuresObSelectedSymbol) {
             refreshFuturesObRecent(futuresObSelectedSymbol).catch((error) => {
               const detail = el("fob-detail-board");
@@ -6159,7 +6639,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const board = el("fob-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("fob-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Refresh failed at ${utcTimeLabel()}`;
         }
       }
 
@@ -6261,7 +6741,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               </table>
             </div>`;
           const meta = el("fag-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Status updated at ${utcTimeLabel()}`;
           if (futuresAggSelectedSymbol) {
             await refreshFuturesAggRecent(futuresAggSelectedSymbol);
           }
@@ -6269,7 +6749,7 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
           const board = el("fag-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("fag-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Refresh failed at ${utcTimeLabel()}`;
         }
       }
 
@@ -6370,12 +6850,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             r.total_minutes,
           );
           const meta = el("fpm-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Status updated at ${utcTimeLabel()}`;
         } catch (e) {
           const board = el("fpm-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("fpm-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Refresh failed at ${utcTimeLabel()}`;
         }
       }
 
@@ -6395,12 +6875,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             r.total_minutes,
           );
           const meta = el("foi-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Status updated at ${utcTimeLabel()}`;
         } catch (e) {
           const board = el("foi-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("foi-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Refresh failed at ${utcTimeLabel()}`;
         }
       }
 
@@ -6420,12 +6900,12 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
             r.total_minutes,
           );
           const meta = el("fliq-refresh-meta");
-          if (meta) meta.textContent = `Status updated at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Status updated at ${utcTimeLabel()}`;
         } catch (e) {
           const board = el("fliq-stats-board");
           if (board) board.innerHTML = `<span style="color:#f87171;font-size:13px">${e}</span>`;
           const meta = el("fliq-refresh-meta");
-          if (meta) meta.textContent = `Refresh failed at ${new Date().toLocaleTimeString()}`;
+          if (meta) meta.textContent = `Refresh failed at ${utcTimeLabel()}`;
         }
       }
 
@@ -6448,12 +6928,6 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
 
       document.addEventListener("click", async (event) => {
         const obAction = event.target.dataset?.action;
-        if (obAction === "ob-refresh") { await withRefreshButton("ob-refresh-btn", refreshObStatus); return; }
-        if (obAction === "ob-enable") {
-          await api("/orderbook/enable", { method: "POST" });
-          await refreshObStatus();
-          return;
-        }
         if (obAction === "fob-refresh") { await withRefreshButton("fob-refresh-btn", refreshFuturesObStatus); return; }
         if (obAction === "fob-enable") {
           await api("/orderbook/futures/enable", { method: "POST" });
@@ -6645,6 +7119,47 @@ __CLOSED_TRADE_STRATEGY_OPTIONS__
               msg.style.display = "block";
             }
           }
+        }
+
+        if (action === "market-futures-collectors-refresh") {
+          const msg = el("futures-collectors-message");
+          try {
+            await refreshFuturesCollectorControls();
+          } catch (e) {
+            if (msg) {
+              msg.textContent = String(e);
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+          }
+          return;
+        }
+
+        if (action === "market-futures-collectors-apply") {
+          const enabledCollectors = Array.from(
+            el("futures-collector-checkboxes")?.querySelectorAll(".toggle-pill.selected") || []
+          ).map((pill) => pill.dataset.key);
+          const msg = el("futures-collectors-message");
+          try {
+            const result = await api("/collectors/futures/config", {
+              method: "POST",
+              body: JSON.stringify({ enabled_collectors: enabledCollectors }),
+            });
+            renderFuturesCollectorControls(result);
+            if (msg) {
+              msg.textContent = `Applied collector changes. Next loop reflects the new state within about 60 seconds.`;
+              msg.className = "message ok";
+              msg.style.display = "block";
+            }
+            await refreshCollectorPanels();
+          } catch (e) {
+            if (msg) {
+              msg.textContent = String(e);
+              msg.className = "message bad";
+              msg.style.display = "block";
+            }
+          }
+          return;
         }
 
         if (action === "market-fs-materialize") {

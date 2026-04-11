@@ -1,17 +1,18 @@
 import json
+import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, List, Optional, Union
 
 import requests
 from fastapi import BackgroundTasks
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Response
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from app.audit.service import log_event
+from app.audit.service import insert_event
 from app.alerting.broker import maybe_send_broker_alert
 from app.alerting.execution import maybe_send_execution_alert
 from app.admin.page import render_admin_page
@@ -20,13 +21,14 @@ from app.alerting.queue import maybe_send_queue_alert
 from app.alerting.telegram import send_telegram_message
 from app.alerting.telegram import telegram_configured
 from app.alerting.worker import maybe_send_worker_alert
-from app.core.db import DB_FILE, get_connection
+from app.core.db import get_connection
 from app.core.db import DBConnection
 from app.core.db import DBError
 from app.core.db import get_database_info
 from app.core.db import parse_db_timestamp
 from app.core.db import list_tables
 from app.core.db import table_exists
+from app.core.db import utc_now_iso
 from app.core.job_queue import build_job_payload
 from app.core.job_queue import JOB_TYPES
 from app.core.job_queue import enqueue_pipeline_jobs
@@ -41,11 +43,14 @@ from app.core.job_queue import run_next_queued_job
 from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_SECONDS
 from app.core.settings import COOLDOWN_SECONDS
+from app.core.settings import STOP_LOSS_PCT
 from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
 from app.core.settings import ORDER_STALENESS_SECONDS
 from app.core.settings import QUEUE_BATCH_STALENESS_SECONDS
 from app.core.settings import RISK_REJECTION_STREAK_THRESHOLD
 from app.core.settings import DEFAULT_STRATEGY_NAME
+from app.core.settings import EXECUTION_BACKEND
+from app.core.settings import BINANCE_FUTURES
 from app.data.candles_service import candle_staleness_threshold_seconds
 from app.data.candles_service import get_candles_status
 from app.data.fetch_history import read_fetch_history
@@ -108,8 +113,8 @@ from app.scheduler.control import set_strategy_priorities
 from app.scheduler.control import set_stop_flag
 from app.scheduler.runner import LOG_DIR
 from app.scheduler.runner import LOG_FILE
-from app.strategy.ma_cross import ensure_table as ensure_signals_table
-from app.strategy.ma_cross import insert_signal
+from app.strategy.signal_service import ensure_table as ensure_signals_table
+from app.strategy.signal_service import insert_signal
 from app.strategy.registry import list_registered_strategies
 from app.system.kill_switch import disable_kill_switch
 from app.system.heartbeat import get_heartbeats
@@ -118,6 +123,410 @@ from app.system.kill_switch import get_kill_switch_status
 from app.system.retention import run_retention
 from app.metrics.metrics_service import build_metrics
 from app.backtest.history_service import compare_runs as compare_backtest_runs
+
+
+def _binance_futures_source_of_truth_enabled() -> bool:
+    runtime = get_execution_backend_runtime_status()
+    backend = str(runtime.get("backend") or EXECUTION_BACKEND).lower()
+    return backend == "binance" and BINANCE_FUTURES
+
+
+def _get_binance_futures_positions(*, symbol: Optional[str] = None, include_flat: bool = False) -> list[dict[str, Any]]:
+    if not _binance_futures_source_of_truth_enabled():
+        return []
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    client = BinanceBrokerClient()
+    return client.get_positions(symbol=symbol, include_flat=include_flat)
+
+
+def _normalize_binance_futures_position(symbol: str, position: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if position:
+        updated_at = position.get("updated_at")
+        age_seconds = None
+        if updated_at:
+            age_seconds = int((_utc_now() - datetime.fromtimestamp(int(updated_at) / 1000, tz=timezone.utc)).total_seconds())
+        return {
+            "symbol": symbol.upper(),
+            "qty": position.get("qty", 0.0),
+            "avg_price": position.get("avg_price", 0.0),
+            "realized_pnl": None,
+            "unrealized_pnl": position.get("unrealized_pnl", 0.0),
+            "updated_at": position.get("created_at"),
+            "age_seconds": age_seconds,
+            "source": "binance_futures",
+        }
+    return {
+        "symbol": symbol.upper(),
+        "qty": 0.0,
+        "avg_price": 0.0,
+        "realized_pnl": None,
+        "unrealized_pnl": 0.0,
+        "updated_at": None,
+        "age_seconds": None,
+        "source": "binance_futures",
+    }
+
+
+def _get_binance_futures_position(symbol: str) -> dict[str, Any]:
+    positions = _get_binance_futures_positions(symbol=symbol, include_flat=True)
+    return _normalize_binance_futures_position(symbol, positions[0] if positions else None)
+
+
+def _normalize_exchange_trade(symbol: str, trade: dict[str, Any]) -> dict[str, Any]:
+    price = float(trade.get("price") or 0.0)
+    qty = float(trade.get("qty") or 0.0)
+    quote_qty_value = trade.get("quoteQty")
+    quote_qty = float(quote_qty_value) if quote_qty_value not in (None, "") else price * qty
+    commission = float(trade.get("commission") or 0.0)
+    realized_pnl = float(trade.get("realizedPnl") or trade.get("realized_pnl") or 0.0)
+    transact_time = int(trade.get("time") or trade.get("transactTime") or trade.get("transact_time") or 0)
+    raw_side = trade.get("side")
+    if raw_side:
+        side = str(raw_side).upper()
+    else:
+        side = "BUY" if bool(trade.get("buyer")) else "SELL"
+    return {
+        "trade_id": trade.get("id") or trade.get("trade_id"),
+        "id": trade.get("id") or trade.get("trade_id"),
+        "order_id": str(trade.get("orderId") or trade.get("order_id") or ""),
+        "symbol": str(trade.get("symbol") or symbol.upper()),
+        "side": side,
+        "price": price,
+        "qty": qty,
+        "quote_qty": quote_qty,
+        "commission": commission,
+        "commission_asset": str(trade.get("commissionAsset") or trade.get("commission_asset") or ""),
+        "realized_pnl": realized_pnl,
+        "role": "maker" if bool(trade.get("maker")) else str(trade.get("role") or "taker"),
+        "transact_time": transact_time,
+        "created_at": datetime.fromtimestamp(transact_time / 1000, tz=timezone.utc).isoformat() if transact_time else None,
+    }
+
+
+def _normalize_exchange_trades(symbol: str, trades: list[dict[str, Any]], *, days: int, limit: int) -> dict[str, Any]:
+    normalized = [_normalize_exchange_trade(symbol, trade) for trade in trades]
+    normalized.sort(key=lambda item: int(item.get("transact_time") or 0), reverse=True)
+    limited = normalized[:limit]
+    return {
+        "summary": {
+            "symbol": symbol.upper(),
+            "days": days,
+            "fills": len(limited),
+            "total_qty": sum(float(item["qty"]) for item in limited),
+            "notional": sum(float(item["quote_qty"]) for item in limited),
+            "fees": sum(float(item["commission"]) for item in limited if str(item.get("commission_asset") or "") == "USDT"),
+            "realized_pnl": sum(float(item["realized_pnl"]) for item in limited),
+            "source": "binance_user_trades",
+        },
+        "trades": limited,
+    }
+
+
+def _get_exchange_trades(symbol: str, *, days: int, limit: int) -> dict[str, Any]:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    client = BinanceBrokerClient()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    trades = client.get_user_trades(
+        symbol.upper(),
+        start_time=int(cutoff.timestamp() * 1000),
+        limit=max(limit, 1000),
+    )
+    return _normalize_exchange_trades(symbol, trades, days=days, limit=limit)
+
+
+def _latest_exchange_closed_trade(trades: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    realized_trades = [trade for trade in trades if float(trade.get("realized_pnl") or 0.0) != 0.0]
+    if not realized_trades:
+        return None
+    latest = max(realized_trades, key=lambda item: int(item.get("transact_time") or 0))
+    exit_fee = float(latest.get("commission") or 0.0)
+    realized_pnl = float(latest.get("realized_pnl") or 0.0)
+    return {
+        "strategy_name": None,
+        "symbol": latest.get("symbol"),
+        "timeframe": None,
+        "qty": float(latest.get("qty") or 0.0),
+        "entry_price": None,
+        "exit_price": float(latest.get("price") or 0.0),
+        "realized_pnl": realized_pnl,
+        "exit_fee": exit_fee,
+        "exit_fee_asset": str(latest.get("commission_asset") or ""),
+        "net_after_exit_fee": realized_pnl - exit_fee if str(latest.get("commission_asset") or "").upper() == "USDT" else None,
+        "closed_at": latest.get("created_at"),
+        "order_id": latest.get("order_id"),
+        "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "breakeven",
+        "source": "binance_user_trades",
+        "side": latest.get("side"),
+        "trade_id": latest.get("trade_id"),
+    }
+
+
+def _build_exchange_trade_snapshot(
+    symbol: str,
+    *,
+    strategy_name: Optional[str] = None,
+    days: int,
+    limit: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    resolved_days, start_time, end_time, window_meta = _resolve_report_window(
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    client = BinanceBrokerClient()
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_time is None:
+        start_time = int((datetime.now(timezone.utc) - timedelta(days=resolved_days)).timestamp() * 1000)
+    if end_time is None:
+        end_time = now_ms
+    end_time = min(end_time, now_ms)
+
+    seen: set[int] = set()
+    recent_trades: list[dict[str, Any]] = []
+    recent_realized_trades: list[dict[str, Any]] = []
+    gross_pnl = 0.0
+    total_fees = 0.0
+    total_notional = 0.0
+    total_qty = 0.0
+    fills_count = 0
+    buy_count = 0
+    sell_count = 0
+    realized_trade_count = 0
+    win_trade_count = 0
+    loss_trade_count = 0
+    best_trade: Optional[float] = None
+    worst_trade: Optional[float] = None
+    latest_closed_trade: Optional[dict[str, Any]] = None
+    daily_rows: dict[str, dict[str, Any]] = {}
+
+    def _trim_recent(rows: list[dict[str, Any]], max_items: int) -> list[dict[str, Any]]:
+        if len(rows) <= max_items * 4:
+            return rows
+        return sorted(rows, key=lambda item: int(item.get("transact_time") or 0), reverse=True)[:max_items]
+
+    chunk_start = start_time
+    while chunk_start < end_time:
+        chunk_end = min(chunk_start + _BINANCE_FUTURES_MAX_WINDOW_MS - 1, end_time)
+        chunk = client.get_user_trades(
+            symbol.upper(),
+            start_time=chunk_start,
+            end_time=chunk_end,
+            limit=1000,
+        )
+        for raw_trade in chunk:
+            tid = int(raw_trade.get("id") or raw_trade.get("tradeId") or 0)
+            if tid and tid in seen:
+                continue
+            if tid:
+                seen.add(tid)
+            trade = _normalize_exchange_trade(symbol, raw_trade)
+            fills_count += 1
+            total_qty += float(trade.get("qty") or 0.0)
+            total_notional += float(trade.get("quote_qty") or 0.0)
+            gross_pnl += float(trade.get("realized_pnl") or 0.0)
+            if str(trade.get("commission_asset") or "").upper() == "USDT":
+                total_fees += float(trade.get("commission") or 0.0)
+            side = str(trade.get("side") or "").upper()
+            if side == "BUY":
+                buy_count += 1
+            elif side == "SELL":
+                sell_count += 1
+            trade_date = str(trade.get("created_at") or "")[:10]
+            if trade_date:
+                row = daily_rows.setdefault(
+                    trade_date,
+                    {"trade_date": trade_date, "fills": 0, "notional": 0.0, "gross_pnl": 0.0, "fees": 0.0},
+                )
+                row["fills"] += 1
+                row["notional"] += float(trade.get("quote_qty") or 0.0)
+                row["gross_pnl"] += float(trade.get("realized_pnl") or 0.0)
+                if str(trade.get("commission_asset") or "").upper() == "USDT":
+                    row["fees"] += float(trade.get("commission") or 0.0)
+            recent_trades.append(trade)
+            recent_trades = _trim_recent(recent_trades, limit)
+
+            realized_value = float(trade.get("realized_pnl") or 0.0)
+            if realized_value != 0.0:
+                realized_trade_count += 1
+                if realized_value > 0:
+                    win_trade_count += 1
+                elif realized_value < 0:
+                    loss_trade_count += 1
+                best_trade = realized_value if best_trade is None else max(best_trade, realized_value)
+                worst_trade = realized_value if worst_trade is None else min(worst_trade, realized_value)
+                recent_realized_trades.append(trade)
+                recent_realized_trades = _trim_recent(recent_realized_trades, limit)
+                if latest_closed_trade is None or int(trade.get("transact_time") or 0) > int(latest_closed_trade.get("transact_time") or 0):
+                    latest_closed_trade = trade
+        chunk_start = chunk_end + 1
+
+    trades = sorted(recent_trades, key=lambda item: int(item.get("transact_time") or 0), reverse=True)[:limit]
+    realized_trades = sorted(recent_realized_trades, key=lambda item: int(item.get("transact_time") or 0), reverse=True)[:limit]
+    exchange = {
+        "summary": {
+            "symbol": symbol.upper(),
+            "days": resolved_days,
+            "fills": fills_count,
+            "total_qty": total_qty,
+            "notional": total_notional,
+            "fees": total_fees,
+            "realized_pnl": gross_pnl,
+            "source": "binance_user_trades",
+            **window_meta,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
+        "trades": trades,
+    }
+    latest_closed_trade = _latest_exchange_closed_trade([latest_closed_trade] if latest_closed_trade is not None else [])
+    if latest_closed_trade is not None:
+        latest_closed_trade["strategy_name"] = strategy_name or latest_closed_trade.get("strategy_name")
+    recent_closed_trades = [
+        {
+            "strategy_name": strategy_name or "all",
+            "symbol": item["symbol"],
+            "timeframe": "1m",
+            "qty": item["qty"],
+            "entry_price": None,
+            "exit_price": item["price"],
+            "realized_pnl": item["realized_pnl"],
+            "exit_fee": item["commission"],
+            "exit_fee_asset": item["commission_asset"],
+            "net_after_exit_fee": (
+                float(item["realized_pnl"]) - float(item.get("commission") or 0.0)
+                if str(item.get("commission_asset") or "").upper() == "USDT"
+                else None
+            ),
+            "closed_at": item["created_at"],
+            "hold_minutes": None,
+            "order_id": item["order_id"],
+            "status": "win" if float(item["realized_pnl"]) > 0 else "loss" if float(item["realized_pnl"]) < 0 else "breakeven",
+            "source": "binance_user_trades",
+        }
+        for item in realized_trades[:limit]
+    ]
+    daily = sorted(daily_rows.values(), key=lambda item: item["trade_date"], reverse=True)
+    for row in daily:
+        row["net_pnl"] = row["gross_pnl"] - row["fees"]
+    return {
+        "exchange": exchange,
+        "trades": trades,
+        "daily": daily,
+        "gross_pnl": gross_pnl,
+        "total_fees": total_fees,
+        "realized_trade_count": realized_trade_count,
+        "win_trade_count": win_trade_count,
+        "loss_trade_count": loss_trade_count,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+        "latest_closed_trade": latest_closed_trade,
+        "recent_closed_trades": recent_closed_trades,
+        "filled_qty_total": total_qty,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+    }
+
+
+def _resolve_report_window(
+    *,
+    days: int,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> tuple[int, Optional[int], Optional[int], dict[str, Any]]:
+    from datetime import timedelta
+
+    if start_date and end_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+        if end_dt <= start_dt:
+            raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
+        resolved_days = max(1, int((end_dt - start_dt).total_seconds() // 86400))
+        return (
+            resolved_days,
+            int(start_dt.timestamp() * 1000),
+            int(end_dt.timestamp() * 1000) - 1,
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "window_label": f"{start_date} -> {end_date}",
+            },
+        )
+
+    return (
+        days,
+        None,
+        None,
+        {
+            "start_date": None,
+            "end_date": None,
+            "window_label": f"last {days} days",
+        },
+    )
+
+
+_BINANCE_FUTURES_MAX_WINDOW_MS = 7 * 24 * 3600 * 1000  # 7-day limit for userTrades
+
+
+def _get_exchange_trades_for_window(
+    symbol: str,
+    *,
+    days: int,
+    limit: int,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> dict[str, Any]:
+    from app.execution.binance_broker import BinanceBrokerClient
+
+    resolved_days, start_time, end_time, window_meta = _resolve_report_window(
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    client = BinanceBrokerClient()
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_time is None:
+        start_time = int((datetime.now(timezone.utc) - timedelta(days=resolved_days)).timestamp() * 1000)
+    if end_time is None:
+        end_time = now_ms
+    # Never send a future endTime — Binance rejects it with -4165
+    end_time = min(end_time, now_ms)
+
+    # Binance Futures limits startTime~endTime to 7 days per request — chunk if wider
+    all_trades: list[dict[str, Any]] = []
+    chunk_start = start_time
+    while chunk_start < end_time:
+        chunk_end = min(chunk_start + _BINANCE_FUTURES_MAX_WINDOW_MS - 1, end_time)
+        chunk = client.get_user_trades(
+            symbol.upper(),
+            start_time=chunk_start,
+            end_time=chunk_end,
+            limit=1000,
+        )
+        all_trades.extend(chunk)
+        chunk_start = chunk_end + 1
+
+    # Deduplicate by trade id
+    seen: set[int] = set()
+    deduped: list[dict[str, Any]] = []
+    for t in all_trades:
+        tid = int(t.get("id") or t.get("tradeId") or 0)
+        if tid and tid in seen:
+            continue
+        seen.add(tid)
+        deduped.append(t)
+
+    normalized = _normalize_exchange_trades(symbol, deduped, days=resolved_days, limit=limit)
+    normalized["summary"].update(window_meta)
+    normalized["summary"]["days"] = resolved_days
+    normalized["summary"]["start_time"] = start_time
+    normalized["summary"]["end_time"] = end_time
+    return normalized
 from app.backtest.history_service import get_best_sweep_run
 from app.backtest.history_service import get_champion_run
 from app.backtest.history_service import get_equity_curve as get_backtest_equity_curve
@@ -187,6 +596,15 @@ async def lifespan(_: FastAPI):
     connection = get_connection()
     try:
         run_migrations(connection)
+        # Mark any jobs that were left in 'running' state from a previous
+        # process as failed for in-process training types. Queue-backed PPO
+        # jobs are recovered by the training worker and must not be failed here.
+        connection.execute(
+            "UPDATE training_jobs SET status='failed', error='API process restarted while training was in progress' "
+            "WHERE status='running' AND (params_json IS NULL OR params_json NOT LIKE ?);",
+            ('%"job_type": "ppo"%',),
+        )
+        connection.commit()
     finally:
         connection.close()
     yield
@@ -204,7 +622,7 @@ def _database_check(connection: DBConnection) -> dict[str, Any]:
     table_names = list_tables(connection)
     return {
         "status": "ok",
-        "database": database_info.get("database_url", str(DB_FILE)),
+        "database": database_info.get("database_url", ""),
         "table_count": len(table_names),
         "tables": table_names,
     }
@@ -297,6 +715,7 @@ def _broker_protection_check(
             or reason == "Signal is HOLD."
             or reason == "Duplicate signal type."
             or reason == "No position available to sell."
+            or reason == "Position already matches target."
         )
 
     latest_run = pipeline_check.get("latest_run", {}) if isinstance(pipeline_check, dict) else {}
@@ -330,34 +749,37 @@ def _broker_protection_check(
             continue
         observed_symbol = observed_symbol or candidate.get("symbol")
         observed_strategy = observed_strategy or candidate.get("strategy_name")
-    if observed_symbol and table_exists(connection, "positions"):
-        position_row = connection.execute(
-            """
-            SELECT qty, avg_price, realized_pnl, updated_at
-            FROM positions
-            WHERE symbol = ?
-            LIMIT 1;
-            """,
-            (observed_symbol,),
-        ).fetchone()
-        if position_row is not None:
-            result["current_position"] = {
-                "symbol": observed_symbol,
-                "qty": position_row[0],
-                "avg_price": position_row[1],
-                "realized_pnl": position_row[2],
-                "updated_at": position_row[3],
-                "age_seconds": int((_utc_now() - parse_db_timestamp(position_row[3])).total_seconds()),
-            }
-        else:
-            result["current_position"] = {
-                "symbol": observed_symbol,
-                "qty": 0.0,
-                "avg_price": 0.0,
-                "realized_pnl": 0.0,
-                "updated_at": None,
-                "age_seconds": None,
-            }
+    if observed_symbol:
+        if _binance_futures_source_of_truth_enabled():
+            result["current_position"] = _get_binance_futures_position(str(observed_symbol))
+        elif table_exists(connection, "positions"):
+            position_row = connection.execute(
+                """
+                SELECT qty, avg_price, realized_pnl, updated_at
+                FROM positions
+                WHERE symbol = ?
+                LIMIT 1;
+                """,
+                (observed_symbol,),
+            ).fetchone()
+            if position_row is not None:
+                result["current_position"] = {
+                    "symbol": observed_symbol,
+                    "qty": position_row[0],
+                    "avg_price": position_row[1],
+                    "realized_pnl": position_row[2],
+                    "updated_at": position_row[3],
+                    "age_seconds": int((_utc_now() - parse_db_timestamp(position_row[3])).total_seconds()),
+                }
+            else:
+                result["current_position"] = {
+                    "symbol": observed_symbol,
+                    "qty": 0.0,
+                    "avg_price": 0.0,
+                    "realized_pnl": 0.0,
+                    "updated_at": None,
+                    "age_seconds": None,
+                }
     if observed_symbol and table_exists(connection, "risk_events"):
         if observed_strategy:
             recent_rejection_rows = connection.execute(
@@ -413,7 +835,13 @@ def _broker_protection_check(
     if isinstance(latest_order, dict):
         latest_order_status = str(latest_order.get("status") or "").upper()
         latest_order_age = latest_order.get("age_seconds")
-        if latest_order_status in {"NEW", "PENDING", "SUBMITTED", "PARTIALLY_FILLED"} and latest_order_age is not None and int(latest_order_age) > ORDER_STALENESS_SECONDS:
+        latest_order_has_fill = bool(latest_order.get("has_fill"))
+        if (
+            latest_order_status in {"NEW", "PENDING", "SUBMITTED", "PARTIALLY_FILLED"}
+            and not latest_order_has_fill
+            and latest_order_age is not None
+            and int(latest_order_age) > ORDER_STALENESS_SECONDS
+        ):
             result["status"] = "degraded"
             result["severity"] = "high" if latest_order_status == "PARTIALLY_FILLED" else "medium"
             result["reason_code"] = f"stale_order_{latest_order_status.lower()}"
@@ -496,7 +924,7 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
     ).fetchone()
     latest_order = connection.execute(
         """
-        SELECT side, symbol, qty, status, created_at
+        SELECT id, side, symbol, qty, status, created_at
         FROM orders
         ORDER BY id DESC
         LIMIT 1;
@@ -570,13 +998,25 @@ def _pipeline_check(connection: DBConnection) -> dict[str, Any]:
             "age_seconds": int((_utc_now() - parse_db_timestamp(latest_risk[5])).total_seconds()),
         }
     if latest_order is not None:
+        latest_order_id = int(latest_order[0])
+        latest_order_has_fill = connection.execute(
+            """
+            SELECT 1
+            FROM fills
+            WHERE order_id = ?
+            LIMIT 1;
+            """,
+            (latest_order_id,),
+        ).fetchone() is not None
         result["latest_order"] = {
-            "side": latest_order[0],
-            "symbol": latest_order[1],
-            "qty": latest_order[2],
-            "status": latest_order[3],
-            "created_at": latest_order[4],
-            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_order[4])).total_seconds()),
+            "id": latest_order_id,
+            "side": latest_order[1],
+            "symbol": latest_order[2],
+            "qty": latest_order[3],
+            "status": latest_order[4],
+            "created_at": latest_order[5],
+            "age_seconds": int((_utc_now() - parse_db_timestamp(latest_order[5])).total_seconds()),
+            "has_fill": latest_order_has_fill,
         }
     if latest_fill is not None:
         result["latest_fill"] = {
@@ -600,7 +1040,12 @@ def _queue_check(connection: DBConnection) -> dict[str, Any]:
         and latest_incomplete_batch.get("age_seconds") is not None
         and int(latest_incomplete_batch["age_seconds"]) > QUEUE_BATCH_STALENESS_SECONDS
     )
-    status = "degraded" if counts["failed"] > 0 or stale_batch else "ok"
+    metrics = summary.get("metrics", {})
+    active_failures = bool(
+        counts["failed"] > 0
+        and (int(metrics.get("failure_streak") or 0) > 0 or int(metrics.get("recent_failure_count") or 0) > 0)
+    )
+    status = "degraded" if active_failures or stale_batch else "ok"
     result: dict[str, Any] = {
         "status": status,
         "counts": counts,
@@ -612,9 +1057,11 @@ def _queue_check(connection: DBConnection) -> dict[str, Any]:
         "latest_jobs": summary["latest_jobs"],
         "batch_staleness_threshold_seconds": QUEUE_BATCH_STALENESS_SECONDS,
     }
-    if counts["failed"] > 0:
-        result["reason"] = "Queue contains failed jobs."
-    elif stale_batch:
+    if active_failures:
+        result["reason"] = "Queue contains recently failed jobs."
+    elif counts["failed"] > 0:
+        result["historical_failed_count"] = counts["failed"]
+    if stale_batch:
         result["reason"] = "Queue contains stale incomplete batches."
     return result
 
@@ -668,7 +1115,7 @@ def build_health_report() -> dict[str, Any]:
     except DBError as exc:
         return {
             "status": "error",
-            "database": get_database_info().get("database_url", str(DB_FILE)),
+            "database": get_database_info().get("database_url", ""),
             "checks": {
                 "database": {
                     "status": "error",
@@ -689,7 +1136,7 @@ def build_health_report() -> dict[str, Any]:
         checks["database"] = {
             "status": "error",
             "reason": str(exc),
-            "database": str(DB_FILE),
+            "database": get_database_info().get("database_url", ""),
         }
         overall_status = "error"
     finally:
@@ -709,7 +1156,7 @@ def build_health_report() -> dict[str, Any]:
     return {
         "status": overall_status,
         "checked_at": _utc_now().isoformat(),
-        "database": get_database_info().get("database_url", str(DB_FILE)),
+        "database": get_database_info().get("database_url", ""),
         "database_info": get_database_info(),
         "config": {
             "order_qty": DEFAULT_ORDER_QTY,
@@ -821,13 +1268,15 @@ def _build_queue_job_payload(payload: QueueJobRequest) -> dict[str, Any]:
 
 
 def _log_queue_control_event(
+    connection,
     *,
     status: str,
     message: str,
     action: str,
     payload: Optional[dict[str, Any]] = None,
 ) -> None:
-    log_event(
+    insert_event(
+        connection,
         event_type="queue_control",
         status=status,
         source="queue_control",
@@ -836,9 +1285,27 @@ def _log_queue_control_event(
     )
 
 
+_health_cache: dict[str, Any] = {}
+_health_cache_ts: float = 0.0
+_HEALTH_CACHE_TTL: float = 5.0  # seconds
+
+
+@app.get("/health/live")
+def live_health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/health")
 def health(background_tasks: BackgroundTasks) -> dict[str, Any]:
-    report = build_health_report()
+    global _health_cache, _health_cache_ts
+    import time as _time
+    now = _time.monotonic()
+    if now - _health_cache_ts < _HEALTH_CACHE_TTL and _health_cache:
+        report = _health_cache
+    else:
+        report = build_health_report()
+        _health_cache = report
+        _health_cache_ts = now
     background_tasks.add_task(maybe_send_broker_alert, report)
     background_tasks.add_task(maybe_send_execution_alert, report)
     background_tasks.add_task(maybe_send_health_alert, report)
@@ -1022,6 +1489,10 @@ class MarketDataFetchRequest(BaseModel):
     start_date: Optional[str] = None  # ISO date string e.g. "2024-01-01"
 
 
+class FuturesCollectorConfigRequest(BaseModel):
+    enabled_collectors: List[str] = Field(default_factory=list)
+
+
 @app.post("/market-data/fetch")
 def market_data_fetch(body: MarketDataFetchRequest = MarketDataFetchRequest()) -> Dict[str, Any]:
     """Trigger an independent market data fetch without running the full pipeline.
@@ -1112,6 +1583,88 @@ def futures_market_data_config() -> Dict[str, Any]:
     return {
         "symbol_names": list(FUTURES_CANDLE_SYMBOLS),
         "supported_timeframes": sorted(TIMEFRAME_INTERVAL_MS.keys()),
+    }
+
+
+@app.get("/collectors/futures/config")
+def get_futures_collectors_config() -> Dict[str, Any]:
+    from app.data.futures_aggtrade_service import is_futures_aggtrade_collection_enabled
+    from app.data.futures_liquidation_service import is_futures_liquidation_collection_enabled
+    from app.data.futures_open_interest_service import is_futures_open_interest_collection_enabled
+    from app.data.futures_orderbook_service import is_futures_orderbook_collection_enabled
+    from app.data.futures_premium_service import is_futures_premium_collection_enabled
+
+    collectors = [
+        {
+            "key": "futures_orderbook",
+            "label": "Order Book",
+            "enabled": is_futures_orderbook_collection_enabled(),
+        },
+        {
+            "key": "futures_aggtrade",
+            "label": "aggTrades",
+            "enabled": is_futures_aggtrade_collection_enabled(),
+        },
+        {
+            "key": "futures_premium",
+            "label": "Premium",
+            "enabled": is_futures_premium_collection_enabled(),
+        },
+        {
+            "key": "futures_open_interest",
+            "label": "Open Interest",
+            "enabled": is_futures_open_interest_collection_enabled(),
+        },
+        {
+            "key": "futures_liquidation",
+            "label": "Liquidations",
+            "enabled": is_futures_liquidation_collection_enabled(),
+        },
+    ]
+    return {
+        "collectors": collectors,
+        "enabled_collectors": [item["key"] for item in collectors if item["enabled"]],
+    }
+
+
+@app.post("/collectors/futures/config")
+def set_futures_collectors_config(body: FuturesCollectorConfigRequest) -> Dict[str, Any]:
+    from app.data.futures_aggtrade_service import disable_futures_aggtrade_collection
+    from app.data.futures_aggtrade_service import enable_futures_aggtrade_collection
+    from app.data.futures_liquidation_service import disable_futures_liquidation_collection
+    from app.data.futures_liquidation_service import enable_futures_liquidation_collection
+    from app.data.futures_open_interest_service import disable_futures_open_interest_collection
+    from app.data.futures_open_interest_service import enable_futures_open_interest_collection
+    from app.data.futures_orderbook_service import disable_futures_orderbook_collection
+    from app.data.futures_orderbook_service import enable_futures_orderbook_collection
+    from app.data.futures_premium_service import disable_futures_premium_collection
+    from app.data.futures_premium_service import enable_futures_premium_collection
+
+    handlers = {
+        "futures_orderbook": (enable_futures_orderbook_collection, disable_futures_orderbook_collection, "Order Book"),
+        "futures_aggtrade": (enable_futures_aggtrade_collection, disable_futures_aggtrade_collection, "aggTrades"),
+        "futures_premium": (enable_futures_premium_collection, disable_futures_premium_collection, "Premium"),
+        "futures_open_interest": (enable_futures_open_interest_collection, disable_futures_open_interest_collection, "Open Interest"),
+        "futures_liquidation": (enable_futures_liquidation_collection, disable_futures_liquidation_collection, "Liquidations"),
+    }
+    requested = {str(key).strip() for key in body.enabled_collectors if str(key).strip()}
+    unknown = sorted(requested - set(handlers))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown collector keys: {', '.join(unknown)}")
+
+    changed: list[dict[str, Any]] = []
+    for key, (enable_fn, disable_fn, label) in handlers.items():
+        should_enable = key in requested
+        if should_enable:
+            enable_fn()
+        else:
+            disable_fn()
+        changed.append({"key": key, "label": label, "enabled": should_enable})
+
+    return {
+        "status": "ok",
+        "collectors": changed,
+        "enabled_collectors": [item["key"] for item in changed if item["enabled"]],
     }
 
 
@@ -1251,6 +1804,7 @@ def clear_queue_batch(batch_id: str) -> dict[str, Any]:
         )
         status = "cleared" if jobs else "empty"
         _log_queue_control_event(
+            connection,
             status=status,
             message="Cleared queued pipeline batch from admin." if jobs else "No queued jobs found for pipeline batch clear request.",
             action="clear_pipeline_batch",
@@ -1291,7 +1845,68 @@ def strategies() -> dict[str, Any]:
 def strategy_summary() -> list[dict[str, Any]]:
     connection = get_connection()
     try:
-        return get_strategy_activity_summary(connection, include_live_book=True)
+        summaries = get_strategy_activity_summary(connection, include_live_book=True)
+        if _binance_futures_source_of_truth_enabled():
+            try:
+                exchange_positions = {
+                    str(item["symbol"]).upper(): item
+                    for item in _get_binance_futures_positions(include_flat=True)
+                }
+            except Exception:
+                exchange_positions = {}
+            for item in summaries:
+                latest_signal = item.get("latest_signal") or {}
+                latest_fill = item.get("latest_fill") or {}
+                latest_order = item.get("latest_order") or {}
+                symbol = (
+                    latest_signal.get("symbol")
+                    or item.get("open_position_symbol")
+                    or item.get("price_symbol")
+                    or latest_fill.get("symbol")
+                    or latest_order.get("symbol")
+                )
+                if not symbol:
+                    continue
+                symbol_upper = str(symbol).upper()
+                position = exchange_positions.get(symbol_upper)
+                qty = float(position.get("qty") or 0.0) if position else 0.0
+                item["net_position_qty"] = qty
+                item["open_position_symbol"] = symbol_upper if qty != 0 else None
+                item["open_entry_price"] = float(position.get("avg_price") or 0.0) if qty != 0 else None
+                item["open_position_opened_at"] = position.get("created_at") if position and qty != 0 else None
+                item["exchange_current_position"] = _normalize_binance_futures_position(symbol_upper, position)
+
+                # Replace PnL/trade stats with real Binance exchange data (last 7 days)
+                try:
+                    snapshot = _build_exchange_trade_snapshot(
+                        symbol_upper,
+                        strategy_name=str(item.get("strategy_name") or ""),
+                        days=7,
+                        limit=1000,
+                    )
+                    unrealized_pnl = float(position.get("unrealized_pnl") or 0.0) if position else 0.0
+                    item.update({
+                        "filled_order_count": len(snapshot["trades"]),
+                        "filled_qty_total": snapshot["filled_qty_total"],
+                        "gross_realized_pnl": snapshot["gross_pnl"],
+                        "total_commission": snapshot["total_fees"],
+                        "net_realized_pnl": snapshot["gross_pnl"] - snapshot["total_fees"],
+                        "buy_fill_count": snapshot["buy_count"],
+                        "sell_fill_count": snapshot["sell_count"],
+                        "realized_trade_count": snapshot["realized_trade_count"],
+                        "winning_trade_count": snapshot["win_trade_count"],
+                        "losing_trade_count": snapshot["loss_trade_count"],
+                        "breakeven_trade_count": snapshot["realized_trade_count"] - snapshot["win_trade_count"] - snapshot["loss_trade_count"],
+                        "unrealized_pnl": unrealized_pnl,
+                        "exchange_pnl_source": "binance_user_trades",
+                        "price_symbol": symbol_upper,
+                        "latest_exchange_closed_trade": snapshot["latest_closed_trade"],
+                    })
+                    if snapshot["latest_closed_trade"] is not None:
+                        item["latest_closed_trade"] = snapshot["latest_closed_trade"]
+                except Exception:
+                    pass
+        return summaries
     finally:
         connection.close()
 
@@ -1321,6 +1936,7 @@ class RiskConfigUpdateRequest(BaseModel):
     order_qty: Optional[float] = None
     max_position_qty: Optional[float] = None
     cooldown_seconds: Optional[int] = None
+    stop_loss_pct: Optional[float] = None
     max_daily_loss: Optional[float] = None
 
 
@@ -1336,6 +1952,7 @@ def list_risk_config() -> dict:
                 "order_qty": DEFAULT_ORDER_QTY,
                 "max_position_qty": MAX_POSITION_QTY,
                 "cooldown_seconds": COOLDOWN_SECONDS,
+                "stop_loss_pct": STOP_LOSS_PCT,
                 "max_daily_loss": MAX_DAILY_LOSS,
             },
             "overrides": overrides,
@@ -1370,9 +1987,11 @@ def update_risk_config_for_strategy(strategy_name: str, body: RiskConfigUpdateRe
             order_qty=body.order_qty,
             max_position_qty=body.max_position_qty,
             cooldown_seconds=body.cooldown_seconds,
+            stop_loss_pct=body.stop_loss_pct,
             max_daily_loss=body.max_daily_loss,
         )
-        log_event(
+        insert_event(
+            connection,
             event_type="risk_config",
             status="ok",
             source="api",
@@ -1391,7 +2010,8 @@ def reset_risk_config_for_strategy(strategy_name: str) -> dict:
     try:
         run_migrations(connection)
         deleted = delete_risk_config(connection, strategy_name)
-        log_event(
+        insert_event(
+            connection,
             event_type="risk_config",
             status="ok",
             source="api",
@@ -1423,6 +2043,15 @@ def fills(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
 
 @app.get("/positions")
 def positions(limit: int = Query(default=5, ge=1, le=100)) -> list[dict]:
+    if _binance_futures_source_of_truth_enabled():
+        try:
+            return _get_binance_futures_positions(include_flat=False)[:limit]
+        except Exception:
+            connection = get_connection()
+            try:
+                return get_positions(connection, limit=limit)
+            finally:
+                connection.close()
     connection = get_connection()
     try:
         return get_positions(connection, limit=limit)
@@ -1444,19 +2073,89 @@ def testnet_execution_report(
     symbol: str = Query(default="BTCUSDT"),
     strategy_name: Optional[str] = Query(default=None),
     days: int = Query(default=7, ge=1, le=30),
+    start_date: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     limit: int = Query(default=10, ge=1, le=50),
 ) -> dict[str, Any]:
+    resolved_days, _, _, window_meta = _resolve_report_window(
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
     connection = get_connection()
     try:
-        return get_execution_report(
+        report = get_execution_report(
             connection,
             symbol=symbol,
             strategy_name=strategy_name,
-            days=days,
+            days=resolved_days,
             limit=limit,
         )
+        report.setdefault("summary", {}).update(window_meta)
+        report["summary"]["days"] = resolved_days
+        if _binance_futures_source_of_truth_enabled():
+            try:
+                snapshot = _build_exchange_trade_snapshot(
+                    symbol,
+                    strategy_name=strategy_name or "ppo",
+                    days=resolved_days,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=max(limit, 100),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Binance API error: {exc}") from exc
+            exchange = snapshot["exchange"]
+            report["summary"] = {
+                **report.get("summary", {}),
+                "symbol": symbol.upper(),
+                "strategy_name": strategy_name or "all",
+                "days": resolved_days,
+                **window_meta,
+                "fills": exchange["summary"]["fills"],
+                "closed_trades": snapshot["realized_trade_count"],
+                "notional": exchange["summary"]["notional"],
+                "gross_pnl": snapshot["gross_pnl"],
+                "fees": snapshot["total_fees"],
+                "net_pnl": snapshot["gross_pnl"] - snapshot["total_fees"],
+                "win_rate": (snapshot["win_trade_count"] / snapshot["realized_trade_count"]) if snapshot["realized_trade_count"] else None,
+                "avg_hold_minutes": None,
+                "best_trade": snapshot["best_trade"],
+                "worst_trade": snapshot["worst_trade"],
+                "current_position": _get_binance_futures_position(symbol),
+                "source": "binance_user_trades",
+                "latest_exchange_closed_trade": snapshot["latest_closed_trade"],
+            }
+            report["daily"] = snapshot["daily"][:limit]
+            report["recent_fills"] = snapshot["trades"][:limit]
+            report["recent_closed_trades"] = snapshot["recent_closed_trades"][:limit]
+            report["exchange_trades"] = exchange
+        return report
     finally:
         connection.close()
+
+
+@app.get("/reports/exchange-trades")
+def exchange_trades_report(
+    symbol: str = Query(default="BTCUSDT"),
+    days: int = Query(default=7, ge=1, le=30),
+    start_date: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    try:
+        exchange = _get_exchange_trades_for_window(
+            symbol,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to fetch Binance trade history: {exc}") from exc
+    return exchange
 
 
 class PortfolioConfigUpdateRequest(BaseModel):
@@ -1499,7 +2198,8 @@ def update_portfolio_config(body: PortfolioConfigUpdateRequest) -> dict:
             max_strategy_allocation_pct=body.max_strategy_allocation_pct,
             max_total_exposure_pct=body.max_total_exposure_pct,
         )
-        log_event(
+        insert_event(
+            connection,
             event_type="portfolio_config",
             status="ok",
             source="api",
@@ -1558,6 +2258,7 @@ def run_pipeline_endpoint(payload: Optional[PipelineRunRequest] = None) -> dict:
         try:
             result = run_pipeline_batch(connection, batch_id=batch_id)
             _log_queue_control_event(
+                connection,
                 status=str(result.get("status") or "unknown"),
                 message="Recovered queued pipeline batch." if batch_id else "Drained next queued pipeline batch.",
                 action="recover_pipeline_batch",
@@ -1612,13 +2313,15 @@ def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[s
     connection = get_connection()
     try:
         adapter = get_execution_adapter()
-        orphan_results = reconcile_orphan_orders(connection, is_live=adapter.is_live)
+        broker_client = getattr(adapter, "_broker", None)
+        orphan_results = reconcile_orphan_orders(connection, is_live=adapter.is_live, broker_client=broker_client)
         ensure_positions_table(connection)
         updated_symbols = update_positions(connection)
         ensure_pnl_table(connection)
         snapshot_count = update_pnl_snapshots(connection)
         latest_orders = get_orders(connection, limit=5)
-        log_event(
+        insert_event(
+            connection,
             event_type="execution_control",
             status="reconciled",
             source="execution_control",
@@ -1637,6 +2340,105 @@ def reconcile_orders(payload: Optional[ReconcileOrdersRequest] = None) -> dict[s
             "updated_symbols": updated_symbols,
             "snapshot_count": snapshot_count,
             "orders": latest_orders,
+        }
+    finally:
+        connection.close()
+
+
+@app.post("/execution/sync-from-exchange")
+def sync_fills_from_exchange(
+    symbol: str = Query(default="SOLUSDT"),
+    days: int = Query(default=7, ge=1, le=30),
+) -> dict[str, Any]:
+    """Sync actual Binance trade fills into local DB.
+
+    For each Binance trade, finds the matching local order by broker_order_id and
+    upserts the fill with real price, qty, commission, and realized_pnl.
+    Orders without a matching local record are counted but skipped.
+    After sync, rebuilds positions and daily PnL from the corrected fills.
+    Only available when CRYPTO_EXECUTION_BACKEND=binance and CRYPTO_BINANCE_FUTURES=true.
+    """
+    if not _binance_futures_source_of_truth_enabled():
+        raise HTTPException(status_code=400, detail="Only available for live Binance Futures mode.")
+    from datetime import timedelta
+    from app.execution.binance_broker import BinanceBrokerClient
+    from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
+
+    client = BinanceBrokerClient()
+    cutoff_ms = int((_utc_now() - timedelta(days=days)).timestamp() * 1000)
+    raw_trades = client.get_user_trades(symbol.upper(), start_time=cutoff_ms, limit=1000)
+
+    # Group raw Binance trades by orderId (one order can have multiple partial fills)
+    trades_by_order_id: dict[str, list[dict[str, Any]]] = {}
+    for trade in raw_trades:
+        oid = str(trade.get("orderId") or "")
+        if oid:
+            trades_by_order_id.setdefault(oid, []).append(trade)
+
+    connection = get_connection()
+    try:
+        run_migrations(connection)
+        synced = 0
+        skipped_no_local_order = 0
+
+        for broker_order_id, order_trades in trades_by_order_id.items():
+            order_row = connection.execute(
+                "SELECT id, symbol, side FROM orders WHERE broker_order_id = ? LIMIT 1",
+                (broker_order_id,),
+            ).fetchone()
+            if order_row is None:
+                skipped_no_local_order += 1
+                continue
+
+            local_order_id = int(order_row[0])
+            order_symbol = str(order_row[1])
+            # Aggregate sub-fills for this order
+            total_qty = sum(float(t.get("qty") or 0) for t in order_trades)
+            total_commission = sum(float(t.get("commission") or 0) for t in order_trades)
+            total_realized_pnl = sum(float(t.get("realizedPnl") or 0) for t in order_trades)
+            avg_price = (
+                sum(float(t.get("price") or 0) * float(t.get("qty") or 0) for t in order_trades) / total_qty
+                if total_qty > 0 else 0.0
+            )
+            side = "BUY" if bool(order_trades[0].get("buyer")) else "SELL"
+            commission_asset = str(order_trades[0].get("commissionAsset") or "USDT")
+            quote_qty = sum(float(t.get("quoteQty") or 0) for t in order_trades) or None
+            transact_time = max(int(t.get("time") or 0) for t in order_trades) or None
+
+            existing_fill = connection.execute(
+                "SELECT id FROM fills WHERE order_id = ? LIMIT 1", (local_order_id,)
+            ).fetchone()
+            if existing_fill is not None:
+                connection.execute(
+                    """UPDATE fills
+                       SET qty=?, price=?, commission=?, commission_asset=?, quote_qty=?, transact_time=?
+                       WHERE order_id=?""",
+                    (total_qty, avg_price, total_commission, commission_asset, quote_qty, transact_time, local_order_id),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO fills (order_id, symbol, side, qty, price, commission, commission_asset, quote_qty, transact_time)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (local_order_id, order_symbol, side, total_qty, avg_price,
+                     total_commission, commission_asset, quote_qty, transact_time),
+                )
+            # Ensure order status reflects FILLED
+            connection.execute(
+                "UPDATE orders SET status='FILLED', qty=?, price=? WHERE id=? AND status != 'FILLED'",
+                (total_qty, avg_price, local_order_id),
+            )
+            synced += 1
+
+        update_positions(connection)
+        rebuild_daily_realized_pnl(connection)
+        connection.commit()
+        return {
+            "status": "ok",
+            "symbol": symbol.upper(),
+            "days": days,
+            "binance_order_count": len(trades_by_order_id),
+            "synced_count": synced,
+            "skipped_no_local_order": skipped_no_local_order,
         }
     finally:
         connection.close()
@@ -1916,7 +2718,7 @@ class BacktestRunUpdateRequest(BaseModel):
 
 def _backtest_start_iso(days: int) -> str:
     from datetime import timedelta
-    return (_utc_now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    return (_utc_now() - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 @app.get("/backtest")
@@ -2102,7 +2904,8 @@ def backtest_promote_run(run_id: int) -> Dict[str, Any]:
         promoted = promote_backtest_run(connection, run_id)
         if promoted is None:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
-        log_event(
+        insert_event(
+            connection,
             event_type="param_sync",
             status="ok",
             source="api",
@@ -2345,7 +3148,8 @@ def apply_best_sweep_params(
             },
             "config": cfg.to_dict(),
         }
-        log_event(
+        insert_event(
+            connection,
             event_type="param_sync",
             status="ok",
             source="api",
@@ -2598,8 +3402,7 @@ def run_training_job(body: TrainingJobRequest) -> Dict[str, Any]:
         )
 
         # Mark running
-        from datetime import datetime, timezone as _tz
-        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        started_at = utc_now_iso()
         update_training_job(connection, job_id, status="running", started_at=started_at)
 
         try:
@@ -2668,7 +3471,7 @@ def run_training_job(body: TrainingJobRequest) -> Dict[str, Any]:
                 feature_set=body.feature_set,
             )
 
-            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            finished_at = utc_now_iso()
             update_training_job(
                 connection,
                 job_id,
@@ -2681,7 +3484,7 @@ def run_training_job(body: TrainingJobRequest) -> Dict[str, Any]:
             )
 
         except Exception as exc:
-            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            finished_at = utc_now_iso()
             update_training_job(
                 connection,
                 job_id,
@@ -3070,8 +3873,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
             params=hyperparams,
         )
 
-        from datetime import datetime, timezone as _tz
-        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        started_at = utc_now_iso()
         update_training_job(connection, job_id, status="running", started_at=started_at)
 
         try:
@@ -3133,7 +3935,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
                 "train_loss_history": result["train"]["loss_history"],
             }
 
-            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            finished_at = utc_now_iso()
             update_training_job(
                 connection,
                 job_id,
@@ -3162,7 +3964,7 @@ def run_rl_job(body: RLJobRequest) -> Dict[str, Any]:
                 registry_status = "champion"
 
         except Exception as exc:
-            finished_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+            finished_at = utc_now_iso()
             update_training_job(
                 connection,
                 job_id,
@@ -3203,26 +4005,26 @@ class PPOJobRequest(BaseModel):
     seed: int = Field(default=42)
     frame_stack: int = Field(default=1, ge=1, le=20)
     holding_bonus: float = Field(default=0.0, ge=0.0, le=0.01)
+    decision_interval: Optional[int] = Field(default=None, ge=1, le=60)
+    reward_horizon: Optional[int] = Field(default=None, ge=1, le=60)
+    action_interval: Optional[int] = Field(default=None, ge=1, le=60)
+    train_frac: float = Field(default=0.70, ge=0.50, le=0.99)
 
 
 @app.post("/training/ppo-jobs")
-def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
-    """Start a PPO training job in a background thread.
-
-    Returns immediately with the job record (status='running').
-    Poll GET /training/jobs/{job_id} to check progress and results.
-    """
+def start_ppo_job(body: PPOJobRequest, request: Request) -> Dict[str, Any]:
+    """Queue a PPO training job for the dedicated training worker."""
     import json as _json
-    import threading
 
     from app.training.ppo_trainer import resolve_episode_lengths
-    from app.training.ppo_trainer import run_ppo_training
-    from app.core.db import get_connection as _get_conn
 
     connection = get_connection()
     try:
         run_migrations(connection)
+
         train_ep_len, eval_ep_len = resolve_episode_lengths(body.timeframe)
+        decision_interval = int(body.action_interval or body.decision_interval or 1)
+        reward_horizon = int(body.reward_horizon or body.action_interval or 1)
 
         params = {
             "job_type":      "ppo",
@@ -3240,8 +4042,12 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
             "train_ep_len":  train_ep_len,
             "eval_ep_len":   eval_ep_len,
             "seed":           body.seed,
-            "frame_stack":    body.frame_stack,
-            "holding_bonus":  body.holding_bonus,
+            "frame_stack":      body.frame_stack,
+            "holding_bonus":    body.holding_bonus,
+            "decision_interval": decision_interval,
+            "reward_horizon":  reward_horizon,
+            "action_interval": decision_interval,
+            "train_frac":       body.train_frac,
         }
         job_id = create_training_job(
             connection,
@@ -3251,110 +4057,25 @@ def start_ppo_job(body: PPOJobRequest) -> Dict[str, Any]:
             params=params,
         )
 
-        from datetime import datetime, timezone as _tz
-        started_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
-        update_training_job(connection, job_id, status="running", started_at=started_at)
         # Write initial progress so the bar shows immediately
         connection.execute(
             "UPDATE training_jobs SET progress_json=? WHERE id=?;",
             (_json.dumps({"pct": 0, "step": 0, "total": body.total_steps}), job_id),
+        )
+        enqueue_job(
+            connection,
+            "training_ppo",
+            payload={"training_job_id": job_id},
         )
         connection.commit()
         job = get_training_job(connection, job_id)
     finally:
         connection.close()
 
-    def _bg_train():
-        def _on_progress(current: int, total: int) -> None:
-            pct = round(current / total * 100, 1) if total > 0 else 0
-            prog = _json.dumps({"pct": pct, "step": current, "total": total})
-            try:
-                conn = _get_conn()
-                conn.execute(
-                    "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-                    (prog, job_id),
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-        try:
-            result = run_ppo_training(
-                symbol=body.symbol,
-                timeframe=body.timeframe,
-                total_steps=body.total_steps,
-                eval_windows=body.eval_windows,
-                fee_rate=body.fee_rate,
-                learning_rate=body.learning_rate,
-                n_steps=body.n_steps,
-                batch_size=body.batch_size,
-                n_epochs=body.n_epochs,
-                gamma=body.gamma,
-                gae_lambda=body.gae_lambda,
-                clip_range=body.clip_range,
-                ent_coef=body.ent_coef,
-                seed=body.seed,
-                frame_stack=body.frame_stack,
-                holding_bonus=body.holding_bonus,
-                job_id=job_id,
-                on_progress=_on_progress,
-            )
-
-            metrics = {
-                "verdict":     result["verdict"],
-                "win_rate":    result["win_rate"],
-                "avg_ppo_pct": result["avg_ppo_pct"],
-                "avg_bnh_pct": result["avg_bnh_pct"],
-                "avg_edge":    result["avg_edge"],
-                "walk_forward": result["walk_forward"],
-            }
-            dataset = {
-                "n_total":  result["n_total"],
-                "n_train":  result["n_train"],
-                "fee_rate": result["fee_rate"],
-            }
-            from datetime import datetime, timezone as _tz2
-            finished_at = datetime.now(_tz2.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-            conn = _get_conn()
-            update_training_job(
-                conn, job_id,
-                status="done",
-                dataset=dataset,
-                metrics=metrics,
-                model={"model_path": result["model_path"], "job_type": "ppo"},
-                started_at=started_at,
-                finished_at=finished_at,
-            )
-            conn.execute(
-                "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-                (_json.dumps({"pct": 100, "step": body.total_steps, "total": body.total_steps}), job_id),
-            )
-            conn.commit()
-            conn.close()
-        except Exception as exc:
-            from datetime import datetime, timezone as _tz3
-            finished_at = datetime.now(_tz3.utc).strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                conn = _get_conn()
-                update_training_job(
-                    conn, job_id,
-                    status="failed",
-                    error=str(exc),
-                    started_at=started_at,
-                    finished_at=finished_at,
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-    thread = threading.Thread(target=_bg_train, daemon=True)
-    thread.start()
-
-    result = job or {"id": job_id, "status": "running"}
-    result["tensorboard_url"] = "http://localhost:6006"
+    result = job or {"id": job_id, "status": "pending"}
+    tb_host = request.headers.get("host", "localhost").split(":")[0]
+    tb_port = int(os.environ.get("CRYPTO_TENSORBOARD_PORT", "6006"))
+    result["tensorboard_url"] = f"http://{tb_host}:{tb_port}"
     return result
 
 
@@ -3432,46 +4153,6 @@ def delete_training_job(job_id: int) -> Dict[str, Any]:
     return {"deleted": True, "job_id": job_id, "tb_dirs_removed": deleted_dirs}
 
 
-# ---------------------------------------------------------------------------
-# Order Book Collection
-# ---------------------------------------------------------------------------
-
-@app.get("/orderbook/status")
-def get_orderbook_status() -> Dict[str, Any]:
-    """Return order book collection status and per-symbol stats."""
-    from app.data.orderbook_service import (
-        get_orderbook_stats,
-        is_orderbook_collection_enabled,
-    )
-    connection = get_connection()
-    try:
-        run_migrations(connection)
-        stats = get_orderbook_stats(connection)
-    finally:
-        connection.close()
-    return {
-        "enabled": is_orderbook_collection_enabled(),
-        "symbols": stats,
-        "total_snapshots": sum(s["total"] for s in stats),
-    }
-
-
-@app.post("/orderbook/enable")
-def enable_orderbook() -> Dict[str, Any]:
-    """Enable order book collection."""
-    from app.data.orderbook_service import enable_orderbook_collection
-    enable_orderbook_collection()
-    return {"enabled": True}
-
-
-@app.post("/orderbook/pause")
-def pause_orderbook() -> Dict[str, Any]:
-    """Pause order book collection."""
-    from app.data.orderbook_service import disable_orderbook_collection
-    disable_orderbook_collection()
-    return {"enabled": False}
-
-
 @app.get("/orderbook/futures/status")
 def get_futures_orderbook_status() -> Dict[str, Any]:
     """Return futures order book collection status and per-symbol stats."""
@@ -3501,7 +4182,7 @@ def get_futures_orderbook_status() -> Dict[str, Any]:
             connection,
             runtime=(collector_runtime.get("symbol_runtime") or {}),
         )
-        cutoff_24h = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        cutoff_24h = datetime.now(timezone.utc) - timedelta(days=1)
         watchdog_row = connection.execute(
             """
             SELECT

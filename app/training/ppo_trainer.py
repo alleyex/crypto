@@ -13,7 +13,10 @@ progress/results to the training_jobs table.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import pickle
 import subprocess
 import sys
 import warnings
@@ -27,8 +30,75 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-MODELS_DIR  = ROOT / "runtime" / "models"
-TB_LOGS_DIR = ROOT / "runtime" / "tb_logs"
+MODELS_DIR       = ROOT / "runtime" / "models"
+TB_LOGS_DIR      = ROOT / "runtime" / "tb_logs"
+FEATURE_CACHE_DIR = ROOT / "runtime" / "feature_cache"
+
+
+# ---------------------------------------------------------------------------
+# Feature-cache helpers
+# ---------------------------------------------------------------------------
+
+def _feature_cache_paths(symbol: str, timeframe: str) -> tuple[Path, Path]:
+    key = f"features_{symbol}_{timeframe}"
+    return (
+        FEATURE_CACHE_DIR / f"{key}.pkl",
+        FEATURE_CACHE_DIR / f"{key}.meta.json",
+    )
+
+
+def _load_feature_cache(
+    symbol: str,
+    timeframe: str,
+    last_candle_ts: int,
+    last_aggtrade_ts: Optional[int],
+    feat_cols: List[str],
+    last_premium_ts: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
+    """Return cached feature DataFrame if it is still valid, else None."""
+    data_path, meta_path = _feature_cache_paths(symbol, timeframe)
+    if not meta_path.exists() or not data_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return None
+
+    cols_hash = hashlib.md5(",".join(feat_cols).encode()).hexdigest()
+    if (
+        meta.get("last_candle_ts") != last_candle_ts
+        or meta.get("last_aggtrade_ts") != last_aggtrade_ts
+        or meta.get("last_premium_ts") != last_premium_ts
+        or meta.get("feat_cols_hash") != cols_hash
+    ):
+        return None
+
+    try:
+        return pickle.loads(data_path.read_bytes())
+    except Exception:
+        return None
+
+
+def _save_feature_cache(
+    symbol: str,
+    timeframe: str,
+    df: pd.DataFrame,
+    last_candle_ts: int,
+    last_aggtrade_ts: Optional[int],
+    feat_cols: List[str],
+    last_premium_ts: Optional[int] = None,
+) -> None:
+    """Persist feature DataFrame and its validation metadata to disk."""
+    FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    data_path, meta_path = _feature_cache_paths(symbol, timeframe)
+    meta = {
+        "last_candle_ts": last_candle_ts,
+        "last_aggtrade_ts": last_aggtrade_ts,
+        "last_premium_ts": last_premium_ts,
+        "feat_cols_hash": hashlib.md5(",".join(feat_cols).encode()).hexdigest(),
+    }
+    data_path.write_bytes(pickle.dumps(df, protocol=4))
+    meta_path.write_text(json.dumps(meta))
 
 # Default PPO hyperparameters (mirrors scripts/train_ppo.py)
 DEFAULT_PPO_KWARGS: Dict[str, Any] = dict(
@@ -67,7 +137,7 @@ def _ensure_tensorboard_running() -> None:
         "np.string_ = np.bytes_; "
         "np.unicode_ = np.str_; "
         f"import sys; sys.argv = ['tensorboard', '--logdir', {str(TB_LOGS_DIR)!r}, "
-        f"'--port', '{TB_PORT}', '--host', 'localhost']; "
+        f"'--port', '{TB_PORT}', '--host', '0.0.0.0']; "
         "from tensorboard.main import run_main; run_main()"
     )
     subprocess.Popen(
@@ -186,7 +256,9 @@ def _run_episode(env, model=None) -> dict:
 
 def _walk_forward_eval(df: pd.DataFrame, model, eval_start_idx: int,
                         n_windows: int, ep_len: int,
-                        frame_stack: int = 1) -> List[dict]:
+                        frame_stack: int = 1,
+                        decision_interval: int = 1,
+                        reward_horizon: int = 1) -> List[dict]:
     from app.rl.crypto_env import CryptoTradingEnv
 
     results = []
@@ -196,8 +268,22 @@ def _walk_forward_eval(df: pd.DataFrame, model, eval_start_idx: int,
 
     for w in range(actual_windows):
         window_df = df.iloc[idx: idx + ep_len + 1].reset_index(drop=True)
-        ppo_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True, frame_stack=frame_stack)
-        bnh_env = CryptoTradingEnv(window_df, episode_length=ep_len, deterministic=True, frame_stack=frame_stack)
+        ppo_env = CryptoTradingEnv(
+            window_df,
+            episode_length=ep_len,
+            deterministic=True,
+            frame_stack=frame_stack,
+            decision_interval=decision_interval,
+            reward_horizon=reward_horizon,
+        )
+        bnh_env = CryptoTradingEnv(
+            window_df,
+            episode_length=ep_len,
+            deterministic=True,
+            frame_stack=frame_stack,
+            decision_interval=decision_interval,
+            reward_horizon=reward_horizon,
+        )
 
         ppo_r = _run_episode(ppo_env, model)
         bnh_r = _run_episode(bnh_env, model=None)
@@ -235,6 +321,9 @@ def run_ppo_training(
     seed: int = 42,
     frame_stack: int = 1,
     holding_bonus: float = 0.0,
+    decision_interval: int = 1,
+    reward_horizon: int = 1,
+    train_frac: float = TRAIN_FRAC,
     job_id: Optional[int] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
@@ -262,67 +351,135 @@ def run_ppo_training(
     from stable_baselines3 import PPO
     from stable_baselines3.common.monitor import Monitor
     from app.core.db import get_connection
-    from app.features.crypto_features import build_crypto_features, MIN_VALID_ROWS
+    from app.features.crypto_features import build_crypto_features, MIN_VALID_ROWS, get_feature_columns
     from app.rl.crypto_env import CryptoTradingEnv, FEE_PER_SIDE as _DEFAULT_FEE
 
-    # --- Load candles ---
+    feat_cols = get_feature_columns()
+
+    # --- Probe latest timestamps to check feature cache ---
     conn = get_connection()
     try:
-        rows = conn.execute(
-            """
-            SELECT open_time, open, high, low, close, volume,
-                   quote_asset_volume, number_of_trades,
-                   taker_buy_base_volume, taker_buy_quote_volume
-            FROM candles WHERE symbol=? AND timeframe=? ORDER BY open_time ASC
-            """,
+        _row = conn.execute(
+            "SELECT MAX(open_time) FROM futures_candles WHERE symbol=? AND timeframe=?",
             (symbol, timeframe),
-        ).fetchall()
+        ).fetchone()
+        last_candle_ts: int = int(_row[0]) if _row and _row[0] else 0
 
-        # --- Load aggtrade microstructure data (optional, 1m only) ---
-        aggtrade_rows = []
-        if timeframe == "1m" and rows:
-            min_ts = int(rows[0][0])
-            max_ts = int(rows[-1][0])
-            aggtrade_rows = conn.execute(
-                """
-                SELECT timestamp_ms, trade_count,
-                       qty_total, qty_taker_buy, qty_taker_sell,
-                       quote_total, quote_taker_buy, quote_taker_sell,
-                       vwap, coverage_ratio
-                FROM futures_aggtrade_minutes
-                WHERE symbol=? AND timestamp_ms BETWEEN ? AND ?
-                ORDER BY timestamp_ms ASC
-                """,
-                (symbol, min_ts, max_ts),
-            ).fetchall()
+        last_aggtrade_ts: Optional[int] = None
+        if timeframe == "1m":
+            _at_row = conn.execute(
+                "SELECT MAX(timestamp_ms) FROM futures_aggtrade_minutes WHERE symbol=?",
+                (symbol,),
+            ).fetchone()
+            if _at_row and _at_row[0]:
+                last_aggtrade_ts = int(_at_row[0])
+
+        last_premium_ts: Optional[int] = None
+        try:
+            _pm_row = conn.execute(
+                "SELECT MAX(timestamp_ms) FROM futures_premium_metrics WHERE symbol=?",
+                (symbol,),
+            ).fetchone()
+            if _pm_row and _pm_row[0]:
+                last_premium_ts = int(_pm_row[0])
+        except Exception:
+            pass  # table may not exist
     finally:
         conn.close()
 
-    if not rows:
+    if last_candle_ts == 0:
         raise RuntimeError(f"No candle data for {symbol}/{timeframe}")
 
-    cols = ["open_time", "open", "high", "low", "close", "volume",
-            "quote_asset_volume", "number_of_trades",
-            "taker_buy_base_volume", "taker_buy_quote_volume"]
-    df_raw = pd.DataFrame(rows, columns=cols)
-    numeric_cols = [c for c in cols if c != "open_time"]
-    df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
+    # --- Try cache first ---
+    df = _load_feature_cache(symbol, timeframe, last_candle_ts, last_aggtrade_ts, feat_cols, last_premium_ts)
 
-    aggtrade_df = None
-    if aggtrade_rows:
-        at_cols = ["timestamp_ms", "trade_count",
-                   "qty_total", "qty_taker_buy", "qty_taker_sell",
-                   "quote_total", "quote_taker_buy", "quote_taker_sell",
-                   "vwap", "coverage_ratio"]
-        aggtrade_df = pd.DataFrame(aggtrade_rows, columns=at_cols)
-        for c in at_cols:
-            aggtrade_df[c] = pd.to_numeric(aggtrade_df[c], errors="coerce")
+    if df is None:
+        # Cache miss: full load + feature build
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT open_time, open, high, low, close, volume,
+                       quote_asset_volume, number_of_trades,
+                       taker_buy_base_volume, taker_buy_quote_volume
+                FROM futures_candles WHERE symbol=? AND timeframe=? ORDER BY open_time ASC
+                """,
+                (symbol, timeframe),
+            ).fetchall()
 
-    df = build_crypto_features(df_raw, aggtrade_df=aggtrade_df).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
+            aggtrade_rows = []
+            if timeframe == "1m" and rows:
+                min_ts = int(rows[0][0])
+                max_ts = int(rows[-1][0])
+                aggtrade_rows = conn.execute(
+                    """
+                    SELECT timestamp_ms, trade_count,
+                           qty_total, qty_taker_buy, qty_taker_sell,
+                           quote_total, quote_taker_buy, quote_taker_sell,
+                           vwap, coverage_ratio
+                    FROM futures_aggtrade_minutes
+                    WHERE symbol=? AND timestamp_ms BETWEEN ? AND ?
+                    ORDER BY timestamp_ms ASC
+                    """,
+                    (symbol, min_ts, max_ts),
+                ).fetchall()
+
+            premium_rows = []
+            if rows:
+                min_ts = int(rows[0][0])
+                max_ts = int(rows[-1][0])
+                try:
+                    premium_rows = conn.execute(
+                        """
+                        SELECT timestamp_ms, last_funding_rate, mark_index_basis_pct
+                        FROM futures_premium_metrics
+                        WHERE symbol=? AND timestamp_ms BETWEEN ? AND ?
+                        ORDER BY timestamp_ms ASC
+                        """,
+                        (symbol, min_ts, max_ts),
+                    ).fetchall()
+                except Exception:
+                    pass  # table may not exist
+        finally:
+            conn.close()
+
+        cols = ["open_time", "open", "high", "low", "close", "volume",
+                "quote_asset_volume", "number_of_trades",
+                "taker_buy_base_volume", "taker_buy_quote_volume"]
+        df_raw = pd.DataFrame(rows, columns=cols)
+        numeric_cols = [c for c in cols if c != "open_time"]
+        df_raw[numeric_cols] = df_raw[numeric_cols].astype(float)
+
+        aggtrade_df = None
+        if aggtrade_rows:
+            at_cols = ["timestamp_ms", "trade_count",
+                       "qty_total", "qty_taker_buy", "qty_taker_sell",
+                       "quote_total", "quote_taker_buy", "quote_taker_sell",
+                       "vwap", "coverage_ratio"]
+            aggtrade_df = pd.DataFrame(aggtrade_rows, columns=at_cols)
+            for c in at_cols:
+                aggtrade_df[c] = pd.to_numeric(aggtrade_df[c], errors="coerce")
+
+            # Trim candles to aggtrade coverage start so all aggtrade features
+            # are real values (no neutral fill from missing data).
+            at_start_ts = int(aggtrade_df["timestamp_ms"].iloc[0])
+            df_raw = df_raw[df_raw["open_time"] >= at_start_ts].reset_index(drop=True)
+
+        premium_df = None
+        if premium_rows:
+            pm_cols = ["timestamp_ms", "last_funding_rate", "mark_index_basis_pct"]
+            premium_df = pd.DataFrame(premium_rows, columns=pm_cols)
+            for c in pm_cols:
+                premium_df[c] = pd.to_numeric(premium_df[c], errors="coerce")
+
+        df = build_crypto_features(df_raw, aggtrade_df=aggtrade_df, premium_df=premium_df).iloc[MIN_VALID_ROWS:].reset_index(drop=True)
+
+        # Persist for next training run
+        _save_feature_cache(symbol, timeframe, df, last_candle_ts, last_aggtrade_ts, feat_cols, last_premium_ts)
 
     n_total   = len(df)
     train_ep_len, eval_ep_len = resolve_episode_lengths(timeframe)
-    train_end = int(n_total * TRAIN_FRAC)
+    train_end = int(n_total * train_frac)
 
     if train_end < train_ep_len:
         raise ValueError(
@@ -338,7 +495,17 @@ def run_ppo_training(
     _original_fee = _env_mod.FEE_PER_SIDE
     _env_mod.FEE_PER_SIDE = fee_rate
     try:
-        train_env = Monitor(CryptoTradingEnv(train_df, episode_length=train_ep_len, seed=seed, frame_stack=frame_stack, holding_bonus_rate=holding_bonus))
+        train_env = Monitor(
+            CryptoTradingEnv(
+                train_df,
+                episode_length=train_ep_len,
+                seed=seed,
+                frame_stack=frame_stack,
+                holding_bonus_rate=holding_bonus,
+                decision_interval=decision_interval,
+                reward_horizon=reward_horizon,
+            )
+        )
 
         ppo_kwargs = {**DEFAULT_PPO_KWARGS,
                       "learning_rate": learning_rate,
@@ -354,7 +521,8 @@ def run_ppo_training(
         tb_log_name = f"ppo_{symbol}_{timeframe}" + (f"_job{job_id}" if job_id else "")
         try:
             from torch.utils.tensorboard import SummaryWriter as _SW  # noqa: F401
-            TB_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            tb_run_dir = TB_LOGS_DIR / tb_log_name
+            tb_run_dir.mkdir(parents=True, exist_ok=True)
             _tb_log = str(TB_LOGS_DIR)
         except Exception:
             _tb_log = None  # tensorboard unavailable — skip logging
@@ -373,6 +541,8 @@ def run_ppo_training(
             n_windows=eval_windows,
             ep_len=eval_ep_len,
             frame_stack=frame_stack,
+            decision_interval=decision_interval,
+            reward_horizon=reward_horizon,
         )
     finally:
         _env_mod.FEE_PER_SIDE = _original_fee
@@ -395,11 +565,24 @@ def run_ppo_training(
     else:
         verdict = "FAIL"
 
-    # --- Save candidate model ---
+    # --- Save candidate model + observation metadata ---
+    from app.rl.crypto_env import N_RECENT_RETS, OBS_DIM
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     suffix = f"_candidate_{job_id}" if job_id is not None else "_candidate"
     model_path = MODELS_DIR / f"ppo_{symbol}_{timeframe}{suffix}"
     model.save(str(model_path))
+
+    model_meta = {
+        "obs_dim":       OBS_DIM * frame_stack,
+        "n_feat":        len(feat_cols),
+        "n_recent_rets": N_RECENT_RETS,
+        "feat_cols":     feat_cols,
+        "frame_stack":   frame_stack,
+        "decision_interval": decision_interval,
+        "reward_horizon": reward_horizon,
+        "action_interval": decision_interval,
+    }
+    (model_path.parent / f"{model_path.name}.meta.json").write_text(json.dumps(model_meta))
 
     return {
         "symbol":       symbol,
@@ -419,6 +602,10 @@ def run_ppo_training(
         "ent_coef":        ent_coef,
         "frame_stack":     frame_stack,
         "holding_bonus":   holding_bonus,
+        "decision_interval": decision_interval,
+        "reward_horizon": reward_horizon,
+        "action_interval": decision_interval,
+        "train_frac":      train_frac,
         "train_ep_len":    train_ep_len,
         "eval_ep_len":  eval_ep_len,
         "walk_forward": eval_results,
@@ -445,6 +632,11 @@ def deploy_candidate_model(symbol: str, timeframe: str, job_id: int) -> str:
 
     active = MODELS_DIR / f"ppo_{symbol}_{timeframe}.zip"
     shutil.copy2(str(candidate), str(active))
+
+    # Copy meta file if present
+    candidate_meta = MODELS_DIR / f"ppo_{symbol}_{timeframe}_candidate_{job_id}.meta.json"
+    if candidate_meta.exists():
+        shutil.copy2(str(candidate_meta), str(MODELS_DIR / f"ppo_{symbol}_{timeframe}.meta.json"))
 
     # Clear model cache so next inference reloads from disk
     cache_key = f"{symbol}_{timeframe}"

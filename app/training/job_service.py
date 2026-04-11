@@ -29,11 +29,11 @@ Schema (created by migration 027):
 import json
 from typing import Any, Dict, List, Optional
 
-from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid
+from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid, utc_now_iso
 
 _INSERT_SQL = """
-INSERT INTO training_jobs (symbol, timeframe, feature_set, status, params_json)
-VALUES (?, ?, ?, 'pending', ?);
+INSERT INTO training_jobs (symbol, timeframe, feature_set, status, params_json, created_at)
+VALUES (?, ?, ?, 'pending', ?, ?);
 """
 
 _UPDATE_SQL = """
@@ -65,6 +65,7 @@ def create_job(
             timeframe,
             feature_set,
             json.dumps(params or {}, sort_keys=True),
+            utc_now_iso(),
         ),
     )
     connection.commit()
