@@ -13,7 +13,7 @@ Signal record fields:
 from typing import Dict, Optional, Union
 
 from app.core.db import DBConnection
-from app.strategy.ma_cross import insert_signal
+from app.strategy.signal_service import insert_signal
 
 
 _SELECT_CLOSES_SQL = """

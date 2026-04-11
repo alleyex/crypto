@@ -2,11 +2,12 @@
 
 Uses V2 features from crypto_features.py as the observation space.
 
-Observation space  (Box float32, shape=(N_FEAT + 3,)):
-  [0 : N_FEAT]  normalised V2 features  (currently 15)
-  [N_FEAT]      current position  –1=short  0=flat  +1=long
-  [N_FEAT+1]    unrealised log-return since entry, clipped ±0.10
-  [N_FEAT+2]    bars held in current position / episode_length  [0, 1]
+Observation space  (Box float32, shape=(N_FEAT + 3 + 5,)):
+  [0 : N_FEAT]      normalised V2 features  (currently 15)
+  [N_FEAT]          current position  –1=short  0=flat  +1=long
+  [N_FEAT+1]        unrealised log-return since entry, clipped ±0.10
+  [N_FEAT+2]        bars held in current position / episode_length  [0, 1]
+  [N_FEAT+3 : N_FEAT+8]  last 5 bar log-returns (oldest → newest)
 
 Action space  (Discrete 3):
   0  →  flat   (close open position)
@@ -14,14 +15,21 @@ Action space  (Discrete 3):
   2  →  short
 
 Reward:
-  step_pnl      = position * log_ret_1_t
-  fee           = |Δposition| * FEE_PER_SIDE   (charged once on change)
-                  long→short or short→long costs 2× fee (close + open)
-  holding_bonus = holding_bonus_rate  if position == 1 (long only) else 0
-  reward        = step_pnl − fee + holding_bonus
+  decision_interval = how often the agent may change position.
+  reward_horizon    = how many future bars the reward looks ahead.
+
+  On each decision bar:
+    reward        = position * sum(log_ret[t..t+reward_horizon-1]) − fee
+    fee           = |Δposition| * FEE_PER_SIDE   (charged once on change)
+                    long→short or short→long costs 2× fee (close + open)
+    holding_bonus = holding_bonus_rate * reward_horizon if position == 1 else 0
+
+  On hold bars (between decision bars):
+    position is carried forward and reward is 0.
 
 Episode:
-  Runs for `episode_length` steps.
+  Runs for `episode_length` steps (in bars).
+  Effective decisions = episode_length // decision_interval.
   Training: random start index each reset.
   Eval (deterministic=True): sequential start from 0.
 """
@@ -47,7 +55,8 @@ DEFAULT_EP_LEN = 1440    # 1 day of 1-minute candles
 
 _FEAT_COLS = get_feature_columns()
 N_FEAT     = len(_FEAT_COLS)
-OBS_DIM    = N_FEAT + 3   # features + position + upnl + bars_held_norm
+N_RECENT_RETS = 5         # number of recent log-returns appended to obs
+OBS_DIM    = N_FEAT + 3 + N_RECENT_RETS  # features + position + upnl + bars_held_norm + recent_rets
 
 # Map discrete action → signed position
 _ACTION_TO_POS = {0: 0, 1: 1, 2: -1}
@@ -84,6 +93,9 @@ class CryptoTradingEnv(gym.Env):
         seed: Optional[int] = None,
         frame_stack: int = 1,
         holding_bonus_rate: float = 0.0,
+        decision_interval: int = 1,
+        reward_horizon: Optional[int] = None,
+        action_interval: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -99,12 +111,22 @@ class CryptoTradingEnv(gym.Env):
 
         # Pre-extract numpy arrays for speed
         self._holding_bonus_rate = float(holding_bonus_rate)
+        if action_interval is not None:
+            # Legacy training jobs stored a single action_interval parameter
+            # that controlled both decision cadence and reward aggregation.
+            legacy_interval = max(1, int(action_interval))
+            if decision_interval == 1:
+                decision_interval = legacy_interval
+            if reward_horizon is None:
+                reward_horizon = legacy_interval
+        self._decision_interval = max(1, int(decision_interval))
+        self._reward_horizon    = max(1, int(reward_horizon or 1))
         self._feat_arr  = df[_FEAT_COLS].to_numpy(dtype=np.float32)
         self._ret_arr   = df["log_ret_1"].to_numpy(dtype=np.float32)
 
         # Fill NaN → 0.0 (warm-up rows)
-        np.nan_to_num(self._feat_arr, nan=0.0, copy=False)
-        np.nan_to_num(self._ret_arr,  nan=0.0, copy=False)
+        self._feat_arr = np.nan_to_num(self._feat_arr, nan=0.0)
+        self._ret_arr  = np.nan_to_num(self._ret_arr,  nan=0.0)
 
         self._n_rows    = len(self._feat_arr)
         self._max_start = self._n_rows - self._episode_length - 1
@@ -135,6 +157,8 @@ class CryptoTradingEnv(gym.Env):
         self._position:  int = 0     # -1 / 0 / +1
         self._entry_ret: float = 0.0  # cumulative log-ret since entry
         self._bars_held: int = 0
+        self._bars_since_decision: int = 0
+        self._recent_rets: deque = deque([0.0] * N_RECENT_RETS, maxlen=N_RECENT_RETS)
 
         # RNG
         self._rng = np.random.default_rng(seed)
@@ -162,6 +186,9 @@ class CryptoTradingEnv(gym.Env):
         self._position  = 0
         self._entry_ret = 0.0
         self._bars_held = 0
+        self._bars_since_decision = 0
+        for i in range(N_RECENT_RETS):
+            self._recent_rets[i] = 0.0
 
         # Refill frame buffer with zeros before pushing initial obs
         for i in range(self._frame_stack):
@@ -173,37 +200,42 @@ class CryptoTradingEnv(gym.Env):
         self, action: int
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         idx = self._start_idx + self._step_idx
+        decision_bar = (self._bars_since_decision % self._decision_interval) == 0
 
-        # --- Execute action ---
-        old_position = self._position
-        new_position = _ACTION_TO_POS[int(action)]
-        delta        = abs(new_position - old_position)
-        fee          = delta * FEE_PER_SIDE
+        fee = 0.0
+        if decision_bar:
+            old_position = self._position
+            new_position = _ACTION_TO_POS[int(action)]
+            delta = abs(new_position - old_position)
+            fee = delta * FEE_PER_SIDE
 
-        if new_position != old_position:
-            self._position  = new_position
-            self._entry_ret = 0.0
-            self._bars_held = 0
+            if new_position != old_position:
+                self._position = new_position
+                self._entry_ret = 0.0
+                self._bars_held = 0
 
-        # --- Step return ---
-        # Reward uses old_position (held entering bar idx), not new_position.
-        # The action taken here sets the position for bar idx+1.
-        # This prevents the agent from exploiting log_ret_1[t] in the
-        # observation to retroactively profit from the same bar.
-        log_ret = float(self._ret_arr[idx])
-        step_pnl = old_position * log_ret
-        holding_bonus = self._holding_bonus_rate if old_position == 1 else 0.0
-        reward   = step_pnl - fee + holding_bonus
+        reward = 0.0
+        horizon_pnl = 0.0
+        if decision_bar:
+            horizon_bars = min(self._reward_horizon, self._episode_length - self._step_idx)
+            for offset in range(horizon_bars):
+                horizon_idx = idx + offset
+                if horizon_idx >= len(self._ret_arr):
+                    break
+                horizon_pnl += self._position * float(self._ret_arr[horizon_idx])
+            holding_bonus = self._holding_bonus_rate * horizon_bars if self._position == 1 else 0.0
+            reward = horizon_pnl - fee + holding_bonus
 
-        # Update unrealised PnL and bars held
-        self._entry_ret += log_ret if self._position != 0 else 0.0
+        current_log_ret = float(self._ret_arr[idx])
+        self._entry_ret += current_log_ret if self._position != 0 else 0.0
         if self._position != 0:
             self._bars_held += 1
         else:
             self._bars_held = 0
-
-        # Advance
+        self._recent_rets.append(current_log_ret)
         self._step_idx += 1
+        self._bars_since_decision = (self._bars_since_decision + 1) % self._decision_interval
+
         done      = self._step_idx >= self._episode_length
         truncated = False
 
@@ -211,9 +243,10 @@ class CryptoTradingEnv(gym.Env):
         info = {
             "step":      self._step_idx,
             "position":  self._position,
-            "log_ret":   log_ret,
-            "step_pnl":  step_pnl,
+            "log_ret":   current_log_ret,
+            "step_pnl":  horizon_pnl if decision_bar else 0.0,
             "fee":       fee,
+            "decision_bar": decision_bar,
         }
         return obs, float(reward), done, truncated, info
 
@@ -226,13 +259,14 @@ class CryptoTradingEnv(gym.Env):
 
     def _obs(self) -> np.ndarray:
         idx    = self._start_idx + self._step_idx
-        feats  = self._feat_arr[idx].copy()
+        feats  = self._feat_arr[idx]   # view — concatenate below creates a new array
         upnl   = float(np.clip(self._entry_ret, -UPNL_CLIP, UPNL_CLIP))
         bars_n = self._bars_held / self._episode_length
         state  = np.array(
             [float(self._position), upnl, bars_n], dtype=np.float32
         )
-        raw_obs = np.concatenate([feats, state])
+        recent = np.array(self._recent_rets, dtype=np.float32)
+        raw_obs = np.concatenate([feats, state, recent])
         self._frame_buffer.append(raw_obs)
         return np.concatenate(list(self._frame_buffer))
 

@@ -31,7 +31,7 @@ def _normalize_check(name: str, check: Any) -> dict[str, Any]:
     elif name == "scheduler":
         normalized["stopped"] = bool(check.get("stopped"))
     elif name == "heartbeats":
-        normalized["components"] = sorted(
+        components = [
             {
                 "component": str(item.get("component")),
                 "status": str(item.get("status")),
@@ -39,6 +39,14 @@ def _normalize_check(name: str, check: Any) -> dict[str, Any]:
             }
             for item in check.get("components", [])
             if isinstance(item, dict) and item.get("status") in ("failed", "stopped")
+        ]
+        normalized["components"] = sorted(
+            components,
+            key=lambda item: (
+                item.get("component", ""),
+                item.get("status", ""),
+                item.get("message", ""),
+            ),
         )
 
     return normalized

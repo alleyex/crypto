@@ -27,6 +27,10 @@ def _clear_state() -> None:
 
 
 def _build_fingerprint(check: dict[str, Any]) -> str:
+    # Only include stable fields from latest_order — age_seconds and created_at
+    # change every scheduler tick and would cause the fingerprint to drift,
+    # defeating deduplication and firing an alert on every health check.
+    latest_order = check.get("latest_order") or {}
     return build_fingerprint({
         "status": check.get("status"),
         "reason": check.get("reason"),
@@ -35,7 +39,9 @@ def _build_fingerprint(check: dict[str, Any]) -> str:
         "backend": check.get("backend"),
         "approved_risk_count": check.get("approved_risk_count"),
         "unfilled_order_count": check.get("unfilled_order_count"),
-        "latest_order": check.get("latest_order"),
+        "latest_order_id": latest_order.get("id"),
+        "latest_order_status": latest_order.get("status"),
+        "latest_order_symbol": latest_order.get("symbol"),
     })
 
 

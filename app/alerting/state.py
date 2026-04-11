@@ -18,6 +18,7 @@ TTL elapses.  Pass ``ttl_seconds=0`` to disable expiry entirely.
 """
 import hashlib
 import json
+from datetime import date
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -25,12 +26,20 @@ from typing import Any
 from typing import Optional
 
 
+def _json_safe_default(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return str(value)
+
+
 def build_fingerprint(payload: Any) -> str:
     """Return a stable SHA-256 hex digest of any JSON-serialisable payload.
 
     Uses sort_keys=True so that dict key order never affects the fingerprint.
     """
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=_json_safe_default)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -63,7 +72,10 @@ def write_alert_state(state_file: Path, state: dict[str, Any]) -> None:
     """
     stamped = {**state, "written_at": datetime.now(timezone.utc).isoformat()}
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(stamped, sort_keys=True), encoding="utf-8")
+    state_file.write_text(
+        json.dumps(stamped, sort_keys=True, default=_json_safe_default),
+        encoding="utf-8",
+    )
 
 
 def clear_alert_state(state_file: Path) -> None:

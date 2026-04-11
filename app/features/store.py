@@ -21,7 +21,7 @@ Schema (created by migration 026):
 import json
 from typing import Any, Dict, List, Optional
 
-from app.core.db import DBConnection, fetch_all_as_dicts
+from app.core.db import DBConnection, fetch_all_as_dicts, utc_now_iso
 
 from app.features.compute import (
     FEATURE_SET_VERSION,
@@ -29,11 +29,11 @@ from app.features.compute import (
 )
 
 _UPSERT_SQL = """
-INSERT INTO feature_vectors (symbol, timeframe, open_time, feature_set, features_json)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO feature_vectors (symbol, timeframe, open_time, feature_set, features_json, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (symbol, timeframe, open_time, feature_set)
 DO UPDATE SET features_json = excluded.features_json,
-              created_at    = CURRENT_TIMESTAMP;
+              created_at    = excluded.created_at;
 """
 
 _SELECT_SQL = """
@@ -80,6 +80,7 @@ def materialize_features(
                 int(fv["open_time"]),
                 feature_set,
                 json.dumps(fv, sort_keys=True),
+                utc_now_iso(),
             ),
         )
         count += 1

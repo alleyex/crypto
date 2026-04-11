@@ -102,6 +102,7 @@ def build_crypto_features(
     funding_df: "pd.DataFrame | None" = None,
     orderbook_df: "pd.DataFrame | None" = None,
     aggtrade_df: "pd.DataFrame | None" = None,
+    premium_df: "pd.DataFrame | None" = None,
 ) -> pd.DataFrame:
     """Compute feature set for a candle DataFrame.
 
@@ -128,6 +129,13 @@ def build_crypto_features(
         coverage_ratio.
         Rows with coverage_ratio < 0.3 or trade_count < 30 are discarded.
         When None, aggtrade feature columns are filled with neutral constants.
+    premium_df:
+        Optional per-minute futures premium DataFrame from futures_premium_metrics
+        with columns: timestamp_ms (int), last_funding_rate (float),
+        mark_index_basis_pct (float).
+        When provided, computes funding_rate_z20 (z-score of per-minute funding
+        rate over 480-bar window) and basis_z (z-score of mark/index basis over
+        50 bars).  When None, both columns default to 0.0 (neutral).
 
     Returns
     -------
@@ -480,6 +488,40 @@ def build_crypto_features(
     df["taker_buy_ratio_5"] = df["taker_buy_ratio"].rolling(5, min_periods=3).mean().clip(0.0, 1.0).fillna(0.5)
     df["vwap_dev"]          = _at_vwap
 
+    # ── Futures Premium features (optional) ───────────────────────────────
+    # Neutral defaults: 0.0 (z-scores are mean-zero by definition).
+    # funding_rate_z20: per-minute funding rate z-scored over 480 bars (8 h).
+    # basis_z:          mark/index basis z-scored over 50 bars.
+    df["funding_rate_z20"] = pd.Series(0.0, index=df.index, dtype=np.float32)
+    df["basis_z"]          = pd.Series(0.0, index=df.index, dtype=np.float32)
+
+    if premium_df is not None and len(premium_df) > 0:
+        pm = premium_df[["timestamp_ms", "last_funding_rate", "mark_index_basis_pct"]].copy()
+        pm = pm.sort_values("timestamp_ms").reset_index(drop=True)
+        pm["last_funding_rate"]    = pm["last_funding_rate"].astype(float)
+        pm["mark_index_basis_pct"] = pm["mark_index_basis_pct"].astype(float)
+
+        # As-of join: for each candle, take the most-recent premium row
+        pm_ms       = pm["timestamp_ms"].values.astype(np.int64)
+        pm_fr       = pm["last_funding_rate"].values
+        pm_basis    = pm["mark_index_basis_pct"].values
+        candle_ms_p = df["open_time"].values.astype(np.int64)
+
+        idx_p = np.searchsorted(pm_ms, candle_ms_p, side="right") - 1
+        idx_p = np.clip(idx_p, 0, len(pm_fr) - 1)
+        valid_p = idx_p >= 0
+
+        fr_vals    = np.where(valid_p, pm_fr[idx_p],    np.nan)
+        basis_vals = np.where(valid_p, pm_basis[idx_p], np.nan)
+
+        fr_series    = pd.Series(fr_vals,    index=df.index)
+        basis_series = pd.Series(basis_vals, index=df.index)
+
+        # funding_rate_z20: z-score over 480-bar window (~8 h of 1m data)
+        df["funding_rate_z20"] = rolling_zscore(fr_series,    w=480).fillna(0.0).astype(np.float32)
+        # basis_z: z-score over 50-bar window
+        df["basis_z"]          = rolling_zscore(basis_series, w=50).fillna(0.0).astype(np.float32)
+
     # ── Order book features (optional) ───────────────────────────────────
     if orderbook_df is not None and len(orderbook_df) > 0:
         ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
@@ -515,7 +557,7 @@ def build_crypto_features(
 
 
 def get_feature_columns() -> list:
-    """Return the ordered list of model-input feature columns (V5 — lean set).
+    """Return the ordered list of model-input feature columns (V7 — basis_z added).
 
     V5 methodology (2026-03-30):
       LGBM greedy forward selection over 44 candidates on BTCUSDT 15m.
@@ -525,6 +567,11 @@ def get_feature_columns() -> list:
 
       Removed from V3: everything except the 7 below. Adding more features
       introduces noise that hurts LGBM (and by proxy, PPO observation quality).
+
+    V7 (2026-04-05):
+      Added basis_z: pearson=+0.115, spearman=+0.102 vs 5-bar fwd return.
+      Clear monotone quintile pattern on SOLUSDT 1m (42-day window).
+      funding_rate_z20 excluded: 90% zeros, near-zero correlation.
     """
     return [
         "rsi_14",             # Δ+0.0100 — strongest single signal
@@ -543,4 +590,6 @@ def get_feature_columns() -> list:
         "quote_flow_imb",     # dollar-weighted buy/sell imbalance [-1,1]
         "taker_buy_ratio_5",  # 5-bar smoothed taker ratio [0,1]
         "vwap_dev",           # futures VWAP deviation from close [-0.01,0.01]
+        # V7: futures basis (neutral=0.0 when no premium data)
+        "basis_z",            # mark/index basis z-score (pearson=+0.115 vs fwd_ret_5)
     ]
