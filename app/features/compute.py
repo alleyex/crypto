@@ -41,26 +41,23 @@ Feature set ``v1`` produces a dict with these keys for each candle
 """
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from app.core.settings import MIN_CANDLES
 
 FEATURE_SET_VERSION = "v1"
-
-# Minimum candles needed to compute the full feature vector.
-MIN_CANDLES = 60  # covers MA-50 + a few warmup bars
-
 
 # ---------------------------------------------------------------------------
 # Low-level indicator helpers
 # ---------------------------------------------------------------------------
 
-def _sma(values: List[float], period: int) -> Optional[float]:
+def _sma(values: list[float], period: int) -> float | None:
     if len(values) < period:
         return None
     window = values[-period:]
     return sum(window) / period
 
-
-def _ema_series(values: List[float], period: int) -> List[float]:
+def _ema_series(values: list[float], period: int) -> list[float]:
     """Full EMA series using multiplier k = 2/(period+1)."""
     if not values:
         return []
@@ -70,8 +67,7 @@ def _ema_series(values: List[float], period: int) -> List[float]:
         result.append(v * k + result[-1] * (1.0 - k))
     return result
 
-
-def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
+def _rsi(closes: list[float], period: int = 14) -> float | None:
     """Wilder-smoothed RSI; returns None if insufficient data."""
     if len(closes) < period + 1:
         return None
@@ -89,13 +85,12 @@ def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
         return 100.0
     return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
 
-
 def _macd(
-    closes: List[float],
+    closes: list[float],
     fast: int = 12,
     slow: int = 26,
     signal_period: int = 9,
-) -> Optional[Dict[str, float]]:
+) -> dict[str, float] | None:
     """Returns dict with macd_line, macd_signal, macd_hist or None."""
     if len(closes) < slow + signal_period:
         return None
@@ -110,12 +105,11 @@ def _macd(
     sig = signal_series[-1]
     return {"macd_line": line, "macd_signal": sig, "macd_hist": line - sig}
 
-
 def _bbands(
-    closes: List[float],
+    closes: list[float],
     period: int = 20,
     num_std: float = 2.0,
-) -> Optional[Dict[str, float]]:
+) -> dict[str, float] | None:
     """Returns dict with bb_upper, bb_mid, bb_lower, bb_pct_b or None."""
     if len(closes) < period:
         return None
@@ -130,8 +124,7 @@ def _bbands(
     pct_b = (close - lower) / band_width if band_width != 0 else 0.5
     return {"bb_upper": upper, "bb_mid": mid, "bb_lower": lower, "bb_pct_b": pct_b}
 
-
-def _log_return(closes: List[float], period: int) -> Optional[float]:
+def _log_return(closes: list[float], period: int) -> float | None:
     if len(closes) < period + 1:
         return None
     prev = closes[-(period + 1)]
@@ -140,8 +133,7 @@ def _log_return(closes: List[float], period: int) -> Optional[float]:
         return None
     return math.log(curr / prev)
 
-
-def _volatility(returns: List[Optional[float]], period: int = 20) -> Optional[float]:
+def _volatility(returns: list[float | None], period: int = 20) -> float | None:
     valid = [r for r in returns[-period:] if r is not None]
     if len(valid) < period:
         return None
@@ -149,15 +141,14 @@ def _volatility(returns: List[Optional[float]], period: int = 20) -> Optional[fl
     variance = sum((r - mean) ** 2 for r in valid) / len(valid)
     return math.sqrt(variance)
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def compute_feature_vector(
-    closes: List[float],
+    closes: list[float],
     open_time: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute the v1 feature vector for the *last* candle in ``closes``.
 
     Parameters
@@ -209,7 +200,7 @@ def compute_feature_vector(
 
     # --- volatility ---
     # Compute rolling 1-period returns for each position first
-    returns_series: List[Optional[float]] = []
+    returns_series: list[float | None] = []
     for i in range(1, n):
         prev = closes[i - 1]
         curr = closes[i]
@@ -219,7 +210,7 @@ def compute_feature_vector(
             returns_series.append(None)
     vol20 = _volatility(returns_series, 20)
 
-    def _r(v: Optional[float], decimals: int = 8) -> Optional[float]:
+    def _r(v: float | None, decimals: int = 8) -> float | None:
         return round(v, decimals) if v is not None else None
 
     return {
@@ -244,10 +235,9 @@ def compute_feature_vector(
         "feature_set": FEATURE_SET_VERSION,
     }
 
-
 def compute_features_for_candles(
-    candles: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    candles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Compute feature vectors for every candle in the list.
 
     Parameters

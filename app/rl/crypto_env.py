@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from app.features.crypto_features import get_feature_columns
 
@@ -60,7 +60,6 @@ OBS_DIM    = N_FEAT + 3 + N_RECENT_RETS  # features + position + upnl + bars_hel
 
 # Map discrete action → signed position
 _ACTION_TO_POS = {0: 0, 1: 1, 2: -1}
-
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -90,12 +89,12 @@ class CryptoTradingEnv(gym.Env):
         df: pd.DataFrame,
         episode_length: int = DEFAULT_EP_LEN,
         deterministic: bool = False,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         frame_stack: int = 1,
         holding_bonus_rate: float = 0.0,
         decision_interval: int = 1,
-        reward_horizon: Optional[int] = None,
-        action_interval: Optional[int] = None,
+        reward_horizon: int | None = None,
+        action_interval: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -170,9 +169,9 @@ class CryptoTradingEnv(gym.Env):
     def reset(
         self,
         *,
-        seed: Optional[int] = None,
-        options: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
@@ -198,7 +197,7 @@ class CryptoTradingEnv(gym.Env):
 
     def step(
         self, action: int
-    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         idx = self._start_idx + self._step_idx
         decision_bar = (self._bars_since_decision % self._decision_interval) == 0
 
@@ -270,7 +269,6 @@ class CryptoTradingEnv(gym.Env):
         self._frame_buffer.append(raw_obs)
         return np.concatenate(list(self._frame_buffer))
 
-
 # ---------------------------------------------------------------------------
 # Factory: load from DB and build env
 # ---------------------------------------------------------------------------
@@ -280,7 +278,7 @@ def make_env(
     timeframe: str = "1m",
     episode_length: int = DEFAULT_EP_LEN,
     deterministic: bool = False,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     frame_stack: int = 1,
 ) -> CryptoTradingEnv:
     """Convenience factory: load candles from DB, build features, return env."""

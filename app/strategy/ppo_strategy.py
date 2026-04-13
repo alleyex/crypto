@@ -24,7 +24,7 @@ import json
 import math
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -62,11 +62,10 @@ INSERT INTO signals (
 def _blocked_reason_for_decision(
     current_position: int,
     target_position: int,
-) -> Optional[str]:
+) -> str | None:
     if target_position == current_position:
         return "same_position"
     return None
-
 
 # ---------------------------------------------------------------------------
 # State persistence
@@ -75,7 +74,6 @@ def _blocked_reason_for_decision(
 def _state_path(symbol: str, timeframe: str) -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return STATE_DIR / f"{symbol.lower()}_{timeframe.lower()}.json"
-
 
 def _load_state(symbol: str, timeframe: str) -> dict:
     p = _state_path(symbol, timeframe)
@@ -86,12 +84,10 @@ def _load_state(symbol: str, timeframe: str) -> dict:
             pass
     return {"position": 0, "entry_price": None, "bars_held": 0}
 
-
 def _save_state(symbol: str, timeframe: str, state: dict) -> None:
     _state_path(symbol, timeframe).write_text(json.dumps(state))
 
-
-def get_runtime_target_position(symbol: str, timeframe: str = "1m") -> Optional[int]:
+def get_runtime_target_position(symbol: str, timeframe: str = "1m") -> int | None:
     """Return the latest PPO target position from runtime state.
 
     This is used by downstream risk/execution in broker-backed futures mode so
@@ -111,17 +107,15 @@ def get_runtime_target_position(symbol: str, timeframe: str = "1m") -> Optional[
         return int(position)
     return None
 
-
 # ---------------------------------------------------------------------------
 # Model loader (cached per process, invalidated by model file mtime)
 # ---------------------------------------------------------------------------
 
-_model_cache: Dict[str, Any] = {}
-_model_cache_mtime: Dict[str, float] = {}
-_model_meta_cache: Dict[str, Dict[str, Any]] = {}
+_model_cache: dict[str, Any] = {}
+_model_cache_mtime: dict[str, float] = {}
+_model_meta_cache: dict[str, dict[str, Any]] = {}
 
-
-def _load_model_meta(symbol: str, timeframe: str) -> Dict[str, Any]:
+def _load_model_meta(symbol: str, timeframe: str) -> dict[str, Any]:
     """Load observation metadata saved alongside the model.
 
     Falls back to legacy defaults (no recent_rets) when no meta file exists,
@@ -143,7 +137,6 @@ def _load_model_meta(symbol: str, timeframe: str) -> Dict[str, Any]:
         "action_interval": 1,
     }
 
-
 def _load_model(symbol: str, timeframe: str = "1m"):
     key = f"{symbol}_{timeframe}"
     model_path = MODELS_DIR / f"ppo_{symbol}_{timeframe}.zip"
@@ -163,13 +156,11 @@ def _load_model(symbol: str, timeframe: str = "1m"):
         _model_meta_cache[key] = _load_model_meta(symbol, timeframe)
     return _model_cache[key]
 
-
-def _get_model_meta(symbol: str, timeframe: str) -> Dict[str, Any]:
+def _get_model_meta(symbol: str, timeframe: str) -> dict[str, Any]:
     key = f"{symbol}_{timeframe}"
     if key not in _model_meta_cache:
         _model_meta_cache[key] = _load_model_meta(symbol, timeframe)
     return _model_meta_cache[key]
-
 
 # ---------------------------------------------------------------------------
 # Observation builder
@@ -181,8 +172,8 @@ def _build_observation(
     timeframe: str,
     state: dict,
     episode_length: int = 1440,
-    meta: Optional[Dict[str, Any]] = None,
-) -> Optional[tuple[np.ndarray, float]]:
+    meta: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, float] | None:
     """Return (observation, current_close) using obs structure from model meta.
 
     The meta dict controls which feature columns and how many recent log-returns
@@ -307,7 +298,6 @@ def _build_observation(
 
     return np.concatenate(parts), current_close
 
-
 # ---------------------------------------------------------------------------
 # Current position from DB
 # ---------------------------------------------------------------------------
@@ -352,8 +342,7 @@ def _get_db_position(connection: DBConnection, symbol: str) -> int:
     except Exception:
         return 0
 
-
-def _get_db_entry_price(connection: DBConnection, symbol: str) -> Optional[float]:
+def _get_db_entry_price(connection: DBConnection, symbol: str) -> float | None:
     try:
         row = connection.execute(
             "SELECT avg_price FROM positions WHERE symbol = ?",
@@ -366,7 +355,6 @@ def _get_db_entry_price(connection: DBConnection, symbol: str) -> Optional[float
     except Exception:
         return None
 
-
 # ---------------------------------------------------------------------------
 # Main generate_signal function
 # ---------------------------------------------------------------------------
@@ -375,7 +363,7 @@ def generate_signal(
     connection: DBConnection,
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Generate a PPO-based signal and persist it to the signals table.
 
     Returns the signal dict (same shape as other strategies), or None
@@ -448,7 +436,7 @@ def generate_signal(
 
     cfg, _ = get_risk_config(connection, "ppo")
     stop_loss_pct = float(cfg.stop_loss_pct or 0.0)
-    risk_override_reason: Optional[str] = None
+    risk_override_reason: str | None = None
     entry_price = state.get("entry_price")
     if (
         stop_loss_pct > 0

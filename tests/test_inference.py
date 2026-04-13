@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.core.migrations import run_migrations
 from app.features.compute import MIN_CANDLES, compute_features_for_candles
 from app.features.store import materialize_features
 from app.inference.service import (
@@ -19,6 +18,7 @@ from app.inference.service import (
 )
 from app.registry.registry_service import promote_model, register_model
 from app.training.dataset import FEATURE_NAMES
+from conftest import make_conn as _make_conn
 
 
 # ---------------------------------------------------------------------------
@@ -62,13 +62,6 @@ def _make_candles(closes: List[float]) -> List[Dict]:
     ]
 
 
-def _make_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return conn
-
-
 def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     for c in candles:
         conn.execute(
@@ -81,34 +74,7 @@ def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     conn.commit()
 
 
-class _PersistentConn:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-    def executemany(self, sql, seq_of_params):
-        return self._conn.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        pass
-
-    def really_close(self):
-        self._conn.close()
-
-
-def _make_api_conn() -> _PersistentConn:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return _PersistentConn(conn)
+from tests.conftest import _PersistentConn, _make_api_conn
 
 
 def _seed_champion(conn) -> int:
@@ -349,7 +315,10 @@ def test_inference_status_fields():
 def _inference_client(monkeypatch) -> tuple:
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     return TestClient(app), pconn
 
 

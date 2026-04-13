@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.core.migrations import run_migrations
 from app.features.compute import compute_features_for_candles, MIN_CANDLES
 from app.features.store import materialize_features
 from app.training.dataset import (
@@ -32,6 +31,7 @@ from app.training.job_service import (
     update_job,
 )
 from app.system.retention import purge_completed_job_queue
+from conftest import make_conn as _make_conn
 
 
 # ---------------------------------------------------------------------------
@@ -54,13 +54,6 @@ def _make_candles(closes: List[float]) -> List[Dict]:
     ]
 
 
-def _make_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return conn
-
-
 def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     for c in candles:
         conn.execute(
@@ -73,34 +66,7 @@ def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     conn.commit()
 
 
-class _PersistentConn:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-    def executemany(self, sql, seq_of_params):
-        return self._conn.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        pass
-
-    def really_close(self):
-        self._conn.close()
-
-
-def _make_api_conn() -> _PersistentConn:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return _PersistentConn(conn)
+from tests.conftest import _PersistentConn, _make_api_conn
 
 
 def _seeded_vectors(n: int = MIN_CANDLES + 50) -> List[Dict]:
@@ -425,13 +391,16 @@ def _training_client(monkeypatch, closes):
     candles = _make_candles(closes)
     _insert_candles(pconn._conn, candles)
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     return TestClient(app), pconn
 
 
 def test_api_list_training_jobs_empty(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
     resp = client.get("/training/jobs")
     assert resp.status_code == 200
@@ -443,6 +412,7 @@ def test_api_list_training_jobs_empty(monkeypatch):
 def test_api_get_training_job_not_found(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
     resp = client.get("/training/jobs/9999")
     assert resp.status_code == 404
@@ -451,6 +421,7 @@ def test_api_get_training_job_not_found(monkeypatch):
 def test_api_run_training_job_fails_without_features(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
     resp = client.post("/training/jobs", json={"symbol": "BTCUSDT", "timeframe": "1m"})
     assert resp.status_code == 200
@@ -523,6 +494,7 @@ def test_api_training_job_dataset_stats_present(monkeypatch):
 def test_api_training_job_list_filter_by_status(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
 
     # Run a job that will fail (no features)

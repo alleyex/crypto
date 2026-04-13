@@ -1,9 +1,9 @@
 import os
 import time
-from typing import Optional
 
 import requests
 
+from app.data.retry_helpers import fetch_with_retry
 
 BASE_URL = "https://api.binance.com/api/v3/klines"
 FUTURES_BASE_URL = "https://fapi.binance.com/fapi/v1/klines"
@@ -15,7 +15,6 @@ DEFAULT_FAKE_CLOSES = (10.0, 11.0, 12.0, 13.0, 14.0)
 _DEFAULT_TIMEOUT = 10
 _DEFAULT_RETRIES = 3
 _DEFAULT_BACKOFF = 1.0
-
 
 def _build_fake_klines(
     symbol: str = "BTCUSDT",
@@ -58,7 +57,6 @@ def _build_fake_klines(
         )
     return klines
 
-
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, requests.exceptions.ConnectionError):
         return True
@@ -69,24 +67,20 @@ def _is_retryable(exc: Exception) -> bool:
         return status == 429 or status >= 500
     return False
 
-
 def _use_testnet() -> bool:
     return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
-
 
 def _book_ticker_url() -> str:
     return TESTNET_BOOK_TICKER_URL if _use_testnet() else BOOK_TICKER_URL
 
-
 def _futures_klines_url() -> str:
     return FUTURES_TESTNET_BASE_URL if _use_testnet() else FUTURES_BASE_URL
-
 
 def fetch_klines(
     symbol: str = "BTCUSDT",
     interval: str = "1m",
     limit: int = 5,
-    start_ms: Optional[int] = None,
+    start_ms: int | None = None,
 ) -> list[list]:
     if os.getenv("CRYPTO_USE_FAKE_KLINES", "").strip().lower() in ("1", "true", "yes", "on"):
         return _build_fake_klines(symbol=symbol, interval=interval, limit=limit)
@@ -98,29 +92,13 @@ def fetch_klines(
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
     max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
     backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
-
-    last_exc: Exception = RuntimeError("fetch_klines: no attempts made")
-    for attempt in range(max_retries + 1):
-        try:
-            response = requests.get(BASE_URL, params=params, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_retries and _is_retryable(exc):
-                wait = backoff * (2 ** attempt)
-                time.sleep(wait)
-                continue
-            raise
-
-    raise last_exc
-
+    return fetch_with_retry(BASE_URL, params=params, timeout=timeout, retries=max_retries, backoff=backoff, is_retryable=_is_retryable).json()
 
 def fetch_futures_klines(
     symbol: str = "BTCUSDT",
     interval: str = "1m",
     limit: int = 5,
-    start_ms: Optional[int] = None,
+    start_ms: int | None = None,
 ) -> list[list]:
     if os.getenv("CRYPTO_USE_FAKE_KLINES", "").strip().lower() in ("1", "true", "yes", "on"):
         return _build_fake_klines(symbol=symbol, interval=interval, limit=limit)
@@ -132,48 +110,18 @@ def fetch_futures_klines(
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
     max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
     backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
-
-    last_exc: Exception = RuntimeError("fetch_futures_klines: no attempts made")
-    for attempt in range(max_retries + 1):
-        try:
-            response = requests.get(_futures_klines_url(), params=params, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_retries and _is_retryable(exc):
-                wait = backoff * (2 ** attempt)
-                time.sleep(wait)
-                continue
-            raise
-
-    raise last_exc
-
+    return fetch_with_retry(_futures_klines_url(), params=params, timeout=timeout, retries=max_retries, backoff=backoff, is_retryable=_is_retryable).json()
 
 def fetch_book_ticker(symbol: str = "BTCUSDT") -> dict:
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
     max_retries = int(os.getenv("CRYPTO_BINANCE_RETRY_COUNT", str(_DEFAULT_RETRIES)))
     backoff = float(os.getenv("CRYPTO_BINANCE_RETRY_BACKOFF_SECONDS", str(_DEFAULT_BACKOFF)))
 
-    last_exc: Exception = RuntimeError("fetch_book_ticker: no attempts made")
-    for attempt in range(max_retries + 1):
-        try:
-            response = requests.get(_book_ticker_url(), params={"symbol": symbol}, timeout=timeout)
-            response.raise_for_status()
-            payload = response.json()
-            return {
-                "symbol": payload.get("symbol", symbol),
-                "bid_price": float(payload["bidPrice"]),
-                "bid_qty": float(payload["bidQty"]),
-                "ask_price": float(payload["askPrice"]),
-                "ask_qty": float(payload["askQty"]),
-            }
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_retries and _is_retryable(exc):
-                wait = backoff * (2 ** attempt)
-                time.sleep(wait)
-                continue
-            raise
-
-    raise last_exc
+    payload = fetch_with_retry(_book_ticker_url(), params={"symbol": symbol}, timeout=timeout, retries=max_retries, backoff=backoff, is_retryable=_is_retryable).json()
+    return {
+        "symbol": payload.get("symbol", symbol),
+        "bid_price": float(payload["bidPrice"]),
+        "bid_qty": float(payload["bidQty"]),
+        "ask_price": float(payload["askPrice"]),
+        "ask_qty": float(payload["askQty"]),
+    }

@@ -27,7 +27,7 @@ Schema (created by migration 027):
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid, utc_now_iso
 
@@ -48,13 +48,12 @@ SET status       = ?,
 WHERE id = ?;
 """
 
-
 def create_job(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
     feature_set: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
 ) -> int:
     """Insert a new training job and return its id."""
     job_id = insert_and_get_rowid(
@@ -71,17 +70,16 @@ def create_job(
     connection.commit()
     return int(job_id)
 
-
 def update_job(
     connection: DBConnection,
     job_id: int,
     status: str,
-    dataset: Optional[Dict[str, Any]] = None,
-    metrics: Optional[Dict[str, Any]] = None,
-    model: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
-    started_at: Optional[str] = None,
-    finished_at: Optional[str] = None,
+    dataset: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
+    model: dict[str, Any] | None = None,
+    error: str | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
 ) -> None:
     """Update a training job's status, metrics, and model."""
     connection.execute(
@@ -99,11 +97,10 @@ def update_job(
     )
     connection.commit()
 
-
 def get_job(
     connection: DBConnection,
     job_id: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return a single training job by id, or None."""
     rows = fetch_all_as_dicts(
         connection,
@@ -114,17 +111,16 @@ def get_job(
         return None
     return _deserialise(rows[0])
 
-
 def list_jobs(
     connection: DBConnection,
-    symbol: Optional[str] = None,
-    status: Optional[str] = None,
+    symbol: str | None = None,
+    status: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return paginated training jobs, newest first."""
-    clauses: List[str] = []
-    params: List[Any] = []
+    clauses: list[str] = []
+    params: list[Any] = []
     if symbol:
         clauses.append("symbol = ?")
         params.append(symbol)
@@ -150,8 +146,7 @@ def list_jobs(
         "jobs": [_deserialise(r) for r in rows],
     }
 
-
-def _deserialise(row: Dict[str, Any]) -> Dict[str, Any]:
+def _deserialise(row: dict[str, Any]) -> dict[str, Any]:
     """Parse JSON fields in a training_jobs row."""
     result = dict(row)
     for field in ("params_json", "dataset_json", "metrics_json", "model_json"):

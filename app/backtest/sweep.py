@@ -1,26 +1,24 @@
 """Parameter sweep (grid search) over backtest parameters."""
 
 import itertools
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.backtest.runner import run_backtest
-
 
 _SWEEP_PARAMS = frozenset(
     {"order_qty", "max_position_qty", "cooldown_seconds", "max_daily_loss"}
 )
 
-
 def run_parameter_sweep(
     symbol: str,
     strategy_name: str,
-    candles: List[Dict],
-    param_grid: Dict[str, List[Any]],
+    candles: list[dict],
+    param_grid: dict[str, list[Any]],
     sort_by: str = "sharpe_ratio",
     initial_capital: float = 10000.0,
     timeframe: str = "1m",
     fill_on: str = "close",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Run run_backtest() for every combination in param_grid.
 
     Parameters
@@ -28,7 +26,7 @@ def run_parameter_sweep(
     symbol, strategy_name, candles:
         Passed directly to run_backtest().
     param_grid:
-        Dict mapping parameter names to lists of values to try.
+        dict mapping parameter names to lists of values to try.
         Supported keys: order_qty, max_position_qty, cooldown_seconds,
         max_daily_loss.
         Example: {"order_qty": [0.001, 0.002], "max_position_qty": [0.002, 0.004]}
@@ -41,7 +39,7 @@ def run_parameter_sweep(
 
     Returns
     -------
-    List of dicts, each containing "params" (the combination tried) and
+    list of dicts, each containing "params" (the combination tried) and
     "metrics" (the backtest metrics), sorted best-first by sort_by.
     None metrics values are sorted last.
     """
@@ -53,7 +51,7 @@ def run_parameter_sweep(
     value_lists = [param_grid[k] for k in keys]
     combinations = list(itertools.product(*value_lists))
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for combo in combinations:
         params = dict(zip(keys, combo))
         bt = run_backtest(

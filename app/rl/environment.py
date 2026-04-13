@@ -28,16 +28,15 @@ to 0.0 at construction time.
 """
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 class TradingEnv:
     """Tabular trading environment driven by pre-computed feature rows."""
 
     def __init__(
         self,
-        feature_rows: List[List[float]],
-        closes: List[float],
+        feature_rows: list[list[float]],
+        closes: list[float],
         fee_rate: float = 0.0,
     ) -> None:
         if len(feature_rows) != len(closes):
@@ -57,13 +56,13 @@ class TradingEnv:
     # Gym-like interface
     # ------------------------------------------------------------------
 
-    def reset(self) -> List[float]:
+    def reset(self) -> list[float]:
         self._t = 0
         self._done = False
         self._position = 0
         return self._rows[0]
 
-    def step(self, action: int) -> Tuple[Optional[List[float]], float, bool]:
+    def step(self, action: int) -> tuple[list[float] | None, float, bool]:
         """Take one step.
 
         Returns
@@ -107,12 +106,11 @@ class TradingEnv:
     def n_features(self) -> int:
         return len(self._rows[0]) if self._rows else 0
 
-
 # ---------------------------------------------------------------------------
 # Utility: compute cumulative return + Sharpe from a list of per-step rewards
 # ---------------------------------------------------------------------------
 
-def episode_metrics(rewards: List[float], actions: List[int]) -> Dict[str, Any]:
+def episode_metrics(rewards: list[float], actions: list[int]) -> dict[str, Any]:
     """Summarise one episode's rewards and actions."""
     n = len(rewards)
     if n == 0:
@@ -144,15 +142,13 @@ def episode_metrics(rewards: List[float], actions: List[int]) -> Dict[str, Any]:
         "mean_reward": round(sum(rewards) / n, 8),
     }
 
-
-def buy_and_hold_return(closes: List[float]) -> float:
+def buy_and_hold_return(closes: list[float]) -> float:
     """Log-return of a pure buy-and-hold strategy over the close series."""
     if len(closes) < 2 or closes[0] <= 0:
         return 0.0
     return math.log(closes[-1] / closes[0])
 
-
-def buy_and_hold_return_after_fees(closes: List[float], fee_rate: float = 0.0) -> float:
+def buy_and_hold_return_after_fees(closes: list[float], fee_rate: float = 0.0) -> float:
     """Log-return of buy-and-hold with one entry fee and one exit fee."""
     gross = buy_and_hold_return(closes)
     if fee_rate <= 0 or len(closes) < 2:

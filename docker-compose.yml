@@ -98,7 +98,7 @@ services:
     <<: *base-service
     profiles: ["split-workers"]
     # Drains market_data jobs enqueued by the scheduler (queue_dispatch mode).
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_DATA_INTERVAL:-60} --mode market-data-only --queue-drain"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_DATA_INTERVAL:-60} --mode market-data-only --orchestration queue_drain"
     environment:
       <<: [*db-env, *trading-env, *alert-env]
       CRYPTO_DATA_INTERVAL: ${CRYPTO_DATA_INTERVAL:-60}
@@ -108,7 +108,7 @@ services:
     <<: *base-service
     profiles: ["split-workers"]
     # Drains strategy jobs enqueued by the scheduler (queue_dispatch mode).
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --queue-drain --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_STRATEGY_INTERVAL:-60} --mode strategy-only --orchestration queue_drain --strategy ${CRYPTO_STRATEGY_NAME:-ppo}"
     environment:
       <<: [*db-env, *trading-env, *alert-env]
       CRYPTO_STRATEGY_INTERVAL: ${CRYPTO_STRATEGY_INTERVAL:-60}
@@ -119,7 +119,7 @@ services:
     <<: *base-service
     profiles: ["split-workers"]
     # Drains risk jobs enqueued by the scheduler (queue_dispatch mode).
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_RISK_INTERVAL:-60} --mode risk-only --queue-drain"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_RISK_INTERVAL:-60} --mode risk-only --orchestration queue_drain"
     environment:
       <<: [*db-env, *trading-env, *alert-env]
       CRYPTO_RISK_INTERVAL: ${CRYPTO_RISK_INTERVAL:-60}
@@ -129,7 +129,7 @@ services:
     <<: *base-service
     profiles: ["split-workers"]
     # Drains execution jobs enqueued by the scheduler (queue_dispatch mode).
-    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_EXECUTION_INTERVAL:-60} --mode execution-only --queue-drain"
+    command: sh -c "python scripts/run_scheduler.py --interval ${CRYPTO_EXECUTION_INTERVAL:-60} --mode execution-only --orchestration queue_drain"
     environment:
       <<: [*db-env, *trading-env, *binance-env, *alert-env]
       CRYPTO_EXECUTION_INTERVAL: ${CRYPTO_EXECUTION_INTERVAL:-60}
@@ -137,7 +137,7 @@ services:
 
   training-worker:
     <<: *base-service
-    command: sh -c "rm -f runtime/scheduler_training_only.pid && python scripts/run_scheduler.py --interval ${CRYPTO_TRAINING_INTERVAL:-60} --mode training-only --queue-drain"
+    command: sh -c "rm -f runtime/scheduler_training_only.pid && python scripts/run_scheduler.py --interval ${CRYPTO_TRAINING_INTERVAL:-60} --mode training-only --orchestration queue_drain"
     depends_on:
       api:
         condition: service_healthy

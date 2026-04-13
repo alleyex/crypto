@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.audit.service import insert_event
 from app.core.db import DBConnection
@@ -6,10 +6,8 @@ from app.core.db import insert_and_get_rowid
 from app.data.candles_service import get_latest_close
 from app.execution.adapter import get_execution_adapter
 from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
-from app.portfolio.pnl_service import ensure_table as ensure_pnl_table
 from app.portfolio.pnl_service import update_pnl_snapshots
 from app.portfolio.positions_service import update_positions
-
 
 _INSERT_RECONCILE_FILL_SQL = """
 INSERT INTO fills (order_id, symbol, side, qty, price)
@@ -21,8 +19,7 @@ INSERT INTO fills (order_id, symbol, side, qty, price, commission, commission_as
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
-
-def scan_orphan_orders(connection: DBConnection) -> List[Dict[str, Any]]:
+def scan_orphan_orders(connection: DBConnection) -> list[dict[str, Any]]:
     """Return orders that have no matching fill and are not in a terminal state.
 
     Returns an empty list if the orders or fills tables do not yet exist.
@@ -56,12 +53,11 @@ def scan_orphan_orders(connection: DBConnection) -> List[Dict[str, Any]]:
         for row in rows
     ]
 
-
 def reconcile_orphan_orders(
     connection: DBConnection,
     is_live: bool = False,
-    broker_client: Optional[Any] = None,
-) -> List[Dict[str, Any]]:
+    broker_client: Any | None = None,
+) -> list[dict[str, Any]]:
     """Reconcile orphan orders by creating missing fills or flagging for manual review.
 
     For non-live backends (paper, simulated): synthesize a fill at the current
@@ -79,7 +75,7 @@ def reconcile_orphan_orders(
     if not orphans:
         return []
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     any_filled = False
 
     for orphan in orphans:
@@ -228,12 +224,11 @@ def reconcile_orphan_orders(
 
     return results
 
-
 def run_execution_job(
     connection: DBConnection,
-    risk_event_ids: Optional[list[int]] = None,
-    symbol_names: Optional[list[str]] = None,
-) -> Dict[str, Any]:
+    risk_event_ids: list[int] | None = None,
+    symbol_names: list[str] | None = None,
+) -> dict[str, Any]:
     execution_adapter = get_execution_adapter()
     execution_adapter.ensure_tables(connection)
     if risk_event_ids is not None:
@@ -254,14 +249,13 @@ def run_execution_job(
                 paper_execute_steps = [{"step": "paper_execute", **latest_execution_result}]
 
     updated_positions = update_positions(connection)
-    ensure_pnl_table(connection)
     snapshot_count = update_pnl_snapshots(connection)
 
     is_live = execution_adapter.is_live
     broker_client = getattr(execution_adapter, "_broker", None)
     reconcile_results = reconcile_orphan_orders(connection, is_live=is_live, broker_client=broker_client)
 
-    orphan_step: Dict[str, Any] = {
+    orphan_step: dict[str, Any] = {
         "step": "reconcile_orphan_orders",
         "reconciled_count": len(reconcile_results),
     }

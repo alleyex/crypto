@@ -14,67 +14,48 @@ from __future__ import annotations
 
 import json
 import os
-import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
-
-import requests
 
 from app.core.db import DBConnection
 from app.core.settings import FUTURES_AGGTRADE_SYMBOLS
+from app.core.settings import WS_RESTART_SECONDS as _WS_RESTART_SECONDS
+from app.data.binance_config import futures_rest_base_url
+from app.data.binance_config import futures_ws_base_url
+from app.data.collection_state import CollectionState
+from app.data.futures_collector_base import _BaseFuturesWSCollector
+from app.data.retry_helpers import fetch_with_retry
 
-_FUTURES_AGGTRADES_URL = "https://fapi.binance.com/fapi/v1/aggTrades"
-_FUTURES_TESTNET_AGGTRADES_URL = "https://testnet.binancefuture.com/fapi/v1/aggTrades"
-_FUTURES_WS_URL = "wss://fstream.binance.com/stream?streams={streams}"
-_FUTURES_TESTNET_WS_URL = "wss://stream.binancefuture.com/stream?streams={streams}"
 _AGGTRADE_LIMIT = 1000
 _TIMEOUT = 8
 _RETRIES = 2
 _BACKOFF = 1.0
 _WS_STALE_SECONDS = 75
-_WS_RESTART_SECONDS = 15
 
 FUTURES_AGGTRADE_PAUSED_FILE = Path("runtime/futures_aggtrade.paused")
-
+_state = CollectionState(FUTURES_AGGTRADE_PAUSED_FILE)
 
 def configured_futures_aggtrade_symbols() -> list[str]:
     return list(FUTURES_AGGTRADE_SYMBOLS)
 
-
 def is_futures_aggtrade_collection_enabled() -> bool:
-    return not FUTURES_AGGTRADE_PAUSED_FILE.exists()
-
+    return _state.is_enabled()
 
 def enable_futures_aggtrade_collection() -> None:
-    if FUTURES_AGGTRADE_PAUSED_FILE.exists():
-        FUTURES_AGGTRADE_PAUSED_FILE.unlink()
-
+    _state.enable()
 
 def disable_futures_aggtrade_collection() -> None:
-    FUTURES_AGGTRADE_PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FUTURES_AGGTRADE_PAUSED_FILE.write_text("paused\n", encoding="utf-8")
-
-
-def _is_testnet() -> bool:
-    return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
-
+    _state.disable()
 
 def _aggtrades_url() -> str:
-    return _FUTURES_TESTNET_AGGTRADES_URL if _is_testnet() else _FUTURES_AGGTRADES_URL
-
+    return f"{futures_rest_base_url()}/fapi/v1/aggTrades"
 
 def _ws_url(symbols: list[str]) -> str:
     streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in symbols)
-    base = _FUTURES_TESTNET_WS_URL if _is_testnet() else _FUTURES_WS_URL
-    return base.format(streams=streams)
+    return f"{futures_ws_base_url()}/stream?streams={streams}"
 
-
-def _new_bucket(symbol: str, minute_ms: int, event_ms: int, aggtrade_id: int, price: float, qty: float, buyer_is_maker: bool) -> Dict[str, Any]:
+def _new_bucket(symbol: str, minute_ms: int, event_ms: int, aggtrade_id: int, price: float, qty: float, buyer_is_maker: bool) -> dict[str, Any]:
     quote_qty = price * qty
     taker_buy_qty = 0.0 if buyer_is_maker else qty
     taker_sell_qty = qty if buyer_is_maker else 0.0
@@ -106,8 +87,7 @@ def _new_bucket(symbol: str, minute_ms: int, event_ms: int, aggtrade_id: int, pr
         "active_second_marks": {event_ms // 1000},
     }
 
-
-def _update_bucket(bucket: Dict[str, Any], event_ms: int, aggtrade_id: int, price: float, qty: float, buyer_is_maker: bool) -> None:
+def _update_bucket(bucket: dict[str, Any], event_ms: int, aggtrade_id: int, price: float, qty: float, buyer_is_maker: bool) -> None:
     quote_qty = price * qty
     bucket["trade_count"] += 1
     bucket["qty_total"] += qty
@@ -131,8 +111,7 @@ def _update_bucket(bucket: Dict[str, Any], event_ms: int, aggtrade_id: int, pric
     bucket["last_event_ms"] = event_ms
     bucket.setdefault("active_second_marks", set()).add(event_ms // 1000)
 
-
-def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+def _snapshot_from_bucket(bucket: dict[str, Any], *, source: str) -> dict[str, Any]:
     trade_count = int(bucket["trade_count"])
     qty_total = float(bucket["qty_total"])
     quote_total = float(bucket["quote_total"])
@@ -167,8 +146,7 @@ def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, A
         "source": source,
     }
 
-
-def _snapshot_from_rest_rows(symbol: str, rows: list[dict[str, Any]], minute_ms: int) -> Optional[Dict[str, Any]]:
+def _snapshot_from_rest_rows(symbol: str, rows: list[dict[str, Any]], minute_ms: int) -> dict[str, Any] | None:
     filtered = [row for row in rows if int(row.get("T") or 0) // 60_000 * 60_000 == minute_ms]
     if not filtered:
         return None
@@ -189,83 +167,38 @@ def _snapshot_from_rest_rows(symbol: str, rows: list[dict[str, Any]], minute_ms:
         )
     return _snapshot_from_bucket(bucket, source="rest")
 
+class _FuturesAggTradeCollector(_BaseFuturesWSCollector):
+    _thread_name = "futures-aggtrade-ws"
 
-class _FuturesAggTradeCollector:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-        self._symbols: tuple[str, ...] = ()
-        self._buckets: dict[str, Dict[str, Any]] = {}
-        self._last_error: Optional[str] = None
-        self._ws_available = True
+        super().__init__()
+        self._buckets: dict[str, dict[str, Any]] = {}
 
-    def ensure_started(self, symbols: list[str]) -> bool:
-        symbols_key = tuple(sorted(set(symbols)))
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive() and self._symbols == symbols_key:
-                return self._ws_available
-            self._symbols = symbols_key
-            self._thread = threading.Thread(
-                target=self._run_forever,
-                args=(list(symbols_key),),
-                name="futures-aggtrade-ws",
-                daemon=True,
-            )
-            self._thread.start()
-            return self._ws_available
+    def _get_ws_url(self, symbols: tuple[str, ...]) -> str:
+        return _ws_url(list(symbols))
 
-    def _run_forever(self, symbols: list[str]) -> None:
-        try:
-            from websocket import WebSocketApp
-        except Exception as exc:
-            with self._lock:
-                self._last_error = f"websocket unavailable: {exc}"
-                self._ws_available = False
+    def _handle_message(self, message: str, symbols: tuple[str, ...]) -> None:
+        payload = json.loads(message)
+        data = payload.get("data", payload)
+        symbol = str(data.get("s") or "").upper()
+        if not symbol:
             return
+        event_ms = int(data.get("T") or data.get("E") or int(datetime.now(timezone.utc).timestamp() * 1000))
+        minute_ms = (event_ms // 60_000) * 60_000
+        aggtrade_id = int(data.get("a") or 0)
+        price = float(data.get("p") or 0.0)
+        qty = float(data.get("q") or 0.0)
+        buyer_is_maker = bool(data.get("m"))
+        if price <= 0 or qty <= 0:
+            return
+        with self._lock:
+            prev = self._buckets.get(symbol)
+            if prev is None or int(prev["timestamp_ms"]) != minute_ms:
+                self._buckets[symbol] = _new_bucket(symbol, minute_ms, event_ms, aggtrade_id, price, qty, buyer_is_maker)
+            else:
+                _update_bucket(prev, event_ms, aggtrade_id, price, qty, buyer_is_maker)
 
-        def on_message(_: Any, message: str) -> None:
-            try:
-                payload = json.loads(message)
-                data = payload.get("data", payload)
-                symbol = str(data.get("s") or "").upper()
-                if not symbol:
-                    return
-                event_ms = int(data.get("T") or data.get("E") or int(datetime.now(timezone.utc).timestamp() * 1000))
-                minute_ms = (event_ms // 60_000) * 60_000
-                aggtrade_id = int(data.get("a") or 0)
-                price = float(data.get("p") or 0.0)
-                qty = float(data.get("q") or 0.0)
-                buyer_is_maker = bool(data.get("m"))
-                if price <= 0 or qty <= 0:
-                    return
-                with self._lock:
-                    prev = self._buckets.get(symbol)
-                    if prev is None or int(prev["timestamp_ms"]) != minute_ms:
-                        self._buckets[symbol] = _new_bucket(symbol, minute_ms, event_ms, aggtrade_id, price, qty, buyer_is_maker)
-                    else:
-                        _update_bucket(prev, event_ms, aggtrade_id, price, qty, buyer_is_maker)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"on_message error: {exc}"
-
-        def on_error(_: Any, error: Any) -> None:
-            with self._lock:
-                self._last_error = str(error)
-
-        while True:
-            try:
-                ws = WebSocketApp(_ws_url(symbols), on_message=on_message, on_error=on_error)
-                with self._lock:
-                    self._ws_available = True
-                    self._last_error = None
-                ws.run_forever(ping_interval=20, ping_timeout=10)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"ws loop error: {exc}"
-                    self._ws_available = False
-            time.sleep(_WS_RESTART_SECONDS)
-
-    def get_minute_snapshot(self, symbol: str, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_minute_snapshot(self, symbol: str, now_ms: int | None = None) -> dict[str, Any] | None:
         now_ms = int(now_ms or datetime.now(timezone.utc).timestamp() * 1000)
         minute_ms = (now_ms // 60_000) * 60_000
         with self._lock:
@@ -301,40 +234,24 @@ class _FuturesAggTradeCollector:
                 "symbol_runtime": symbol_runtime,
             }
 
-
 _COLLECTOR = _FuturesAggTradeCollector()
 
-
-def reset_futures_aggtrade_runtime(symbols: Optional[list[str]] = None) -> dict[str, Any]:
+def reset_futures_aggtrade_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
     _COLLECTOR = _FuturesAggTradeCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))
     return _COLLECTOR.runtime_status()
 
-
-def fetch_futures_aggtrade_snapshot(symbol: str, minute_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+def fetch_futures_aggtrade_snapshot(symbol: str, minute_ms: int | None = None) -> dict[str, Any] | None:
     minute_ms = int(minute_ms or (datetime.now(timezone.utc).timestamp() * 1000 // 60_000) * 60_000)
     params = {"symbol": symbol, "startTime": minute_ms, "endTime": minute_ms + 59_999, "limit": _AGGTRADE_LIMIT}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
     cursor = minute_ms
     rows: list[dict[str, Any]] = []
-    last_exc: Exception | None = None
     while cursor <= minute_ms + 59_999:
-        attempt_rows: list[dict[str, Any]] = []
-        for attempt in range(_RETRIES + 1):
-            try:
-                params["startTime"] = cursor
-                resp = requests.get(_aggtrades_url(), params=params, timeout=timeout)
-                resp.raise_for_status()
-                attempt_rows = resp.json() or []
-                break
-            except Exception as exc:
-                last_exc = exc
-                if attempt < _RETRIES:
-                    time.sleep(_BACKOFF * (2 ** attempt))
-                    continue
-                raise exc
+        params["startTime"] = cursor
+        attempt_rows = fetch_with_retry(_aggtrades_url(), params=params, timeout=timeout, retries=_RETRIES, backoff=_BACKOFF).json() or []
         if not attempt_rows:
             break
         rows.extend(attempt_rows)
@@ -342,10 +259,7 @@ def fetch_futures_aggtrade_snapshot(symbol: str, minute_ms: Optional[int] = None
         if len(attempt_rows) < _AGGTRADE_LIMIT:
             break
         cursor = last_trade_ms + 1
-    if not rows and last_exc is not None:
-        raise last_exc
     return _snapshot_from_rest_rows(symbol, rows, minute_ms)
-
 
 _UPSERT_SQL = """
 INSERT INTO futures_aggtrade_minutes
@@ -381,8 +295,7 @@ ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     source = excluded.source;
 """
 
-
-def save_futures_aggtrade_snapshot(connection: DBConnection, snapshot: Dict[str, Any]) -> bool:
+def save_futures_aggtrade_snapshot(connection: DBConnection, snapshot: dict[str, Any]) -> bool:
     connection.execute(
         _UPSERT_SQL,
         (
@@ -415,10 +328,9 @@ def save_futures_aggtrade_snapshot(connection: DBConnection, snapshot: Dict[str,
     connection.commit()
     return True
 
-
 def collect_futures_aggtrade_minutes(
     connection: DBConnection,
-    symbol_names: Optional[list[str]] = None,
+    symbol_names: list[str] | None = None,
 ) -> dict[str, Any]:
     symbols = list(symbol_names or configured_futures_aggtrade_symbols())
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -449,11 +361,10 @@ def collect_futures_aggtrade_minutes(
         "collector": _COLLECTOR.runtime_status(),
     }
 
-
 def get_futures_aggtrade_stats(
     connection: DBConnection,
-    runtime: Optional[dict[str, dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
+    runtime: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     runtime = runtime if runtime is not None else _COLLECTOR.runtime_status().get("symbol_runtime", {})
     rows = connection.execute(
         """
@@ -506,12 +417,11 @@ def get_futures_aggtrade_stats(
         )
     return result
 
-
 def get_recent_futures_aggtrade_minutes(
     connection: DBConnection,
     symbol: str,
     limit: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT symbol,

@@ -10,11 +10,10 @@ Signal record fields:
   long_ma  → 0.0 (unused; kept for schema compatibility)
 """
 
-from typing import Dict, Optional, Union
+from typing import Union
 
 from app.core.db import DBConnection
 from app.strategy.signal_service import insert_signal
-
 
 _SELECT_CLOSES_SQL = """
 SELECT close
@@ -29,7 +28,6 @@ STRATEGY_NAME = "rsi"
 DEFAULT_PERIOD = 14
 DEFAULT_OVERSOLD = 30.0
 DEFAULT_OVERBOUGHT = 70.0
-
 
 def _compute_rsi(closes: list, period: int) -> float:
     """Compute RSI using Wilder's smoothing method.
@@ -52,7 +50,6 @@ def _compute_rsi(closes: list, period: int) -> float:
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
-
 def generate_signal(
     connection: DBConnection,
     symbol: str = "BTCUSDT",
@@ -61,7 +58,7 @@ def generate_signal(
     oversold: float = DEFAULT_OVERSOLD,
     overbought: float = DEFAULT_OVERBOUGHT,
     strategy_name: str = STRATEGY_NAME,
-) -> Optional[Dict[str, Union[float, str]]]:
+) -> dict[str, Union[float, str]] | None:
     # Fetch enough candles for a stable Wilder average (3× period)
     min_required = period + 1
     fetch_limit = period * 3

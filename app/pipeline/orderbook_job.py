@@ -4,7 +4,7 @@ Runs once per scheduler loop (every ~1 minute).
 Checks runtime/orderbook.enabled before doing anything.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection
 from app.data.orderbook_service import (
@@ -14,11 +14,10 @@ from app.data.orderbook_service import (
 )
 from app.system.heartbeat import upsert_heartbeat
 
-
 def run_orderbook_job(
     connection: DBConnection,
-    symbol_names: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    symbol_names: list[str] | None = None,
+) -> dict[str, Any]:
     """Fetch and store one order book snapshot per symbol.
 
     Returns a result dict with step='orderbook'.
@@ -50,7 +49,7 @@ def run_orderbook_job(
         payload={"saved": saved, "errors": errors},
     )
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "step":   "orderbook",
         "status": job_status,
         "saved":  saved,

@@ -9,24 +9,22 @@ Endpoint used:
 
 import json
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import requests
+from typing import Any
 
 from app.core.db import DBConnection
+from app.data.binance_config import spot_rest_base_url
+from app.data.collection_state import CollectionState
+from app.data.retry_helpers import fetch_with_retry
 
-_DEPTH_URL = "https://api.binance.com/api/v3/depth"
-_TESTNET_DEPTH_URL = "https://testnet.binance.vision/api/v3/depth"
 _DEPTH_LIMIT = 10
 _TIMEOUT = 8
 _RETRIES = 2
 _BACKOFF = 1.0
 
 ORDERBOOK_PAUSED_FILE = Path("runtime/orderbook.paused")
-
+_state = CollectionState(ORDERBOOK_PAUSED_FILE)
 
 # ---------------------------------------------------------------------------
 # Control helpers
@@ -35,32 +33,22 @@ ORDERBOOK_PAUSED_FILE = Path("runtime/orderbook.paused")
 # ---------------------------------------------------------------------------
 
 def is_orderbook_collection_enabled() -> bool:
-    return not ORDERBOOK_PAUSED_FILE.exists()
-
+    return _state.is_enabled()
 
 def enable_orderbook_collection() -> None:
-    """Resume collection by removing the pause flag."""
-    if ORDERBOOK_PAUSED_FILE.exists():
-        ORDERBOOK_PAUSED_FILE.unlink()
-
+    _state.enable()
 
 def disable_orderbook_collection() -> None:
-    """Pause collection by writing the pause flag."""
-    ORDERBOOK_PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ORDERBOOK_PAUSED_FILE.write_text("paused\n", encoding="utf-8")
-
+    _state.disable()
 
 # ---------------------------------------------------------------------------
 # Fetch
 # ---------------------------------------------------------------------------
 
 def _depth_url() -> str:
-    if os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on"):
-        return _TESTNET_DEPTH_URL
-    return _DEPTH_URL
+    return f"{spot_rest_base_url()}/api/v3/depth"
 
-
-def fetch_orderbook_snapshot(symbol: str) -> Dict[str, Any]:
+def fetch_orderbook_snapshot(symbol: str) -> dict[str, Any]:
     """Fetch top-10 order book from Binance and compute metrics.
 
     Returns dict with keys:
@@ -70,22 +58,10 @@ def fetch_orderbook_snapshot(symbol: str) -> Dict[str, Any]:
     params = {"symbol": symbol, "limit": _DEPTH_LIMIT}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
 
-    last_exc: Exception = RuntimeError("fetch_orderbook_snapshot: no attempts made")
-    for attempt in range(_RETRIES + 1):
-        try:
-            resp = requests.get(_depth_url(), params=params, timeout=timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except Exception as exc:
-            last_exc = exc
-            if attempt < _RETRIES:
-                time.sleep(_BACKOFF * (2 ** attempt))
-                continue
-            raise last_exc
+    data = fetch_with_retry(_depth_url(), params=params, timeout=timeout, retries=_RETRIES, backoff=_BACKOFF).json()
 
-    bids: List[List[float]] = [[float(p), float(q)] for p, q in data.get("bids", [])]
-    asks: List[List[float]] = [[float(p), float(q)] for p, q in data.get("asks", [])]
+    bids: list[list[float]] = [[float(p), float(q)] for p, q in data.get("bids", [])]
+    asks: list[list[float]] = [[float(p), float(q)] for p, q in data.get("asks", [])]
 
     bid_vol = sum(q for _, q in bids) if bids else 0.0
     ask_vol = sum(q for _, q in asks) if asks else 0.0
@@ -115,7 +91,6 @@ def fetch_orderbook_snapshot(symbol: str) -> Dict[str, Any]:
         "mid_price":    round(mid_price, 2) if mid_price is not None else None,
     }
 
-
 # ---------------------------------------------------------------------------
 # Persist
 # ---------------------------------------------------------------------------
@@ -127,8 +102,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, timestamp_ms) DO NOTHING;
 """
 
-
-def save_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str, Any]) -> bool:
+def save_orderbook_snapshot(connection: DBConnection, snapshot: dict[str, Any]) -> bool:
     """Insert snapshot into DB. Returns True if a new row was inserted."""
     connection.execute(
         _INSERT_SQL,
@@ -145,12 +119,11 @@ def save_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str, Any]) 
     connection.commit()
     return True
 
-
 # ---------------------------------------------------------------------------
 # Stats for UI
 # ---------------------------------------------------------------------------
 
-def get_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]]:
+def get_orderbook_stats(connection: DBConnection) -> list[dict[str, Any]]:
     """Return per-symbol collection statistics."""
     rows = connection.execute(
         """
@@ -190,12 +163,11 @@ def get_orderbook_stats(connection: DBConnection) -> List[Dict[str, Any]]:
         })
     return result
 
-
 def get_recent_snapshots(
     connection: DBConnection,
     symbol: str,
     limit: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return the most recent N snapshots for a symbol."""
     rows = connection.execute(
         """

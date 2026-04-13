@@ -3,54 +3,38 @@
 from __future__ import annotations
 
 import json
-import os
-import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.settings import FUTURES_LIQUIDATION_SYMBOLS
+from app.core.settings import WS_RESTART_SECONDS as _WS_RESTART_SECONDS
+from app.data.binance_config import futures_ws_base_url
+from app.data.collection_state import CollectionState
+from app.data.futures_collector_base import _BaseFuturesWSCollector
 
-_FUTURES_WS_URL = "wss://fstream.binance.com/ws/!forceOrder@arr"
-_FUTURES_TESTNET_WS_URL = "wss://stream.binancefuture.com/ws/!forceOrder@arr"
 _WS_STALE_SECONDS = 75
-_WS_RESTART_SECONDS = 15
 
 FUTURES_LIQUIDATION_PAUSED_FILE = Path("runtime/futures_liquidation.paused")
-
+_state = CollectionState(FUTURES_LIQUIDATION_PAUSED_FILE)
 
 def configured_futures_liquidation_symbols() -> list[str]:
     return list(FUTURES_LIQUIDATION_SYMBOLS)
 
-
 def is_futures_liquidation_collection_enabled() -> bool:
-    return not FUTURES_LIQUIDATION_PAUSED_FILE.exists()
-
+    return _state.is_enabled()
 
 def enable_futures_liquidation_collection() -> None:
-    if FUTURES_LIQUIDATION_PAUSED_FILE.exists():
-        FUTURES_LIQUIDATION_PAUSED_FILE.unlink()
-
+    _state.enable()
 
 def disable_futures_liquidation_collection() -> None:
-    FUTURES_LIQUIDATION_PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FUTURES_LIQUIDATION_PAUSED_FILE.write_text("paused\n", encoding="utf-8")
-
-
-def _is_testnet() -> bool:
-    return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
-
+    _state.disable()
 
 def _ws_url() -> str:
-    return _FUTURES_TESTNET_WS_URL if _is_testnet() else _FUTURES_WS_URL
+    return f"{futures_ws_base_url()}/ws/!forceOrder@arr"
 
-
-def _new_bucket(symbol: str, minute_ms: int, event_ms: int, side: str, qty: float, price: float) -> Dict[str, Any]:
+def _new_bucket(symbol: str, minute_ms: int, event_ms: int, side: str, qty: float, price: float) -> dict[str, Any]:
     quote = qty * price
     buy_count = 1 if side == "BUY" else 0
     sell_count = 1 if side == "SELL" else 0
@@ -73,8 +57,7 @@ def _new_bucket(symbol: str, minute_ms: int, event_ms: int, side: str, qty: floa
         "active_second_marks": {event_ms // 1000},
     }
 
-
-def _update_bucket(bucket: Dict[str, Any], event_ms: int, side: str, qty: float, price: float) -> None:
+def _update_bucket(bucket: dict[str, Any], event_ms: int, side: str, qty: float, price: float) -> None:
     quote = qty * price
     bucket["event_count"] += 1
     bucket["qty_total"] += qty
@@ -92,8 +75,7 @@ def _update_bucket(bucket: Dict[str, Any], event_ms: int, side: str, qty: float,
     bucket["last_event_ms"] = event_ms
     bucket.setdefault("active_second_marks", set()).add(event_ms // 1000)
 
-
-def _snapshot_from_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
+def _snapshot_from_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     qty_total = float(bucket["qty_total"])
     active_seconds = len(bucket.get("active_second_marks", set()))
     coverage_ratio = round(min(1.0, max(0.0, active_seconds / 60.0)), 6) if active_seconds > 0 else 0.0
@@ -119,80 +101,41 @@ def _snapshot_from_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
         "source": "ws",
     }
 
+class _FuturesLiquidationCollector(_BaseFuturesWSCollector):
+    _thread_name = "futures-liquidation-ws"
 
-class _FuturesLiquidationCollector:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-        self._symbols: tuple[str, ...] = ()
-        self._buckets: dict[str, Dict[str, Any]] = {}
-        self._last_error: Optional[str] = None
-        self._ws_available = True
+        super().__init__()
+        self._buckets: dict[str, dict[str, Any]] = {}
 
-    def ensure_started(self, symbols: list[str]) -> bool:
-        symbols_key = tuple(sorted(set(symbols)))
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive() and self._symbols == symbols_key:
-                return self._ws_available
-            self._symbols = symbols_key
-            self._thread = threading.Thread(target=self._run_forever, args=(set(symbols_key),), name="futures-liquidation-ws", daemon=True)
-            self._thread.start()
-            return self._ws_available
+    def _get_ws_url(self, symbols: tuple[str, ...]) -> str:
+        return _ws_url()
 
-    def _run_forever(self, symbol_filter: set[str]) -> None:
-        try:
-            from websocket import WebSocketApp
-        except Exception as exc:
+    def _handle_message(self, message: str, symbols: tuple[str, ...]) -> None:
+        symbol_filter = set(symbols)
+        payload = json.loads(message)
+        rows = payload.get("data", payload)
+        events = rows if isinstance(rows, list) else [rows]
+        for event in events:
+            order = event.get("o") or {}
+            symbol = str(order.get("s") or "").upper()
+            if not symbol or symbol not in symbol_filter:
+                continue
+            event_ms = int(event.get("E") or order.get("T") or int(datetime.now(timezone.utc).timestamp() * 1000))
+            minute_ms = (event_ms // 60_000) * 60_000
+            side = str(order.get("S") or "").upper()
+            qty = float(order.get("q") or 0.0)
+            price = float(order.get("p") or order.get("ap") or 0.0)
+            if side not in {"BUY", "SELL"} or qty <= 0 or price <= 0:
+                continue
             with self._lock:
-                self._last_error = f"websocket unavailable: {exc}"
-                self._ws_available = False
-            return
+                prev = self._buckets.get(symbol)
+                if prev is None or int(prev["timestamp_ms"]) != minute_ms:
+                    self._buckets[symbol] = _new_bucket(symbol, minute_ms, event_ms, side, qty, price)
+                else:
+                    _update_bucket(prev, event_ms, side, qty, price)
 
-        def on_message(_: Any, message: str) -> None:
-            try:
-                payload = json.loads(message)
-                rows = payload.get("data", payload)
-                events = rows if isinstance(rows, list) else [rows]
-                for event in events:
-                    order = event.get("o") or {}
-                    symbol = str(order.get("s") or "").upper()
-                    if not symbol or symbol not in symbol_filter:
-                        continue
-                    event_ms = int(event.get("E") or order.get("T") or int(datetime.now(timezone.utc).timestamp() * 1000))
-                    minute_ms = (event_ms // 60_000) * 60_000
-                    side = str(order.get("S") or "").upper()
-                    qty = float(order.get("q") or 0.0)
-                    price = float(order.get("p") or order.get("ap") or 0.0)
-                    if side not in {"BUY", "SELL"} or qty <= 0 or price <= 0:
-                        continue
-                    with self._lock:
-                        prev = self._buckets.get(symbol)
-                        if prev is None or int(prev["timestamp_ms"]) != minute_ms:
-                            self._buckets[symbol] = _new_bucket(symbol, minute_ms, event_ms, side, qty, price)
-                        else:
-                            _update_bucket(prev, event_ms, side, qty, price)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"on_message error: {exc}"
-
-        def on_error(_: Any, error: Any) -> None:
-            with self._lock:
-                self._last_error = str(error)
-
-        while True:
-            try:
-                ws = WebSocketApp(_ws_url(), on_message=on_message, on_error=on_error)
-                with self._lock:
-                    self._ws_available = True
-                    self._last_error = None
-                ws.run_forever(ping_interval=20, ping_timeout=10)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"ws loop error: {exc}"
-                    self._ws_available = False
-            time.sleep(_WS_RESTART_SECONDS)
-
-    def get_minute_snapshot(self, symbol: str, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_minute_snapshot(self, symbol: str, now_ms: int | None = None) -> dict[str, Any] | None:
         now_ms = int(now_ms or datetime.now(timezone.utc).timestamp() * 1000)
         minute_ms = (now_ms // 60_000) * 60_000
         with self._lock:
@@ -227,17 +170,14 @@ class _FuturesLiquidationCollector:
                 "symbol_runtime": symbol_runtime,
             }
 
-
 _COLLECTOR = _FuturesLiquidationCollector()
 
-
-def reset_futures_liquidation_runtime(symbols: Optional[list[str]] = None) -> dict[str, Any]:
+def reset_futures_liquidation_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
     _COLLECTOR = _FuturesLiquidationCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))
     return _COLLECTOR.runtime_status()
-
 
 _UPSERT_SQL = """
 INSERT INTO futures_liquidation_minutes
@@ -265,8 +205,7 @@ ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     source = excluded.source;
 """
 
-
-def save_futures_liquidation_snapshot(connection: DBConnection, snapshot: Dict[str, Any]) -> bool:
+def save_futures_liquidation_snapshot(connection: DBConnection, snapshot: dict[str, Any]) -> bool:
     connection.execute(
         _UPSERT_SQL,
         (
@@ -293,8 +232,7 @@ def save_futures_liquidation_snapshot(connection: DBConnection, snapshot: Dict[s
     connection.commit()
     return True
 
-
-def collect_futures_liquidation_minutes(connection: DBConnection, symbol_names: Optional[list[str]] = None) -> dict[str, Any]:
+def collect_futures_liquidation_minutes(connection: DBConnection, symbol_names: list[str] | None = None) -> dict[str, Any]:
     symbols = list(symbol_names or configured_futures_liquidation_symbols())
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     _COLLECTOR.ensure_started(symbols)
@@ -319,8 +257,7 @@ def collect_futures_liquidation_minutes(connection: DBConnection, symbol_names: 
         "collector": _COLLECTOR.runtime_status(),
     }
 
-
-def get_futures_liquidation_stats(connection: DBConnection, runtime: Optional[dict[str, dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def get_futures_liquidation_stats(connection: DBConnection, runtime: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     runtime = runtime if runtime is not None else _COLLECTOR.runtime_status().get("symbol_runtime", {})
     rows = connection.execute(
         """

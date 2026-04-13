@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-
 def load_dotenv_file(project_root: Path) -> None:
     env_file = project_root / ".env"
     if not env_file.exists():

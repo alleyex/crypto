@@ -1,8 +1,6 @@
 from app.core.db import DBConnection
 from app.core.db import table_exists
 from app.core.db import utc_now_iso
-from app.core.migrations import run_migrations
-
 
 CREATE_PNL_SNAPSHOTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS pnl_snapshots (
@@ -16,12 +14,10 @@ CREATE TABLE IF NOT EXISTS pnl_snapshots (
 );
 """
 
-
 SELECT_POSITIONS_SQL = """
 SELECT symbol, qty, avg_price
 FROM positions;
 """
-
 
 INSERT_PNL_SNAPSHOT_SQL = """
 INSERT INTO pnl_snapshots (
@@ -33,11 +29,6 @@ INSERT INTO pnl_snapshots (
     created_at
 ) VALUES (?, ?, ?, ?, ?, ?);
 """
-
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
 
 def _get_latest_prices_by_timeframe(
     connection: DBConnection,
@@ -62,7 +53,6 @@ def _get_latest_prices_by_timeframe(
         (*symbols, timeframe),
     ).fetchall()
     return {row[0]: float(row[1]) for row in rows}
-
 
 def update_pnl_snapshots(connection: DBConnection) -> int:
     positions = connection.execute(SELECT_POSITIONS_SQL).fetchall()

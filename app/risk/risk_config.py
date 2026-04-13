@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import table_exists
@@ -10,7 +9,6 @@ from app.core.settings import MAX_DAILY_LOSS
 from app.core.settings import MAX_POSITION_QTY
 from app.core.settings import STOP_LOSS_PCT
 
-
 @dataclass
 class RiskConfig:
     strategy_name: str
@@ -20,7 +18,7 @@ class RiskConfig:
     stop_loss_pct: float
     max_daily_loss: float
 
-    def to_dict(self, updated_at: Optional[str] = None) -> dict:
+    def to_dict(self, updated_at: str | None = None) -> dict:
         d = {
             "strategy_name": self.strategy_name,
             "order_qty": self.order_qty,
@@ -33,7 +31,6 @@ class RiskConfig:
         if updated_at is not None:
             d["updated_at"] = updated_at
         return d
-
 
 SELECT_RISK_CONFIG_SQL = """
 SELECT order_qty, max_position_qty, cooldown_seconds, stop_loss_pct, max_daily_loss, updated_at
@@ -61,7 +58,6 @@ ON CONFLICT (strategy_name) DO UPDATE SET
 
 DELETE_RISK_CONFIG_SQL = "DELETE FROM risk_configs WHERE strategy_name = ?;"
 
-
 def _global_defaults(strategy_name: str) -> RiskConfig:
     return RiskConfig(
         strategy_name=strategy_name,
@@ -71,7 +67,6 @@ def _global_defaults(strategy_name: str) -> RiskConfig:
         stop_loss_pct=STOP_LOSS_PCT,
         max_daily_loss=MAX_DAILY_LOSS,
     )
-
 
 def get_risk_config(connection: DBConnection, strategy_name: str) -> tuple["RiskConfig", bool]:
     """Return (RiskConfig, is_default).  is_default=True when no DB row exists."""
@@ -90,15 +85,14 @@ def get_risk_config(connection: DBConnection, strategy_name: str) -> tuple["Risk
     )
     return cfg, False
 
-
 def set_risk_config(
     connection: DBConnection,
     strategy_name: str,
-    order_qty: Optional[float] = None,
-    max_position_qty: Optional[float] = None,
-    cooldown_seconds: Optional[int] = None,
-    stop_loss_pct: Optional[float] = None,
-    max_daily_loss: Optional[float] = None,
+    order_qty: float | None = None,
+    max_position_qty: float | None = None,
+    cooldown_seconds: int | None = None,
+    stop_loss_pct: float | None = None,
+    max_daily_loss: float | None = None,
 ) -> RiskConfig:
     """Upsert per-strategy risk config, merging with existing or global defaults."""
     existing, _ = get_risk_config(connection, strategy_name)
@@ -117,7 +111,6 @@ def set_risk_config(
     connection.commit()
     return merged
 
-
 def delete_risk_config(connection: DBConnection, strategy_name: str) -> bool:
     """Remove per-strategy override, reverting to global defaults.  Returns True if a row was deleted."""
     if not table_exists(connection, "risk_configs"):
@@ -125,7 +118,6 @@ def delete_risk_config(connection: DBConnection, strategy_name: str) -> bool:
     cursor = connection.execute(DELETE_RISK_CONFIG_SQL, (strategy_name,))
     connection.commit()
     return (cursor.rowcount or 0) > 0
-
 
 def list_risk_configs(connection: DBConnection) -> list[dict]:
     """Return all stored per-strategy risk configs."""

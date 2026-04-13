@@ -15,67 +15,49 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
-
-import requests
 
 from app.core.db import DBConnection
 from app.core.settings import FUTURES_ORDERBOOK_SYMBOLS
+from app.core.settings import WS_RESTART_SECONDS as _WS_RESTART_SECONDS
+from app.data.binance_config import futures_rest_base_url
+from app.data.binance_config import futures_ws_base_url
+from app.data.collection_state import CollectionState
+from app.data.futures_collector_base import _BaseFuturesWSCollector
+from app.data.retry_helpers import fetch_with_retry
 
-_FUTURES_DEPTH_URL = "https://fapi.binance.com/fapi/v1/depth"
-_FUTURES_TESTNET_DEPTH_URL = "https://testnet.binancefuture.com/fapi/v1/depth"
-_FUTURES_WS_URL = "wss://fstream.binance.com/stream?streams={streams}"
-_FUTURES_TESTNET_WS_URL = "wss://stream.binancefuture.com/stream?streams={streams}"
 _DEPTH_LIMIT = 10
 _TIMEOUT = 8
 _RETRIES = 2
 _BACKOFF = 1.0
 _WS_STALE_SECONDS = 75
-_WS_RESTART_SECONDS = 15
 
 FUTURES_ORDERBOOK_PAUSED_FILE = Path("runtime/futures_orderbook.paused")
-
+_state = CollectionState(FUTURES_ORDERBOOK_PAUSED_FILE)
 
 def configured_futures_orderbook_symbols() -> list[str]:
     return list(FUTURES_ORDERBOOK_SYMBOLS)
 
-
 def is_futures_orderbook_collection_enabled() -> bool:
-    return not FUTURES_ORDERBOOK_PAUSED_FILE.exists()
-
+    return _state.is_enabled()
 
 def enable_futures_orderbook_collection() -> None:
-    if FUTURES_ORDERBOOK_PAUSED_FILE.exists():
-        FUTURES_ORDERBOOK_PAUSED_FILE.unlink()
-
+    _state.enable()
 
 def disable_futures_orderbook_collection() -> None:
-    FUTURES_ORDERBOOK_PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FUTURES_ORDERBOOK_PAUSED_FILE.write_text("paused\n", encoding="utf-8")
-
-
-def _is_testnet() -> bool:
-    return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
-
+    _state.disable()
 
 def _depth_url() -> str:
-    return _FUTURES_TESTNET_DEPTH_URL if _is_testnet() else _FUTURES_DEPTH_URL
-
+    return f"{futures_rest_base_url()}/fapi/v1/depth"
 
 def _ws_url(symbols: list[str]) -> str:
     streams = "/".join(f"{symbol.lower()}@depth10@100ms" for symbol in symbols)
-    base = _FUTURES_TESTNET_WS_URL if _is_testnet() else _FUTURES_WS_URL
-    return base.format(streams=streams)
+    return f"{futures_ws_base_url()}/stream?streams={streams}"
 
-
-def _compute_snapshot_metrics(bids: list[list[float]], asks: list[list[float]]) -> tuple[float, Optional[float], Optional[float]]:
+def _compute_snapshot_metrics(bids: list[list[float]], asks: list[list[float]]) -> tuple[float, float | None, float | None]:
     bid_vol = sum(q for _, q in bids) if bids else 0.0
     ask_vol = sum(q for _, q in asks) if asks else 0.0
     total_vol = bid_vol + ask_vol
@@ -92,7 +74,6 @@ def _compute_snapshot_metrics(bids: list[list[float]], asks: list[list[float]]) 
 
     return imbalance, spread_pct, mid_price
 
-
 def _build_snapshot_from_depth(
     symbol: str,
     bids_raw: list[list[Any]],
@@ -101,9 +82,9 @@ def _build_snapshot_from_depth(
     *,
     source: str,
     sample_count: int = 0,
-    first_event_ms: Optional[int] = None,
-    last_event_ms: Optional[int] = None,
-) -> Dict[str, Any]:
+    first_event_ms: int | None = None,
+    last_event_ms: int | None = None,
+) -> dict[str, Any]:
     bids = [[float(p), float(q)] for p, q in bids_raw]
     asks = [[float(p), float(q)] for p, q in asks_raw]
     imbalance, spread_pct, mid_price = _compute_snapshot_metrics(bids, asks)
@@ -137,17 +118,16 @@ def _build_snapshot_from_depth(
         "last_event_ms": int(last_event_ms or timestamp_ms),
     }
 
-
 def _new_bucket(
     symbol: str,
     minute_ms: int,
     bids: list[list[float]],
     asks: list[list[float]],
     imbalance: float,
-    spread_pct: Optional[float],
-    mid_price: Optional[float],
+    spread_pct: float | None,
+    mid_price: float | None,
     event_ms: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "symbol": symbol,
         "timestamp_ms": minute_ms,
@@ -173,14 +153,13 @@ def _new_bucket(
         "last_event_ms": event_ms,
     }
 
-
 def _update_bucket(
-    bucket: Dict[str, Any],
+    bucket: dict[str, Any],
     bids: list[list[float]],
     asks: list[list[float]],
     imbalance: float,
-    spread_pct: Optional[float],
-    mid_price: Optional[float],
+    spread_pct: float | None,
+    mid_price: float | None,
     event_ms: int,
 ) -> None:
     bucket["bids"] = bids
@@ -208,8 +187,7 @@ def _update_bucket(
     bucket.setdefault("active_second_marks", set()).add(event_ms // 1000)
     bucket["last_event_ms"] = event_ms
 
-
-def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+def _snapshot_from_bucket(bucket: dict[str, Any], *, source: str) -> dict[str, Any]:
     n = int(bucket["sample_count"])
     imbalance_mean = float(bucket["ob_imbalance_sum"]) / n
     variance = max(0.0, float(bucket["ob_imbalance_sumsq"]) / n - imbalance_mean * imbalance_mean)
@@ -257,91 +235,46 @@ def _snapshot_from_bucket(bucket: Dict[str, Any], *, source: str) -> Dict[str, A
         "last_event_ms": last_event_ms,
     }
 
+class _FuturesOrderBookCollector(_BaseFuturesWSCollector):
+    _thread_name = "futures-orderbook-ws"
 
-class _FuturesOrderBookCollector:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-        self._symbols: tuple[str, ...] = ()
-        self._snapshots: dict[str, Dict[str, Any]] = {}
-        self._last_error: Optional[str] = None
-        self._ws_available = True
+        super().__init__()
+        self._snapshots: dict[str, dict[str, Any]] = {}
 
-    def ensure_started(self, symbols: list[str]) -> bool:
-        symbols_key = tuple(sorted(set(symbols)))
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive() and self._symbols == symbols_key:
-                return self._ws_available
-            self._symbols = symbols_key
-            self._thread = threading.Thread(
-                target=self._run_forever,
-                args=(list(symbols_key),),
-                name="futures-orderbook-ws",
-                daemon=True,
-            )
-            self._thread.start()
-            return self._ws_available
+    def _get_ws_url(self, symbols: tuple[str, ...]) -> str:
+        return _ws_url(list(symbols))
 
-    def _run_forever(self, symbols: list[str]) -> None:
-        try:
-            from websocket import WebSocketApp
-        except Exception as exc:
-            with self._lock:
-                self._last_error = f"websocket unavailable: {exc}"
-                self._ws_available = False
+    def _handle_message(self, message: str, symbols: tuple[str, ...]) -> None:
+        payload = json.loads(message)
+        data = payload.get("data", payload)
+        symbol = str(data.get("s") or "").upper()
+        bids = data.get("b") or []
+        asks = data.get("a") or []
+        if not symbol or not bids or not asks:
             return
+        event_ms = int(data.get("E") or int(datetime.now(timezone.utc).timestamp() * 1000))
+        bids_f = [[float(p), float(q)] for p, q in bids]
+        asks_f = [[float(p), float(q)] for p, q in asks]
+        imbalance, spread_pct, mid_price = _compute_snapshot_metrics(bids_f, asks_f)
+        with self._lock:
+            prev = self._snapshots.get(symbol)
+            curr_minute = (event_ms // 60_000) * 60_000
+            if prev is None or int(prev["timestamp_ms"]) != curr_minute:
+                self._snapshots[symbol] = _new_bucket(
+                    symbol,
+                    curr_minute,
+                    bids_f,
+                    asks_f,
+                    imbalance,
+                    spread_pct,
+                    mid_price,
+                    event_ms,
+                )
+            else:
+                _update_bucket(prev, bids_f, asks_f, imbalance, spread_pct, mid_price, event_ms)
 
-        def on_message(_: Any, message: str) -> None:
-            try:
-                payload = json.loads(message)
-                data = payload.get("data", payload)
-                symbol = str(data.get("s") or "").upper()
-                bids = data.get("b") or []
-                asks = data.get("a") or []
-                if not symbol or not bids or not asks:
-                    return
-                event_ms = int(data.get("E") or int(datetime.now(timezone.utc).timestamp() * 1000))
-                bids_f = [[float(p), float(q)] for p, q in bids]
-                asks_f = [[float(p), float(q)] for p, q in asks]
-                imbalance, spread_pct, mid_price = _compute_snapshot_metrics(bids_f, asks_f)
-                with self._lock:
-                    prev = self._snapshots.get(symbol)
-                    curr_minute = (event_ms // 60_000) * 60_000
-                    if prev is None or int(prev["timestamp_ms"]) != curr_minute:
-                        self._snapshots[symbol] = _new_bucket(
-                            symbol,
-                            curr_minute,
-                            bids_f,
-                            asks_f,
-                            imbalance,
-                            spread_pct,
-                            mid_price,
-                            event_ms,
-                        )
-                    else:
-                        _update_bucket(prev, bids_f, asks_f, imbalance, spread_pct, mid_price, event_ms)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"on_message error: {exc}"
-
-        def on_error(_: Any, error: Any) -> None:
-            with self._lock:
-                self._last_error = str(error)
-
-        while True:
-            try:
-                ws = WebSocketApp(_ws_url(symbols), on_message=on_message, on_error=on_error)
-                with self._lock:
-                    self._ws_available = True
-                    self._last_error = None
-                ws.run_forever(ping_interval=20, ping_timeout=10)
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = f"ws loop error: {exc}"
-                    self._ws_available = False
-            time.sleep(_WS_RESTART_SECONDS)
-
-    def get_minute_snapshot(self, symbol: str, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_minute_snapshot(self, symbol: str, now_ms: int | None = None) -> dict[str, Any] | None:
         now_ms = int(now_ms or datetime.now(timezone.utc).timestamp() * 1000)
         minute_ms = (now_ms // 60_000) * 60_000
         with self._lock:
@@ -376,46 +309,31 @@ class _FuturesOrderBookCollector:
                 "symbol_runtime": symbol_runtime,
             }
 
-
 _COLLECTOR = _FuturesOrderBookCollector()
 
-
-def reset_futures_orderbook_runtime(symbols: Optional[list[str]] = None) -> dict[str, Any]:
+def reset_futures_orderbook_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
     _COLLECTOR = _FuturesOrderBookCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))
     return _COLLECTOR.runtime_status()
 
-
-def fetch_futures_orderbook_snapshot(symbol: str) -> Dict[str, Any]:
+def fetch_futures_orderbook_snapshot(symbol: str) -> dict[str, Any]:
     params = {"symbol": symbol, "limit": _DEPTH_LIMIT}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
 
-    last_exc: Exception = RuntimeError("fetch_futures_orderbook_snapshot: no attempts made")
-    for attempt in range(_RETRIES + 1):
-        try:
-            resp = requests.get(_depth_url(), params=params, timeout=timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-            return _build_snapshot_from_depth(
-                symbol,
-                data.get("bids", []),
-                data.get("asks", []),
-                now_ms,
-                source="rest",
-                sample_count=1,
-                first_event_ms=now_ms,
-                last_event_ms=now_ms,
-            )
-        except Exception as exc:
-            last_exc = exc
-            if attempt < _RETRIES:
-                time.sleep(_BACKOFF * (2 ** attempt))
-                continue
-            raise last_exc
-
+    data = fetch_with_retry(_depth_url(), params=params, timeout=timeout, retries=_RETRIES, backoff=_BACKOFF).json()
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    return _build_snapshot_from_depth(
+        symbol,
+        data.get("bids", []),
+        data.get("asks", []),
+        now_ms,
+        source="rest",
+        sample_count=1,
+        first_event_ms=now_ms,
+        last_event_ms=now_ms,
+    )
 
 _UPSERT_SQL = """
 INSERT INTO futures_order_book_snapshots
@@ -453,8 +371,7 @@ ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     last_event_ms = excluded.last_event_ms;
 """
 
-
-def _compute_mid_price_ret_1m(connection: DBConnection, symbol: str, timestamp_ms: int, mid_price: Optional[float]) -> Optional[float]:
+def _compute_mid_price_ret_1m(connection: DBConnection, symbol: str, timestamp_ms: int, mid_price: float | None) -> float | None:
     if mid_price is None or mid_price <= 0:
         return None
     row = connection.execute(
@@ -474,8 +391,7 @@ def _compute_mid_price_ret_1m(connection: DBConnection, symbol: str, timestamp_m
         return None
     return round((mid_price / prev_mid) - 1.0, 8)
 
-
-def save_futures_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str, Any]) -> bool:
+def save_futures_orderbook_snapshot(connection: DBConnection, snapshot: dict[str, Any]) -> bool:
     snapshot = dict(snapshot)
     if snapshot.get("spread_bps") is None and snapshot.get("spread_pct") is not None:
         snapshot["spread_bps"] = round(float(snapshot["spread_pct"]) * 10_000.0, 4)
@@ -546,10 +462,9 @@ def save_futures_orderbook_snapshot(connection: DBConnection, snapshot: Dict[str
     connection.commit()
     return True
 
-
 def collect_futures_orderbook_snapshots(
     connection: DBConnection,
-    symbol_names: Optional[list[str]] = None,
+    symbol_names: list[str] | None = None,
 ) -> dict[str, Any]:
     symbols = list(symbol_names or configured_futures_orderbook_symbols())
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -578,11 +493,10 @@ def collect_futures_orderbook_snapshots(
         "collector": _COLLECTOR.runtime_status(),
     }
 
-
 def get_futures_orderbook_stats(
     connection: DBConnection,
-    runtime: Optional[dict[str, dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
+    runtime: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     runtime = runtime if runtime is not None else _COLLECTOR.runtime_status().get("symbol_runtime", {})
     rows = connection.execute(
         """
@@ -635,12 +549,11 @@ def get_futures_orderbook_stats(
         )
     return result
 
-
 def get_recent_futures_orderbook_snapshots(
     connection: DBConnection,
     symbol: str,
     limit: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT symbol,

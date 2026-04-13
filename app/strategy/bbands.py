@@ -11,11 +11,10 @@ Signal record fields:
 """
 
 import math
-from typing import Dict, Optional, Union
+from typing import Union
 
 from app.core.db import DBConnection
 from app.strategy.signal_service import insert_signal
-
 
 _SELECT_CLOSES_SQL = """
 SELECT close
@@ -30,7 +29,6 @@ STRATEGY_NAME = "bbands"
 DEFAULT_PERIOD = 20
 DEFAULT_NUM_STD = 2.0
 
-
 def _compute_bands(closes: list, period: int, num_std: float):
     """Return (middle, upper, lower) Bollinger Bands for the last `period` closes."""
     window = closes[-period:]
@@ -39,7 +37,6 @@ def _compute_bands(closes: list, period: int, num_std: float):
     std = math.sqrt(variance)
     return middle, middle + num_std * std, middle - num_std * std
 
-
 def generate_signal(
     connection: DBConnection,
     symbol: str = "BTCUSDT",
@@ -47,7 +44,7 @@ def generate_signal(
     period: int = DEFAULT_PERIOD,
     num_std: float = DEFAULT_NUM_STD,
     strategy_name: str = STRATEGY_NAME,
-) -> Optional[Dict[str, Union[float, str]]]:
+) -> dict[str, Union[float, str]] | None:
     rows = connection.execute(_SELECT_CLOSES_SQL, (symbol, timeframe, period)).fetchall()
     if len(rows) < period:
         return None

@@ -19,10 +19,10 @@ Any row where ``close`` is None is dropped.
 The last row in the feature vector list is also dropped (no next-period label).
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Ordered list of feature names used as model input.
-FEATURE_NAMES: List[str] = [
+FEATURE_NAMES: list[str] = [
     "returns_1",
     "returns_5",
     "returns_20",
@@ -33,7 +33,6 @@ FEATURE_NAMES: List[str] = [
     "volatility_20",
 ]
 
-
 def _safe_float(value: Any, default: float = 0.0) -> float:
     if value is None:
         return default
@@ -42,8 +41,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
-
-def _extract_row(fv: Dict[str, Any]) -> List[float]:
+def _extract_row(fv: dict[str, Any]) -> list[float]:
     """Return a single feature row as a list of floats."""
     row = []
     for name in FEATURE_NAMES:
@@ -54,10 +52,9 @@ def _extract_row(fv: Dict[str, Any]) -> List[float]:
         row.append(val)
     return row
 
-
 def build_dataset(
-    vectors: List[Dict[str, Any]],
-) -> Tuple[List[List[float]], List[int], List[int]]:
+    vectors: list[dict[str, Any]],
+) -> tuple[list[list[float]], list[int], list[int]]:
     """Build (X, y, open_times) from a list of feature-vector dicts.
 
     Parameters
@@ -76,9 +73,9 @@ def build_dataset(
     # Filter out rows where close is missing
     valid = [v for v in vectors if v.get("close") is not None]
 
-    X: List[List[float]] = []
-    y: List[int] = []
-    open_times: List[int] = []
+    X: list[list[float]] = []
+    y: list[int] = []
+    open_times: list[int] = []
 
     for i in range(len(valid) - 1):
         current = valid[i]
@@ -97,15 +94,14 @@ def build_dataset(
 
     return X, y, open_times
 
-
 def train_test_split(
-    X: List[List[float]],
-    y: List[int],
-    open_times: List[int],
+    X: list[list[float]],
+    y: list[int],
+    open_times: list[int],
     test_ratio: float = 0.2,
-) -> Tuple[
-    List[List[float]], List[int], List[int],
-    List[List[float]], List[int], List[int],
+) -> tuple[
+    list[list[float]], list[int], list[int],
+    list[list[float]], list[int], list[int],
 ]:
     """Chronological split — no shuffling (time-series safe).
 
@@ -118,8 +114,7 @@ def train_test_split(
         X[split:], y[split:], open_times[split:],
     )
 
-
-def dataset_summary(y: List[int]) -> Dict[str, Any]:
+def dataset_summary(y: list[int]) -> dict[str, Any]:
     """Return class balance statistics for a label list."""
     n = len(y)
     if n == 0:

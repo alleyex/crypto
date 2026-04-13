@@ -1,9 +1,8 @@
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Union
 
 from app.core.db import DBConnection
 
-
-StrategyResult = Optional[Dict[str, Union[float, str]]]
+StrategyResult = dict[str, Union[float, str]] | None
 StrategyGenerator = Callable[[DBConnection, str, str], StrategyResult]
 
 def _run_ppo(connection: DBConnection, symbol: str, timeframe: str) -> StrategyResult:
@@ -13,21 +12,17 @@ def _run_ppo(connection: DBConnection, symbol: str, timeframe: str) -> StrategyR
     from app.strategy.ppo_strategy import generate_signal as generate_ppo_signal  # noqa: PLC0415
     return generate_ppo_signal(connection, symbol=symbol, timeframe=timeframe)
 
-
 STRATEGY_REGISTRY: dict[str, StrategyGenerator] = {
     "ppo": _run_ppo,
 }
 
-
 def list_registered_strategies() -> list[str]:
     return sorted(STRATEGY_REGISTRY)
-
 
 def get_strategy(name: str) -> StrategyGenerator:
     if name not in STRATEGY_REGISTRY:
         raise ValueError(f"Unknown strategy: {name}")
     return STRATEGY_REGISTRY[name]
-
 
 def generate_registered_signal(
     connection: DBConnection,

@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.core.migrations import run_migrations
 from app.features.compute import MIN_CANDLES, compute_features_for_candles
 from app.features.crypto_features import get_feature_columns
 from app.features.store import materialize_features
@@ -25,6 +24,7 @@ from app.rl.experiment import (
 )
 from app.training.dataset import FEATURE_NAMES
 from app.rl.crypto_env import CryptoTradingEnv
+from conftest import make_conn as _make_conn
 
 
 # ---------------------------------------------------------------------------
@@ -60,13 +60,6 @@ def _dummy_closes(n: int = 30, start: float = 100.0, step: float = 0.1) -> List[
     return [start + i * step for i in range(n)]
 
 
-def _make_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return conn
-
-
 def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     for c in candles:
         conn.execute(
@@ -79,34 +72,7 @@ def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     conn.commit()
 
 
-class _PersistentConn:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-    def executemany(self, sql, seq_of_params):
-        return self._conn.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        pass
-
-    def really_close(self):
-        self._conn.close()
-
-
-def _make_api_conn() -> _PersistentConn:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return _PersistentConn(conn)
+from tests.conftest import _PersistentConn, _make_api_conn
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +437,12 @@ def test_crypto_env_hold_bars_skip_reward_until_next_decision():
 def _rl_client(monkeypatch) -> tuple:
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     return TestClient(app), pconn
 
 
@@ -689,6 +660,7 @@ def test_api_ppo_job_accepts_separate_decision_interval_and_reward_horizon(monke
         }
 
     monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.api.routes.training_ppo.enqueue_job", _fake_enqueue)
     monkeypatch.setattr("app.training.ppo_trainer.run_ppo_training", _fake_training)
 
     resp = client.post(
@@ -777,6 +749,7 @@ def test_api_ppo_job_legacy_action_interval_maps_to_both_fields(monkeypatch):
         }
 
     monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.api.routes.training_ppo.enqueue_job", _fake_enqueue)
     monkeypatch.setattr("app.training.ppo_trainer.run_ppo_training", _fake_training)
 
     resp = client.post(
@@ -833,6 +806,7 @@ def test_queue_backed_ppo_job_runner_marks_job_done(monkeypatch):
         }
 
     monkeypatch.setattr("app.api.main.enqueue_job", _fake_enqueue)
+    monkeypatch.setattr("app.api.routes.training_ppo.enqueue_job", _fake_enqueue)
     monkeypatch.setattr("app.training.ppo_queue_job.run_ppo_training", _fake_training)
 
     resp = client.post(
@@ -929,7 +903,7 @@ def test_api_can_request_cancel_for_running_ppo_job(monkeypatch):
 
 
 def test_queue_backed_ppo_job_runner_marks_job_cancelled(monkeypatch):
-    from app.core.job_queue import run_next_queued_job
+    from app.core.job_runner import run_next_queued_job
 
     client, pconn = _rl_client(monkeypatch)
     monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)
@@ -961,7 +935,7 @@ def test_queue_backed_ppo_job_runner_marks_job_cancelled(monkeypatch):
 
 
 def test_queue_backed_ppo_job_runner_completes_deleted_job(monkeypatch):
-    from app.core.job_queue import run_next_queued_job
+    from app.core.job_runner import run_next_queued_job
 
     client, pconn = _rl_client(monkeypatch)
     monkeypatch.setattr("app.core.db.get_connection", lambda: pconn)

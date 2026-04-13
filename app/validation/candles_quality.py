@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from app.core.db import DBConnection
 from app.core.db import table_exists
@@ -7,7 +7,6 @@ from app.data.candles_service import TIMEFRAME_INTERVAL_MS
 
 PRICE_SPIKE_THRESHOLD = 0.05  # 5%
 SUPPORTED_CANDLE_TABLES = ("futures_candles", "candles")
-
 
 def _detect_candle_table(connection: DBConnection) -> str:
     for table_name in SUPPORTED_CANDLE_TABLES:
@@ -21,8 +20,7 @@ def _detect_candle_table(connection: DBConnection) -> str:
             return table_name
     raise RuntimeError("No candle table found.")
 
-
-def _check_duplicates(connection: DBConnection, table_name: str) -> Dict[str, Any]:
+def _check_duplicates(connection: DBConnection, table_name: str) -> dict[str, Any]:
     rows = connection.execute(f"""
         SELECT symbol, timeframe, open_time, COUNT(*) AS cnt
         FROM {table_name}
@@ -38,8 +36,7 @@ def _check_duplicates(connection: DBConnection, table_name: str) -> Dict[str, An
         ],
     }
 
-
-def _check_integrity(connection: DBConnection, table_name: str) -> Dict[str, Any]:
+def _check_integrity(connection: DBConnection, table_name: str) -> dict[str, Any]:
     rows = connection.execute(f"""
         SELECT symbol, timeframe, open_time, open, high, low, close, volume
         FROM {table_name}
@@ -61,13 +58,12 @@ def _check_integrity(connection: DBConnection, table_name: str) -> Dict[str, Any
         ],
     }
 
-
-def _check_gaps(connection: DBConnection, table_name: str) -> Dict[str, Any]:
+def _check_gaps(connection: DBConnection, table_name: str) -> dict[str, Any]:
     pairs = connection.execute(
         f"SELECT DISTINCT symbol, timeframe FROM {table_name} ORDER BY symbol, timeframe"
     ).fetchall()
 
-    details: List[Dict[str, Any]] = []
+    details: list[dict[str, Any]] = []
     total_gaps = 0
 
     for symbol, timeframe in pairs:
@@ -104,17 +100,16 @@ def _check_gaps(connection: DBConnection, table_name: str) -> Dict[str, Any]:
         "details": details,
     }
 
-
 def _check_price_spikes(
     connection: DBConnection,
     table_name: str,
     threshold: float = PRICE_SPIKE_THRESHOLD,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     pairs = connection.execute(
         f"SELECT DISTINCT symbol, timeframe FROM {table_name} ORDER BY symbol, timeframe"
     ).fetchall()
 
-    details: List[Dict[str, Any]] = []
+    details: list[dict[str, Any]] = []
     total_spikes = 0
 
     for symbol, timeframe in pairs:
@@ -153,8 +148,7 @@ def _check_price_spikes(
         "details": details,
     }
 
-
-def run_candles_quality_check(connection: DBConnection) -> Dict[str, Any]:
+def run_candles_quality_check(connection: DBConnection) -> dict[str, Any]:
     started_at = time.time()
     table_name = _detect_candle_table(connection)
 

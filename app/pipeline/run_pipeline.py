@@ -1,8 +1,8 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import get_connection
 from app.core.db import get_database_label
-from app.core.job_queue import run_job
+from app.core.job_runner import run_job
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_backend_status
@@ -12,9 +12,8 @@ from app.system.kill_switch import kill_switch_enabled
 from app.pipeline.runtime_summary import build_pipeline_payload
 from app.pipeline.runtime_summary import record_pipeline_runtime
 
-
-def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
-    scope_parts: List[str] = []
+def _step_scope_prefix(step_result: dict[str, Any]) -> str:
+    scope_parts: list[str] = []
     if "strategy_name" in step_result:
         scope_parts.append(f"strategy={step_result['strategy_name']}")
     if "symbol" in step_result:
@@ -23,12 +22,10 @@ def _step_scope_prefix(step_result: Dict[str, Any]) -> str:
         return ""
     return "[" + " ".join(scope_parts) + "] "
 
-
-def _finalize_result(result: Dict[str, Any], status: str, message: str) -> Dict[str, Any]:
+def _finalize_result(result: dict[str, Any], status: str, message: str) -> dict[str, Any]:
     return record_pipeline_runtime(result, status=status, message=message, source="pipeline")
 
-
-def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) -> Dict[str, Any]:
+def _pipeline_failure_result(result: dict[str, Any], step: str, exc: Exception) -> dict[str, Any]:
     result["steps"].append(
         {
             "step": step,
@@ -39,14 +36,13 @@ def _pipeline_failure_result(result: Dict[str, Any], step: str, exc: Exception) 
     )
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
-
 def _initial_pipeline_failure_result(
     database_label: str,
     step: str,
     exc: Exception,
     strategy_name: str,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "database": database_label,
         "strategy_name": strategy_name,
         "steps": [
@@ -60,11 +56,10 @@ def _initial_pipeline_failure_result(
     }
     return _finalize_result(result, "failed", f"Pipeline run failed during {step}: {exc}")
 
-
 def run_pipeline_collect(
     strategy_name: str = DEFAULT_STRATEGY_NAME,
-    symbol_names: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    symbol_names: list[str] | None = None,
+) -> dict[str, Any]:
     database_label = get_database_label()
     try:
         connection = get_connection()
@@ -74,7 +69,7 @@ def run_pipeline_collect(
             connection.close()
     except Exception as exc:
         return _initial_pipeline_failure_result(database_label, "run_migrations", exc, strategy_name)
-    result: Dict[str, Any] = {"database": database_label, "strategy_name": strategy_name, "steps": []}
+    result: dict[str, Any] = {"database": database_label, "strategy_name": strategy_name, "steps": []}
     if symbol_names is not None:
         result["requested_symbol_names"] = list(dict.fromkeys(symbol_names))
     record_pipeline_runtime(
@@ -159,8 +154,7 @@ def run_pipeline_collect(
 
     return _finalize_result(result, "completed", "Pipeline run completed.")
 
-
-def print_pipeline_result(result: Dict[str, Any]) -> None:
+def print_pipeline_result(result: dict[str, Any]) -> None:
     for step_result in result["steps"]:
         step = step_result["step"]
         if step == "save_klines":
@@ -204,8 +198,7 @@ def print_pipeline_result(result: Dict[str, Any]) -> None:
         elif step == "update_pnl":
             print(f"Saved {step_result['snapshot_count']} pnl snapshot(s).")
 
-
-def run_pipeline() -> Dict[str, Any]:
+def run_pipeline() -> dict[str, Any]:
     result = run_pipeline_collect()
     print_pipeline_result(result)
     return result

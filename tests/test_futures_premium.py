@@ -1,7 +1,12 @@
-import sqlite3
-
 from app.core.migrations import run_migrations
 from app.data.futures_premium_service import collect_futures_premium_metrics
+from conftest import make_connection
+
+
+def _make_connection():
+    conn = make_connection()
+    run_migrations(conn)
+    return conn
 
 
 class _FakeResponse:
@@ -13,12 +18,6 @@ class _FakeResponse:
 
     def json(self):
         return self._payload
-
-
-def _make_connection():
-    connection = sqlite3.connect(":memory:")
-    run_migrations(connection)
-    return connection
 
 
 def test_collect_futures_premium_metrics_backfills_missing_minutes(monkeypatch) -> None:
@@ -66,7 +65,7 @@ def test_collect_futures_premium_metrics_backfills_missing_minutes(monkeypatch) 
                 )
             raise AssertionError(f"unexpected url {url}")
 
-        monkeypatch.setattr("app.data.futures_premium_service.requests.get", fake_get)
+        monkeypatch.setattr("app.data.retry_helpers.requests.get", fake_get)
 
         result = collect_futures_premium_metrics(connection, ["BTCUSDT"], now_ms=240_000)
 
@@ -111,7 +110,7 @@ def test_collect_futures_premium_metrics_skips_backfill_when_no_gap(monkeypatch)
                 )
             raise AssertionError("historical klines should not be fetched")
 
-        monkeypatch.setattr("app.data.futures_premium_service.requests.get", fake_get)
+        monkeypatch.setattr("app.data.retry_helpers.requests.get", fake_get)
 
         result = collect_futures_premium_metrics(connection, ["BTCUSDT"], now_ms=60_000)
 

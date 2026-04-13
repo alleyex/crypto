@@ -1,15 +1,8 @@
-import json
 from pathlib import Path
 from typing import Any
-from typing import Optional
 
+from app.alerting.base import run_alert
 from app.alerting.state import build_fingerprint
-from app.alerting.state import clear_alert_state
-from app.alerting.state import read_alert_state
-from app.alerting.state import write_alert_state
-from app.alerting.telegram import send_telegram_message
-from app.core.settings import ALERT_REFIRE_SECONDS
-
 
 RUNTIME_DIR = Path("runtime")
 HEALTH_ALERT_STATE_FILE = RUNTIME_DIR / "health_alert_state.json"
@@ -65,40 +58,28 @@ def _build_fingerprint(report: dict[str, Any]) -> str:
     })
 
 
-def _read_state() -> Optional[dict[str, Any]]:
-    return read_alert_state(HEALTH_ALERT_STATE_FILE, ttl_seconds=ALERT_REFIRE_SECONDS)
-
-
-def _write_state(state: dict[str, Any]) -> None:
-    write_alert_state(HEALTH_ALERT_STATE_FILE, state)
-
-
-def _clear_state() -> None:
-    clear_alert_state(HEALTH_ALERT_STATE_FILE)
-
-
-def maybe_send_health_alert(report: dict[str, Any]) -> dict[str, Any]:
-    status = report.get("status", "ok")
-    if status == "ok":
-        _clear_state()
-        return {"sent": False, "reason": "Health status is ok."}
-
-    fingerprint = _build_fingerprint(report)
-    previous = _read_state()
-    if previous is not None and previous.get("fingerprint") == fingerprint:
-        return {"sent": False, "reason": "Health alert already sent for current state."}
-
+def _build_message(report: dict[str, Any]) -> str:
+    status = report.get("status", "unknown")
     checks = report.get("checks", {})
     degraded_checks = [
         f"{name}:{check.get('status')}"
         for name, check in checks.items()
         if check.get("status") in ("degraded", "error")
     ]
-    message = "Crypto alert: health is {status}. Checks: {checks}".format(
+    return "Crypto alert: health is {status}. Checks: {checks}".format(
         status=status.upper(),
         checks=", ".join(degraded_checks) if degraded_checks else "none",
     )
-    send_result = send_telegram_message(message)
-    if send_result.get("sent"):
-        _write_state({"fingerprint": fingerprint, "status": status})
-    return send_result
+
+
+def maybe_send_health_alert(report: dict[str, Any]) -> dict[str, Any]:
+    return run_alert(
+        HEALTH_ALERT_STATE_FILE,
+        report,
+        is_ok=lambda r: r.get("status", "ok") == "ok",
+        ok_reason="Health status is ok.",
+        duplicate_reason="Health alert already sent for current state.",
+        fingerprint_fn=_build_fingerprint,
+        message_fn=_build_message,
+        state_fn=lambda fp, r: {"fingerprint": fp, "status": r.get("status")},
+    )

@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.core.migrations import run_migrations
 from app.features.compute import (
     FEATURE_SET_VERSION,
     MIN_CANDLES,
@@ -28,6 +27,7 @@ from app.features.store import (
     get_latest_feature_vector,
     materialize_features,
 )
+from conftest import make_conn as _make_conn
 
 
 # ---------------------------------------------------------------------------
@@ -54,13 +54,6 @@ def _make_candles(closes: List[float], start_ms: int = _BASE_MS) -> List[Dict]:
     return candles
 
 
-def _make_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return conn
-
-
 def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
     for c in candles:
         conn.execute(
@@ -80,36 +73,7 @@ def _insert_candles(conn: sqlite3.Connection, candles: List[Dict]) -> None:
 
 
 # Persistent connection wrapper (same pattern as test_backtest.py)
-class _PersistentConn:
-    def __init__(self, conn: sqlite3.Connection):
-        self._conn = conn
-        self._conn.row_factory = sqlite3.Row
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-    def executemany(self, sql, seq_of_params):
-        return self._conn.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        pass  # no-op — keep alive across TestClient requests
-
-    def really_close(self):
-        self._conn.close()
-
-
-def _make_api_conn() -> _PersistentConn:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return _PersistentConn(conn)
-
+from tests.conftest import _PersistentConn, _make_api_conn
 
 # ---------------------------------------------------------------------------
 # Group 1: Low-level indicator helpers
@@ -502,13 +466,15 @@ def _feature_client(monkeypatch, closes: List[float]) -> tuple:
     candles = _make_candles(closes)
     _insert_candles(pconn._conn, candles)
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     return TestClient(app), pconn
 
 
 def test_api_compute_features_empty_db(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
     resp = client.get("/features/compute?symbol=BTCUSDT&timeframe=1m")
     assert resp.status_code == 200
@@ -562,6 +528,7 @@ def test_api_materialize_idempotent(monkeypatch):
 def test_api_get_latest_returns_404_when_empty(monkeypatch):
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     client = TestClient(app)
     resp = client.get("/features/BTCUSDT/latest?timeframe=1m")
     assert resp.status_code == 404

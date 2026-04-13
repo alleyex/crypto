@@ -660,8 +660,9 @@ def _patched_client(monkeypatch, candles: List[Dict], symbol: str = "BTCUSDT"):
     always fall within the requested date range.
     """
     conn = _seed_db_connection(candles, symbol)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.routes.backtest_sweep._backtest_start_iso", lambda days: "2020-01-01")
     return TestClient(app)
 
 
@@ -689,7 +690,7 @@ def test_get_backtest_no_candles_returns_error(monkeypatch) -> None:
     # Empty DB — no candles for the symbol
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     run_migrations(conn)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     response = client.get("/backtest?symbol=ETHUSDT")
     assert response.status_code == 200
@@ -1120,8 +1121,8 @@ def test_persist_run_params_json_stored() -> None:
 def test_get_backtest_history_empty(monkeypatch) -> None:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     run_migrations(conn)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     resp = client.get("/backtest/history")
     assert resp.status_code == 200
@@ -1131,19 +1132,7 @@ def test_get_backtest_history_empty(monkeypatch) -> None:
     conn.close()
 
 
-class _PersistentConn:
-    """Wraps a sqlite3 connection, ignoring close() so it can be reused across requests."""
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
-
-    def close(self) -> None:
-        pass  # intentional no-op
-
-    def __getattr__(self, name: str):
-        return getattr(self._conn, name)
-
-    def really_close(self) -> None:
-        self._conn.close()
+from tests.conftest import _PersistentConn
 
 
 def _make_seeded_conn(candles: List[Dict], symbol: str = "BTCUSDT") -> "_PersistentConn":
@@ -1165,8 +1154,8 @@ def _make_seeded_conn(candles: List[Dict], symbol: str = "BTCUSDT") -> "_Persist
 def test_get_backtest_history_appears_after_run(monkeypatch) -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     client.get("/backtest?symbol=BTCUSDT&strategy=ppo&days=30")
     resp = client.get("/backtest/history")
@@ -1191,8 +1180,8 @@ def test_get_backtest_history_filter_by_symbol(monkeypatch) -> None:
              c["close"], c["volume"], c["open_time"] + 59999),
         )
     conn._conn.commit()
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
     client.get("/backtest?symbol=ETHUSDT&strategy=ppo")
@@ -1207,8 +1196,8 @@ def test_get_backtest_history_filter_by_symbol(monkeypatch) -> None:
 def test_get_backtest_history_pagination(monkeypatch) -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     for _ in range(5):
         client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
@@ -1227,7 +1216,7 @@ def test_get_backtest_history_pagination(monkeypatch) -> None:
 
 def test_apply_best_sweep_params_unknown_strategy(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post("/backtest/sweep/nonexistent_strat/apply-best-params", json={})
     assert resp.status_code == 404
@@ -1237,7 +1226,7 @@ def test_apply_best_sweep_params_unknown_strategy(monkeypatch) -> None:
 
 def test_apply_best_sweep_params_no_runs_returns_404(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post("/backtest/sweep/ppo/apply-best-params", json={})
     assert resp.status_code == 404
@@ -1247,7 +1236,7 @@ def test_apply_best_sweep_params_no_runs_returns_404(monkeypatch) -> None:
 
 def test_apply_best_sweep_params_invalid_sort_by_returns_422(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post(
         "/backtest/sweep/ppo/apply-best-params",
@@ -1285,7 +1274,7 @@ def test_apply_best_sweep_params_golden_path(monkeypatch) -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
     _persist_sweep_run(conn, order_qty=0.003)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post("/backtest/sweep/ppo/apply-best-params", json={})
     assert resp.status_code == 200
@@ -1303,7 +1292,7 @@ def test_apply_best_sweep_params_min_trade_count_filter(monkeypatch) -> None:
     conn = _make_seeded_conn(candles, "BTCUSDT")
     # Insert a run with only 1 trade — should be filtered out by min_trade_count=5
     _persist_sweep_run(conn, order_qty=0.001, trade_count=1)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post(
         "/backtest/sweep/ppo/apply-best-params",
@@ -1367,7 +1356,7 @@ def test_get_backtest_experiments_endpoint(monkeypatch) -> None:
         " trade_count, fill_on, experiment_name) VALUES ('single','BTCUSDT','ppo','1m',0,0,'close','exp_x')"
     )
     conn._conn.commit()
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/experiments")
     assert resp.status_code == 200
@@ -1378,8 +1367,8 @@ def test_get_backtest_experiments_endpoint(monkeypatch) -> None:
 def test_backtest_history_experiment_name_filter(monkeypatch) -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     client.get("/backtest?symbol=BTCUSDT&strategy=ppo&experiment_name=exp_test")
     resp = client.get("/backtest/history?experiment_name=exp_test")
@@ -1426,7 +1415,7 @@ def test_patch_run_endpoint(monkeypatch) -> None:
     )
     conn._conn.commit()
     run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.patch(f"/backtest/runs/{run_id}", json={"notes": "nice", "tags": {"k": "v"}})
     assert resp.status_code == 200
@@ -1436,7 +1425,7 @@ def test_patch_run_endpoint(monkeypatch) -> None:
 
 def test_patch_run_endpoint_not_found(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.patch("/backtest/runs/9999", json={"notes": "x"})
     assert resp.status_code == 404
@@ -1492,7 +1481,7 @@ def test_compare_endpoint(monkeypatch) -> None:
     conn._conn.commit()
     rows = conn._conn.execute("SELECT id FROM backtest_runs ORDER BY id").fetchall()
     ids = ",".join(str(r[0]) for r in rows)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get(f"/backtest/compare?ids={ids}")
     assert resp.status_code == 200
@@ -1516,7 +1505,7 @@ def test_leaderboard_endpoint(monkeypatch) -> None:
         " VALUES ('single','BTCUSDT','ppo','1m',0,0,'close', 1.5)"
     )
     conn._conn.commit()
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/leaderboard/ppo?sort_by=sharpe_ratio&limit=5")
     assert resp.status_code == 200
@@ -1528,7 +1517,7 @@ def test_leaderboard_endpoint(monkeypatch) -> None:
 
 def test_leaderboard_invalid_sort_by(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/leaderboard/ppo?sort_by=bad_metric")
     assert resp.status_code == 422
@@ -1586,7 +1575,7 @@ def test_promote_endpoint(monkeypatch) -> None:
     )
     conn._conn.commit()
     run_id = conn._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     monkeypatch.setattr("app.audit.service.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.post(f"/backtest/runs/{run_id}/promote")
@@ -1609,7 +1598,7 @@ def test_champion_endpoint(monkeypatch) -> None:
         " VALUES ('single','BTCUSDT','ppo','1m',0,0,'close', CURRENT_TIMESTAMP)"
     )
     conn._conn.commit()
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/champion/ppo")
     assert resp.status_code == 200
@@ -1619,7 +1608,7 @@ def test_champion_endpoint(monkeypatch) -> None:
 
 def test_champion_endpoint_not_found(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/champion/ppo")
     assert resp.status_code == 404
@@ -1699,7 +1688,7 @@ def test_list_walk_forward_groups() -> None:
 def test_wf_groups_endpoint(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     _seed_wf_group(conn._conn, group_id="wfg-ep", n_folds=2)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/walk-forward/groups")
     assert resp.status_code == 200
@@ -1711,7 +1700,7 @@ def test_wf_groups_endpoint(monkeypatch) -> None:
 def test_wf_group_detail_endpoint(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
     _seed_wf_group(conn._conn, group_id="wfg-detail", n_folds=3)
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/walk-forward/groups/wfg-detail")
     assert resp.status_code == 200
@@ -1725,7 +1714,7 @@ def test_wf_group_detail_endpoint(monkeypatch) -> None:
 
 def test_wf_group_detail_not_found(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/walk-forward/groups/nonexistent")
     assert resp.status_code == 404
@@ -1736,8 +1725,8 @@ def test_walk_forward_endpoint_returns_wf_group_id(monkeypatch) -> None:
     """POST /backtest/walk-forward should return wf_group_id in response."""
     candles = _make_candles([100.0 + i for i in range(60)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     resp = client.post(
         "/backtest/walk-forward",
@@ -1791,8 +1780,8 @@ def test_get_equity_curve_returns_none_for_missing_run() -> None:
 def test_equity_curve_endpoint_returns_curve(monkeypatch) -> None:
     candles = _make_candles([100.0 + i for i in range(30)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     # run a backtest — should persist equity_curve
     resp = client.get("/backtest?symbol=BTCUSDT&strategy=ppo")
@@ -1811,7 +1800,7 @@ def test_equity_curve_endpoint_returns_curve(monkeypatch) -> None:
 
 def test_equity_curve_endpoint_not_found(monkeypatch) -> None:
     conn = _make_seeded_conn([], "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
     client = TestClient(app)
     resp = client.get("/backtest/runs/9999/equity-curve")
     assert resp.status_code == 404
@@ -1822,8 +1811,8 @@ def test_walk_forward_folds_store_equity_curve(monkeypatch) -> None:
     """Each WF fold should persist its test equity curve."""
     candles = _make_candles([100.0 + i for i in range(60)])
     conn = _make_seeded_conn(candles, "BTCUSDT")
-    monkeypatch.setattr("app.api.main.get_connection", lambda: conn)
-    monkeypatch.setattr("app.api.main._backtest_start_iso", lambda days: "2020-01-01")
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: conn)
+    monkeypatch.setattr("app.api.routes.backtest._backtest_start_iso", lambda days: "2020-01-01")
     client = TestClient(app)
     resp = client.post(
         "/backtest/walk-forward",

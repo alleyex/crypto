@@ -22,10 +22,9 @@ Gradient of log-policy:
 
 import math
 import random
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from app.rl.environment import TradingEnv
-
 
 class ReinforceAgent:
     def __init__(
@@ -55,12 +54,12 @@ class ReinforceAgent:
         e = math.exp(z)
         return e / (1.0 + e)
 
-    def action_prob(self, obs: List[float]) -> float:
+    def action_prob(self, obs: list[float]) -> float:
         """Return P(LONG | obs)."""
         z = sum(w * x for w, x in zip(self.weights, obs)) + self.bias
         return self._sigmoid(z)
 
-    def select_action(self, obs: List[float]) -> Tuple[int, float]:
+    def select_action(self, obs: list[float]) -> tuple[int, float]:
         """Sample action from policy. Returns (action, log_prob)."""
         p = self.action_prob(obs)
         action = 1 if self._rng.random() < p else 0
@@ -68,7 +67,7 @@ class ReinforceAgent:
         log_prob = math.log(p_clamped) if action == 1 else math.log(1.0 - p_clamped)
         return action, log_prob
 
-    def greedy_action(self, obs: List[float]) -> int:
+    def greedy_action(self, obs: list[float]) -> int:
         """Deterministic action (argmax policy)."""
         return 1 if self.action_prob(obs) >= 0.5 else 0
 
@@ -76,7 +75,7 @@ class ReinforceAgent:
     # REINFORCE update
     # ------------------------------------------------------------------
 
-    def _discounted_returns(self, rewards: List[float]) -> List[float]:
+    def _discounted_returns(self, rewards: list[float]) -> list[float]:
         G = 0.0
         returns = []
         for r in reversed(rewards):
@@ -87,9 +86,9 @@ class ReinforceAgent:
 
     def update(
         self,
-        observations: List[List[float]],
-        actions: List[int],
-        rewards: List[float],
+        observations: list[list[float]],
+        actions: list[int],
+        rewards: list[float],
     ) -> float:
         """Run one REINFORCE update. Returns mean absolute policy loss."""
         returns = self._discounted_returns(rewards)
@@ -130,12 +129,12 @@ class ReinforceAgent:
     # Full episode rollout
     # ------------------------------------------------------------------
 
-    def run_episode(self, env: TradingEnv, train: bool = True) -> Dict[str, Any]:
+    def run_episode(self, env: TradingEnv, train: bool = True) -> dict[str, Any]:
         """Roll out one full episode. If train=True, update weights."""
         obs = env.reset()
-        observations: List[List[float]] = []
-        actions: List[int] = []
-        rewards: List[float] = []
+        observations: list[list[float]] = []
+        actions: list[int] = []
+        rewards: list[float] = []
 
         while True:
             if train:
@@ -160,7 +159,7 @@ class ReinforceAgent:
             "loss": loss,
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "model_type": "reinforce_v1",
             "weights": list(self.weights),

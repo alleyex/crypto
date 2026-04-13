@@ -12,11 +12,10 @@ Signal record fields:
   long_ma  → signal line value (EMA of MACD)
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 from app.core.db import DBConnection
 from app.strategy.signal_service import insert_signal
-
 
 _SELECT_CLOSES_SQL = """
 SELECT close
@@ -32,8 +31,7 @@ DEFAULT_FAST = 12
 DEFAULT_SLOW = 26
 DEFAULT_SIGNAL = 9
 
-
-def _ema(values: List[float], period: int) -> List[float]:
+def _ema(values: list[float], period: int) -> list[float]:
     """Compute EMA series using the standard multiplier k = 2/(period+1)."""
     if not values:
         return []
@@ -43,13 +41,12 @@ def _ema(values: List[float], period: int) -> List[float]:
         result.append(v * k + result[-1] * (1.0 - k))
     return result
 
-
 def _compute_macd(
-    closes: List[float],
+    closes: list[float],
     fast: int,
     slow: int,
     signal_period: int,
-) -> Optional[tuple]:
+) -> tuple | None:
     """Return (macd_line, signal_line, prev_macd, prev_signal) or None."""
     if len(closes) < slow + signal_period:
         return None
@@ -72,7 +69,6 @@ def _compute_macd(
 
     return macd_now, signal_now, macd_prev, signal_prev
 
-
 def generate_signal(
     connection: DBConnection,
     symbol: str = "BTCUSDT",
@@ -81,7 +77,7 @@ def generate_signal(
     slow: int = DEFAULT_SLOW,
     signal_period: int = DEFAULT_SIGNAL,
     strategy_name: str = STRATEGY_NAME,
-) -> Optional[Dict[str, Union[float, str]]]:
+) -> dict[str, Union[float, str]] | None:
     # Fetch enough candles for EMA warmup; 3× slow gives stable values
     fetch_limit = slow * 3 + signal_period
     rows = connection.execute(_SELECT_CLOSES_SQL, (symbol, timeframe, fetch_limit)).fetchall()

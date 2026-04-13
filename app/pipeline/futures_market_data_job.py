@@ -1,18 +1,17 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.data.binance_client import fetch_futures_klines
 from app.data.candles_service import TIMEFRAME_INTERVAL_MS
 from app.data.fetch_history import record_fetch
-from app.data.futures_candles_service import ensure_table as ensure_futures_candles_table
 from app.data.futures_candles_service import get_latest_open_time
 from app.data.futures_candles_service import save_klines
 from app.core.settings import FUTURES_CANDLE_SYMBOLS
+from app.core.utils import dedup_ordered
 
 PAGE_SIZE = 1000
 SEED_LIMIT = 100
 MAX_WORKERS = 4
-
 
 def _fetch_all_since(symbol: str, start_ms: int, interval: str = "1m") -> list:
     all_klines: list = []
@@ -27,8 +26,7 @@ def _fetch_all_since(symbol: str, start_ms: int, interval: str = "1m") -> list:
         cursor_ms = int(klines[-1][0]) + 1
     return all_klines
 
-
-def _fetch_one(symbol: str, timeframe: str, start_ms: Optional[int], limit: int) -> Dict[str, Any]:
+def _fetch_one(symbol: str, timeframe: str, start_ms: int | None, limit: int) -> dict[str, Any]:
     if start_ms is not None:
         klines = _fetch_all_since(symbol=symbol, start_ms=start_ms, interval=timeframe)
         mode = "backfill"
@@ -37,24 +35,21 @@ def _fetch_one(symbol: str, timeframe: str, start_ms: Optional[int], limit: int)
         mode = "seed"
     return {"symbol": symbol, "timeframe": timeframe, "klines": klines, "mode": mode}
 
-
 def run_futures_market_data_job(
     connection,
-    symbol_names: Optional[list[str]] = None,
-    timeframes: Optional[list[str]] = None,
+    symbol_names: list[str] | None = None,
+    timeframes: list[str] | None = None,
     limit: int = SEED_LIMIT,
-    start_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    ensure_futures_candles_table(connection)
-
+    start_ms: int | None = None,
+) -> dict[str, Any]:
     if symbol_names is None:
         symbol_names = list(FUTURES_CANDLE_SYMBOLS)
     if timeframes is None:
         from app.scheduler.control import read_active_timeframes
         timeframes = read_active_timeframes()
 
-    active_symbols = list(dict.fromkeys(symbol_names))
-    active_timeframes = list(dict.fromkeys(timeframes))
+    active_symbols = dedup_ordered(symbol_names)
+    active_timeframes = dedup_ordered(timeframes)
     tasks = []
     for symbol in active_symbols:
         for timeframe in active_timeframes:
@@ -72,7 +67,7 @@ def run_futures_market_data_job(
                     mode_hint = "seed"
             tasks.append((symbol, timeframe, task_start_ms, mode_hint))
 
-    fetch_results: Dict[str, Any] = {}
+    fetch_results: dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(tasks) or 1)) as pool:
         futures = {
             pool.submit(_fetch_one, sym, tf, t_start, limit): (sym, tf, hint)
@@ -103,7 +98,7 @@ def run_futures_market_data_job(
         error = r.get("error")
         saved = 0 if error else save_klines(connection, klines, symbol=symbol, timeframe=timeframe) if klines else 0
         total_saved_klines += saved
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "symbol": symbol,
             "timeframe": timeframe,
             "saved_klines": saved,

@@ -1,14 +1,19 @@
 import uuid
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
 from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
+from app.core.utils import dedup_ordered
 from app.data.candles_service import get_latest_close
+from app.execution.queries import (
+    SELECT_LATEST_RISK_SQL,
+    SELECT_RISK_BY_ID_SQL,
+    select_pending_approved_risk_ids,
+)
 from app.portfolio.daily_pnl_service import rebuild_daily_realized_pnl
-
 
 CREATE_ORDERS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -28,7 +33,6 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 """
 
-
 CREATE_FILLS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY,
@@ -41,36 +45,6 @@ CREATE TABLE IF NOT EXISTS fills (
     FOREIGN KEY(order_id) REFERENCES orders(id)
 );
 """
-
-
-SELECT_LATEST_RISK_SQL = """
-SELECT
-    re.id,
-    re.signal_id,
-    re.symbol,
-    re.timeframe,
-    re.strategy_name,
-    re.signal_type,
-    re.decision
-FROM risk_events re
-ORDER BY re.id DESC
-LIMIT 1;
-"""
-
-
-SELECT_RISK_BY_ID_SQL = """
-SELECT
-    re.id,
-    re.signal_id,
-    re.symbol,
-    re.timeframe,
-    re.strategy_name,
-    re.signal_type,
-    re.decision
-FROM risk_events re
-WHERE re.id = ?;
-"""
-
 
 INSERT_ORDER_SQL = """
 INSERT INTO orders (
@@ -89,7 +63,6 @@ INSERT INTO orders (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
-
 INSERT_FILL_SQL = """
 INSERT INTO fills (
     order_id,
@@ -105,38 +78,14 @@ INSERT INTO fills (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
-
 def ensure_tables(connection: DBConnection) -> None:
     run_migrations(connection)
-
-
-def _select_pending_approved_risk_ids(
-    connection: DBConnection,
-    symbol_names: Optional[List[str]] = None,
-) -> List[int]:
-    query = """
-    SELECT re.id
-    FROM risk_events re
-    LEFT JOIN orders o ON o.risk_event_id = re.id
-    WHERE re.decision = 'APPROVED'
-      AND o.id IS NULL
-    """
-    params: list[str] = []
-    filtered_symbol_names = list(dict.fromkeys(symbol_names or []))
-    if filtered_symbol_names:
-        placeholders = ", ".join("?" for _ in filtered_symbol_names)
-        query += f" AND re.symbol IN ({placeholders})"
-        params.extend(filtered_symbol_names)
-    query += " ORDER BY re.id ASC;"
-    rows = connection.execute(query, tuple(params)).fetchall()
-    return [int(row[0]) for row in rows]
-
 
 def execute_risk_event_id(
     connection: DBConnection,
     risk_event_id: int,
     order_qty: float = 0.001,
-) -> Optional[Dict[str, Union[float, str, int]]]:
+) -> dict[str, Union[float, str, int]] | None:
     risk_event = connection.execute(SELECT_RISK_BY_ID_SQL, (risk_event_id,)).fetchone()
     if risk_event is None:
         return None
@@ -212,38 +161,35 @@ def execute_risk_event_id(
         "status": "FILLED",
     }
 
-
 def execute_latest_risk(
     connection: DBConnection,
     order_qty: float = 0.001,
-) -> Optional[Dict[str, Union[float, str, int]]]:
+) -> dict[str, Union[float, str, int]] | None:
     latest_risk = connection.execute(SELECT_LATEST_RISK_SQL).fetchone()
     if latest_risk is None:
         return None
     return execute_risk_event_id(connection, int(latest_risk[0]), order_qty=order_qty)
 
-
 def execute_pending_approved_risks(
     connection: DBConnection,
     order_qty: float = 0.001,
-    symbol_names: Optional[List[str]] = None,
-) -> List[Dict[str, Union[float, str, int]]]:
-    pending_rows = _select_pending_approved_risk_ids(connection, symbol_names=symbol_names)
-    execution_results: List[Dict[str, Union[float, str, int]]] = []
+    symbol_names: list[str] | None = None,
+) -> list[dict[str, Union[float, str, int]]]:
+    pending_rows = select_pending_approved_risk_ids(connection, symbol_names=symbol_names)
+    execution_results: list[dict[str, Union[float, str, int]]] = []
     for risk_event_id in pending_rows:
         execution_result = execute_risk_event_id(connection, risk_event_id, order_qty=order_qty)
         if execution_result is not None:
             execution_results.append(execution_result)
     return execution_results
 
-
 def execute_risk_event_ids(
     connection: DBConnection,
-    risk_event_ids: List[int],
+    risk_event_ids: list[int],
     order_qty: float = 0.001,
-) -> List[Dict[str, Union[float, str, int]]]:
-    execution_results: List[Dict[str, Union[float, str, int]]] = []
-    for risk_event_id in list(dict.fromkeys(risk_event_ids)):
+) -> list[dict[str, Union[float, str, int]]]:
+    execution_results: list[dict[str, Union[float, str, int]]] = []
+    for risk_event_id in dedup_ordered(risk_event_ids):
         execution_result = execute_risk_event_id(connection, int(risk_event_id), order_qty=order_qty)
         if execution_result is not None:
             execution_results.append(execution_result)

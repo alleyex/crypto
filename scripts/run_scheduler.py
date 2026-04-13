@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
 
 
 def _pid_file_for_mode(mode: str) -> Path:
@@ -57,20 +56,6 @@ def _release_singleton(pid_file: Path) -> None:
         pass
 
 
-def _ensure_project_venv_python() -> None:
-    if not EXPECTED_PYTHON.exists():
-        return
-
-    current_python = Path(sys.executable).resolve()
-    expected_python = EXPECTED_PYTHON.resolve()
-    if current_python == expected_python:
-        return
-
-    os.execv(str(expected_python), [str(expected_python), __file__, *sys.argv[1:]])
-
-
-_ensure_project_venv_python()
-
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.env import load_dotenv_file
@@ -110,22 +95,12 @@ def parse_args() -> argparse.Namespace:
         help=f"Strategy name for pipeline/strategy-only runs. Default: {DEFAULT_STRATEGY_NAME}",
     )
     parser.add_argument(
-        "--queue-dispatch",
-        action="store_true",
-        help="Enqueue jobs instead of executing them directly. In pipeline mode, enqueue a full pipeline batch.",
-    )
-    parser.add_argument(
-        "--queue-drain",
-        action="store_true",
-        help="Drain queued jobs instead of executing direct scheduler jobs. In pipeline mode, drain the next pipeline batch step.",
-    )
-    parser.add_argument(
         "--orchestration",
         choices=("default", "direct", "queue_dispatch", "queue_drain", "queue_batch"),
         default="default",
         help=(
-            "Pipeline orchestration mode override. "
-            f"Default: use CRYPTO_PIPELINE_ORCHESTRATION ({DEFAULT_PIPELINE_ORCHESTRATION})."
+            "Orchestration mode. "
+            f"Default: use CRYPTO_PIPELINE_ORCHESTRATION env var ({DEFAULT_PIPELINE_ORCHESTRATION})."
         ),
     )
     return parser.parse_args()
@@ -136,20 +111,13 @@ def main() -> None:
     pid_file = _pid_file_for_mode(args.mode)
     _acquire_singleton(pid_file)
     try:
-        queue_dispatch = args.queue_dispatch
-        queue_drain = args.queue_drain
-        pipeline_orchestration_override = None if args.orchestration == "default" else args.orchestration
-        if args.orchestration != "default":
-            queue_dispatch = args.orchestration == "queue_dispatch"
-            queue_drain = args.orchestration == "queue_drain"
+        orchestration = None if args.orchestration == "default" else args.orchestration
         run_scheduler(
             interval_seconds=args.interval,
             iterations=args.iterations,
             mode=args.mode,
             strategy_name=args.strategy,
-            queue_dispatch=queue_dispatch,
-            queue_drain=queue_drain,
-            pipeline_orchestration_override=pipeline_orchestration_override,
+            orchestration=orchestration,
         )
     finally:
         _release_singleton(pid_file)

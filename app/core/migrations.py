@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable
 
 from app.core.db import DBConnection
 from app.core.db import get_backend_name
@@ -7,21 +7,19 @@ from app.core.db import get_table_columns
 from app.core.db import table_exists
 from app.core.db import utc_now_iso
 
-
 Migration = tuple[str, Callable[[DBConnection], None]]
 
+# ── Column-type helpers ────────────────────────────────────────────────────────────────────────
 
 def _auto_id_column_sql(backend: str) -> str:
     if backend == "postgres":
         return "id BIGSERIAL PRIMARY KEY"
     return "id INTEGER PRIMARY KEY"
 
-
 def _epoch_millis_column_sql(backend: str) -> str:
     if backend == "postgres":
         return "BIGINT"
     return "INTEGER"
-
 
 CREATE_SCHEMA_MIGRATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -86,6 +84,7 @@ POSTGRES_TEXT_TIMESTAMP_DEFAULT_TABLES: tuple[tuple[str, tuple[str, ...]], ...] 
     ("model_registry", ("created_at",)),
 )
 
+# ── Tables: candles / signals / risk_events / orders / fills / positions / pnl ───────────────
 
 def _create_candles_table(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
@@ -113,7 +112,6 @@ def _create_candles_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _create_signals_table(connection: DBConnection) -> None:
     connection.execute(
         f"""
@@ -129,7 +127,6 @@ def _create_signals_table(connection: DBConnection) -> None:
         );
         """
     )
-
 
 def _create_risk_events_table(connection: DBConnection) -> None:
     connection.execute(
@@ -148,11 +145,9 @@ def _create_risk_events_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _add_risk_events_signal_id(connection: DBConnection) -> None:
     if table_exists(connection, "risk_events") and "signal_id" not in get_table_columns(connection, "risk_events"):
         connection.execute("ALTER TABLE risk_events ADD COLUMN signal_id INTEGER;")
-
 
 def _create_orders_and_fills_tables(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
@@ -190,14 +185,12 @@ def _create_orders_and_fills_tables(connection: DBConnection) -> None:
         """
     )
 
-
 def _add_orders_risk_event_id(connection: DBConnection) -> None:
     if table_exists(connection, "orders") and "risk_event_id" not in get_table_columns(connection, "orders"):
         connection.execute("ALTER TABLE orders ADD COLUMN risk_event_id INTEGER;")
     connection.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_risk_event_id ON orders(risk_event_id);"
     )
-
 
 def _add_orders_broker_metadata(connection: DBConnection) -> None:
     if not table_exists(connection, "orders"):
@@ -207,7 +200,6 @@ def _add_orders_broker_metadata(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE orders ADD COLUMN broker_name TEXT;")
     if "broker_order_id" not in columns:
         connection.execute("ALTER TABLE orders ADD COLUMN broker_order_id TEXT;")
-
 
 def _add_performance_indexes(connection: DBConnection) -> None:
     # fills(symbol) — daily PnL lookup and position reconstruction
@@ -229,7 +221,6 @@ def _add_performance_indexes(connection: DBConnection) -> None:
         " ON risk_events(decision, id);"
     )
 
-
 def _create_positions_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -243,11 +234,9 @@ def _create_positions_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _add_positions_realized_pnl(connection: DBConnection) -> None:
     if table_exists(connection, "positions") and "realized_pnl" not in get_table_columns(connection, "positions"):
         connection.execute("ALTER TABLE positions ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0;")
-
 
 def _create_pnl_snapshots_table(connection: DBConnection) -> None:
     connection.execute(
@@ -264,7 +253,6 @@ def _create_pnl_snapshots_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _create_daily_realized_pnl_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -278,6 +266,7 @@ def _create_daily_realized_pnl_table(connection: DBConnection) -> None:
         """
     )
 
+# ── Tables: audit / heartbeats / job queue ────────────────────────────────────────────────────
 
 def _create_audit_events_table(connection: DBConnection) -> None:
     connection.execute(
@@ -294,7 +283,6 @@ def _create_audit_events_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _create_runtime_heartbeats_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -307,7 +295,6 @@ def _create_runtime_heartbeats_table(connection: DBConnection) -> None:
         );
         """
     )
-
 
 def _create_job_queue_table(connection: DBConnection) -> None:
     connection.execute(
@@ -330,11 +317,11 @@ def _create_job_queue_table(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_job_queue_status_created_at ON job_queue(status, created_at, id);"
     )
 
-
 def _add_job_queue_depends_on(connection: DBConnection) -> None:
     if table_exists(connection, "job_queue") and "depends_on_job_id" not in get_table_columns(connection, "job_queue"):
         connection.execute("ALTER TABLE job_queue ADD COLUMN depends_on_job_id INTEGER;")
 
+# ── Tables: risk config / portfolio config ────────────────────────────────────────────────────
 
 def _create_risk_configs_table(connection: DBConnection) -> None:
     connection.execute(
@@ -351,11 +338,9 @@ def _create_risk_configs_table(connection: DBConnection) -> None:
         """
     )
 
-
 def _add_risk_configs_stop_loss_pct(connection: DBConnection) -> None:
     if table_exists(connection, "risk_configs") and "stop_loss_pct" not in get_table_columns(connection, "risk_configs"):
         connection.execute("ALTER TABLE risk_configs ADD COLUMN stop_loss_pct NUMERIC(20,8) NOT NULL DEFAULT 0;")
-
 
 def _add_signals_lookup_index(connection: DBConnection) -> None:
     """Composite index for SELECT_PREVIOUS_SIGNAL_SQL in risk_service.
@@ -370,13 +355,11 @@ def _add_signals_lookup_index(connection: DBConnection) -> None:
         """
     )
 
-
 def _add_fills_symbol_index(connection: DBConnection) -> None:
     """Index fills by symbol to speed up per-symbol aggregation in positions_service."""
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_fills_symbol ON fills (symbol);"
     )
-
 
 def _add_job_queue_batch_id_column(connection: DBConnection) -> None:
     """Promote batch_id from inside payload_json to a dedicated indexed column.
@@ -414,7 +397,6 @@ def _add_job_queue_batch_id_column(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_job_queue_batch_id ON job_queue (batch_id);"
     )
 
-
 def _create_portfolio_config_table(connection: DBConnection) -> None:
     connection.execute(
         """
@@ -428,6 +410,7 @@ def _create_portfolio_config_table(connection: DBConnection) -> None:
         """
     )
 
+# ── Tables: backtest / feature vectors / training / model registry ────────────────────────────
 
 def _create_backtest_runs_table(connection: DBConnection) -> None:
     connection.execute(
@@ -460,6 +443,7 @@ def _create_backtest_runs_table(connection: DBConnection) -> None:
         "ON backtest_runs(symbol, strategy_name, created_at DESC);"
     )
 
+# ── Alterations: column type changes, index additions, data backfills ────────────────────────
 
 def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
@@ -473,11 +457,9 @@ def _alter_candles_epoch_columns_to_bigint(connection: DBConnection) -> None:
         "ALTER TABLE candles ALTER COLUMN close_time TYPE BIGINT;"
     )
 
-
 def _add_backtest_runs_experiment_name(connection: DBConnection) -> None:
     if table_exists(connection, "backtest_runs") and "experiment_name" not in get_table_columns(connection, "backtest_runs"):
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN experiment_name TEXT;")
-
 
 def _add_backtest_runs_tags_notes(connection: DBConnection) -> None:
     if not table_exists(connection, "backtest_runs"):
@@ -488,11 +470,9 @@ def _add_backtest_runs_tags_notes(connection: DBConnection) -> None:
     if "notes" not in cols:
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN notes TEXT;")
 
-
 def _add_backtest_runs_promoted_at(connection: DBConnection) -> None:
     if table_exists(connection, "backtest_runs") and "promoted_at" not in get_table_columns(connection, "backtest_runs"):
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN promoted_at TEXT;")
-
 
 def _add_backtest_runs_wf_columns(connection: DBConnection) -> None:
     if not table_exists(connection, "backtest_runs"):
@@ -503,11 +483,9 @@ def _add_backtest_runs_wf_columns(connection: DBConnection) -> None:
     if "fold_index" not in cols:
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN fold_index INTEGER;")
 
-
 def _add_backtest_runs_equity_curve(connection: DBConnection) -> None:
     if table_exists(connection, "backtest_runs") and "equity_curve_json" not in get_table_columns(connection, "backtest_runs"):
         connection.execute("ALTER TABLE backtest_runs ADD COLUMN equity_curve_json TEXT;")
-
 
 def _create_feature_vectors_table(connection: DBConnection) -> None:
     connection.execute(
@@ -528,7 +506,6 @@ def _create_feature_vectors_table(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_feature_vectors_symbol_tf"
         " ON feature_vectors (symbol, timeframe, feature_set, open_time);"
     )
-
 
 def _create_training_jobs_table(connection: DBConnection) -> None:
     connection.execute(
@@ -555,11 +532,9 @@ def _create_training_jobs_table(connection: DBConnection) -> None:
         " ON training_jobs (symbol, status, created_at);"
     )
 
-
 def _add_training_jobs_job_type(connection: DBConnection) -> None:
     if table_exists(connection, "training_jobs") and "job_type" not in get_table_columns(connection, "training_jobs"):
         connection.execute("ALTER TABLE training_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'supervised';")
-
 
 def _create_model_registry_table(connection: DBConnection) -> None:
     connection.execute(
@@ -584,7 +559,6 @@ def _create_model_registry_table(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_model_registry_symbol"
         " ON model_registry (symbol, timeframe, feature_set, status, created_at);"
     )
-
 
 def _ensure_postgres_identity_pk(
     connection: DBConnection,
@@ -617,11 +591,9 @@ def _ensure_postgres_identity_pk(
         """
     )
 
-
 def _ensure_postgres_training_model_identity_columns(connection: DBConnection) -> None:
     _ensure_postgres_identity_pk(connection, "training_jobs")
     _ensure_postgres_identity_pk(connection, "model_registry")
-
 
 def _add_risk_events_signal_id_index(connection: DBConnection) -> None:
     """Index risk_events(signal_id) to speed up the fill-replay JOIN chain.
@@ -635,7 +607,6 @@ def _add_risk_events_signal_id_index(connection: DBConnection) -> None:
         " ON risk_events(signal_id);"
     )
 
-
 def _add_risk_events_symbol_strategy_decision_index(connection: DBConnection) -> None:
     """Composite index for broker-protection rejection-streak queries.
 
@@ -648,7 +619,6 @@ def _add_risk_events_symbol_strategy_decision_index(connection: DBConnection) ->
         "CREATE INDEX IF NOT EXISTS idx_risk_events_symbol_strategy_decision"
         " ON risk_events(symbol, strategy_name, decision, id);"
     )
-
 
 def _migrate_pnl_snapshots_to_numeric(connection: DBConnection) -> None:
     """Migrate pnl_snapshots financial columns from REAL to NUMERIC(20,8).
@@ -666,12 +636,10 @@ def _migrate_pnl_snapshots_to_numeric(connection: DBConnection) -> None:
             f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
         )
 
-
 _CANDLES_NUMERIC_COLS = [
     "open", "high", "low", "close", "volume",
     "quote_asset_volume", "taker_buy_base_volume", "taker_buy_quote_volume",
 ]
-
 
 def _migrate_candles_columns_to_numeric(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
@@ -683,7 +651,6 @@ def _migrate_candles_columns_to_numeric(connection: DBConnection) -> None:
             f"ALTER TABLE candles ALTER COLUMN {col} TYPE NUMERIC(20,8)"
             f" USING {col}::NUMERIC;"
         )
-
 
 def _migrate_financial_columns_to_numeric(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
@@ -708,13 +675,11 @@ def _migrate_financial_columns_to_numeric(connection: DBConnection) -> None:
                 f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
             )
 
-
 def _add_candles_symbol_timeframe_index(connection: DBConnection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_candles_symbol_timeframe"
         " ON candles(symbol, timeframe);"
     )
-
 
 def _migrate_timestamps_to_timestamptz(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
@@ -741,7 +706,6 @@ def _migrate_timestamps_to_timestamptz(connection: DBConnection) -> None:
             f" TYPE TIMESTAMPTZ USING created_at::TIMESTAMPTZ;"
         )
 
-
 def _migrate_feature_vectors_open_time_to_bigint(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -753,7 +717,6 @@ def _migrate_feature_vectors_open_time_to_bigint(connection: DBConnection) -> No
         "ALTER TABLE feature_vectors ALTER COLUMN open_time"
         " TYPE BIGINT USING open_time::BIGINT;"
     )
-
 
 def _migrate_remaining_real_columns_to_numeric(connection: DBConnection) -> None:
     """Migrate REAL → NUMERIC(20,8) for risk_configs, portfolio_config, backtest_runs."""
@@ -779,7 +742,6 @@ def _migrate_remaining_real_columns_to_numeric(connection: DBConnection) -> None
                 f" TYPE NUMERIC(20,8) USING {col}::NUMERIC;"
             )
 
-
 def _add_fills_commission(connection: DBConnection) -> None:
     """Add commission, commission_asset, quote_qty, transact_time columns to fills table."""
     if not table_exists(connection, "fills"):
@@ -794,6 +756,7 @@ def _add_fills_commission(connection: DBConnection) -> None:
     if "transact_time" not in existing:
         connection.execute("ALTER TABLE fills ADD COLUMN transact_time INTEGER DEFAULT NULL;")
 
+# ── Tables: futures data (order book / aggtrade / premium / open interest / liquidation / candles)
 
 def _create_order_book_snapshots(connection: DBConnection) -> None:
     """Create order_book_snapshots table for 1m order book collection."""
@@ -818,7 +781,6 @@ def _create_order_book_snapshots(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_ob_snapshots_symbol_ts"
         " ON order_book_snapshots(symbol, timestamp_ms);"
     )
-
 
 def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
     """Create futures_order_book_snapshots table for perp order book collection."""
@@ -864,7 +826,6 @@ def _create_futures_order_book_snapshots(connection: DBConnection) -> None:
         " ON futures_order_book_snapshots(symbol, timestamp_ms);"
     )
 
-
 def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
     if not table_exists(connection, "futures_order_book_snapshots"):
         return
@@ -891,14 +852,12 @@ def _add_futures_order_book_aggregate_columns(connection: DBConnection) -> None:
         if column not in existing:
             connection.execute(f"ALTER TABLE futures_order_book_snapshots ADD COLUMN {column} {sql_type};")
 
-
 def _add_futures_order_book_active_seconds(connection: DBConnection) -> None:
     if not table_exists(connection, "futures_order_book_snapshots"):
         return
     existing = get_table_columns(connection, "futures_order_book_snapshots")
     if "active_seconds" not in existing:
         connection.execute("ALTER TABLE futures_order_book_snapshots ADD COLUMN active_seconds INTEGER DEFAULT 0;")
-
 
 def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> None:
     if not table_exists(connection, "futures_order_book_snapshots"):
@@ -924,7 +883,6 @@ def _backfill_futures_order_book_active_seconds(connection: DBConnection) -> Non
           AND COALESCE(coverage_ratio, 0) > 0
         """
     )
-
 
 def _create_futures_aggtrade_minutes(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
@@ -967,7 +925,6 @@ def _create_futures_aggtrade_minutes(connection: DBConnection) -> None:
         " ON futures_aggtrade_minutes(symbol, timestamp_ms);"
     )
 
-
 def _create_futures_premium_metrics(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
     epoch_t = _epoch_millis_column_sql(backend)
@@ -995,7 +952,6 @@ def _create_futures_premium_metrics(connection: DBConnection) -> None:
         " ON futures_premium_metrics(symbol, timestamp_ms);"
     )
 
-
 def _create_futures_open_interest_metrics(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
     epoch_t = _epoch_millis_column_sql(backend)
@@ -1019,7 +975,6 @@ def _create_futures_open_interest_metrics(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_futures_open_interest_metrics_symbol_ts"
         " ON futures_open_interest_metrics(symbol, timestamp_ms);"
     )
-
 
 def _create_futures_liquidation_minutes(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
@@ -1056,7 +1011,6 @@ def _create_futures_liquidation_minutes(connection: DBConnection) -> None:
         " ON futures_liquidation_minutes(symbol, timestamp_ms);"
     )
 
-
 def _create_futures_candles_table(connection: DBConnection) -> None:
     backend = get_backend_name(connection)
     epoch_t = _epoch_millis_column_sql(backend)
@@ -1087,7 +1041,6 @@ def _create_futures_candles_table(connection: DBConnection) -> None:
         " ON futures_candles(symbol, timeframe, open_time);"
     )
 
-
 def _widen_futures_open_interest_numeric_columns(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -1105,7 +1058,6 @@ def _widen_futures_open_interest_numeric_columns(connection: DBConnection) -> No
             "ALTER COLUMN oi_change_pct_1m TYPE NUMERIC(20,10) USING oi_change_pct_1m::NUMERIC;"
         )
 
-
 def _widen_fills_transact_time(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -1118,7 +1070,6 @@ def _widen_fills_transact_time(connection: DBConnection) -> None:
         "ALTER TABLE fills ALTER COLUMN transact_time TYPE BIGINT USING transact_time::BIGINT;"
     )
 
-
 def _add_training_jobs_progress(connection: DBConnection) -> None:
     """Add progress_json and job_type columns to training_jobs table."""
     if not table_exists(connection, "training_jobs"):
@@ -1128,7 +1079,6 @@ def _add_training_jobs_progress(connection: DBConnection) -> None:
         connection.execute("ALTER TABLE training_jobs ADD COLUMN progress_json TEXT DEFAULT NULL;")
     if "job_type" not in existing:
         connection.execute("ALTER TABLE training_jobs ADD COLUMN job_type TEXT DEFAULT 'supervised';")
-
 
 def _add_retention_and_heartbeat_indexes(connection: DBConnection) -> None:
     """Add indexes to support efficient data retention queries."""
@@ -1140,7 +1090,6 @@ def _add_retention_and_heartbeat_indexes(connection: DBConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_audit_events_source_created"
         " ON audit_events(source, created_at);"
     )
-
 
 def _migrate_remaining_timestamps_to_timestamptz(connection: DBConnection) -> None:
     """Migrate updated_at / last_seen_at columns missed by migration 033."""
@@ -1163,7 +1112,6 @@ def _migrate_remaining_timestamps_to_timestamptz(connection: DBConnection) -> No
             f" TYPE TIMESTAMPTZ USING {col}::TIMESTAMPTZ;"
         )
 
-
 def _add_missing_performance_indexes(connection: DBConnection) -> None:
     """Add indexes for common time-based and lookup queries."""
     indexes = [
@@ -1183,10 +1131,10 @@ def _add_missing_performance_indexes(connection: DBConnection) -> None:
             f"CREATE INDEX IF NOT EXISTS {name} ON {definition};"
         )
 
+# ── Timestamp normalization utilities ─────────────────────────────────────────────────────────
 
 def _postgres_utc_text_default_sql() -> str:
     return "(to_char(timezone('UTC', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS') || '+00:00')"
-
 
 def _normalize_legacy_utc_timestamp_strings(connection: DBConnection) -> None:
     """Normalize legacy UTC strings to ISO 8601 UTC on operational tables.
@@ -1259,12 +1207,11 @@ def _normalize_legacy_utc_timestamp_strings(connection: DBConnection) -> None:
                     """
                 )
 
-
 def normalize_legacy_utc_timestamp_strings_offline(
     connection: DBConnection,
     *,
     batch_size: int = 10_000,
-    table_names: Optional[set[str]] = None,
+    table_names: set[str] | None = None,
 ) -> dict[str, int]:
     """Normalize legacy UTC timestamps in batches without blocking app startup."""
 
@@ -1369,7 +1316,6 @@ def normalize_legacy_utc_timestamp_strings_offline(
                 normalized_counts[f"{table_name}.{column_name}"] = updated_total
     return normalized_counts
 
-
 def _set_postgres_text_timestamp_defaults_to_utc_iso(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
@@ -1388,6 +1334,7 @@ def _set_postgres_text_timestamp_defaults_to_utc_iso(connection: DBConnection) -
                 f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {default_sql};"
             )
 
+# ── Ordered migration registry ────────────────────────────────────────────────────────────────
 
 MIGRATIONS: list[Migration] = [
     ("001_create_candles_table", _create_candles_table),
@@ -1454,28 +1401,25 @@ MIGRATIONS: list[Migration] = [
     ("062_add_job_queue_batch_id_column", _add_job_queue_batch_id_column),
 ]
 
+# ── Migration runner infrastructure ───────────────────────────────────────────────────────────
 
 def _ensure_migration_table(connection: DBConnection) -> None:
     connection.execute(CREATE_SCHEMA_MIGRATIONS_TABLE_SQL)
     connection.commit()
 
-
 def _get_applied_versions(connection: DBConnection) -> set[str]:
     rows = connection.execute("SELECT version FROM schema_migrations;").fetchall()
     return {str(row[0]) for row in rows}
-
 
 def _acquire_migration_lock(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
     connection.execute("SELECT pg_advisory_lock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
 
-
 def _release_migration_lock(connection: DBConnection) -> None:
     if get_backend_name(connection) != "postgres":
         return
     connection.execute("SELECT pg_advisory_unlock(?);", (POSTGRES_MIGRATION_LOCK_ID,))
-
 
 def _record_applied_version(connection: DBConnection, version: str) -> None:
     if get_backend_name(connection) == "postgres":
@@ -1493,9 +1437,8 @@ def _record_applied_version(connection: DBConnection, version: str) -> None:
         (version, utc_now_iso()),
     )
 
-
 def run_migrations(connection: DBConnection) -> list[str]:
-    active_error: Optional[Exception] = None
+    active_error: Exception | None = None
     _acquire_migration_lock(connection)
     try:
         _ensure_migration_table(connection)

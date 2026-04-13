@@ -9,7 +9,7 @@ embedded in params_json, so no new DB table is needed.
 """
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.rl.environment import (
     TradingEnv,
@@ -20,14 +20,13 @@ from app.rl.agent import ReinforceAgent
 from app.training.dataset import FEATURE_NAMES, _safe_float, train_test_split
 from app.training.trainer import predict as supervised_predict
 
-
 # ---------------------------------------------------------------------------
 # Feature / close extraction from feature-vector dicts
 # ---------------------------------------------------------------------------
 
 def _extract_rows_and_closes(
-    vectors: List[Dict[str, Any]],
-) -> Tuple[List[List[float]], List[float]]:
+    vectors: list[dict[str, Any]],
+) -> tuple[list[list[float]], list[float]]:
     """Return (feature_rows, close_prices) for vectors that have a close."""
     rows, closes = [], []
     for fv in vectors:
@@ -44,22 +43,21 @@ def _extract_rows_and_closes(
         closes.append(float(close))
     return rows, closes
 
-
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
 def _evaluate_greedy(
     agent: ReinforceAgent,
-    feature_rows: List[List[float]],
-    closes: List[float],
+    feature_rows: list[list[float]],
+    closes: list[float],
     fee_rate: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run greedy rollout (no training) and return metrics."""
     env = TradingEnv(feature_rows, closes, fee_rate=fee_rate)
     obs = env.reset()
-    actions: List[int] = []
-    rewards: List[float] = []
+    actions: list[int] = []
+    rewards: list[float] = []
 
     while True:
         action = agent.greedy_action(obs)
@@ -72,19 +70,18 @@ def _evaluate_greedy(
 
     return episode_metrics(rewards, actions)
 
-
 def _evaluate_supervised(
-    weights: List[float],
+    weights: list[float],
     bias: float,
-    feature_rows: List[List[float]],
-    closes: List[float],
+    feature_rows: list[list[float]],
+    closes: list[float],
     fee_rate: float,
     threshold: float = 0.5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Simulate trading using supervised model signals."""
     preds = supervised_predict(weights, bias, feature_rows, threshold)
-    rewards: List[float] = []
-    actions: List[int] = []
+    rewards: list[float] = []
+    actions: list[int] = []
     n = len(feature_rows)
     prev_action = 0
     for i in range(n):
@@ -99,22 +96,21 @@ def _evaluate_supervised(
         prev_action = action
     return episode_metrics(rewards, actions)
 
-
 # ---------------------------------------------------------------------------
 # Main experiment function
 # ---------------------------------------------------------------------------
 
 def run_rl_experiment(
-    vectors: List[Dict[str, Any]],
+    vectors: list[dict[str, Any]],
     n_episodes: int = 200,
     learning_rate: float = 1e-3,
     gamma: float = 1.0,
     test_ratio: float = 0.2,
     seed: int = 42,
     fee_rate: float = 0.0,
-    supervised_weights: Optional[List[float]] = None,
-    supervised_bias: Optional[float] = None,
-) -> Dict[str, Any]:
+    supervised_weights: list[float] | None = None,
+    supervised_bias: float | None = None,
+) -> dict[str, Any]:
     """Train a REINFORCE agent and benchmark it against baselines.
 
     Parameters
@@ -162,7 +158,7 @@ def run_rl_experiment(
     )
 
     train_env = TradingEnv(train_rows, train_closes, fee_rate=fee_rate)
-    loss_history: List[float] = []
+    loss_history: list[float] = []
 
     for _ in range(n_episodes):
         ep = agent.run_episode(train_env, train=True)
@@ -178,7 +174,7 @@ def run_rl_experiment(
         "strategy": "buy_and_hold",
     }
 
-    test_supervised: Optional[Dict[str, Any]] = None
+    test_supervised: dict[str, Any] | None = None
     if supervised_weights is not None and supervised_bias is not None:
         test_supervised = _evaluate_supervised(
             supervised_weights, supervised_bias, test_rows, test_closes, fee_rate=fee_rate

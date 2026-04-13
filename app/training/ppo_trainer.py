@@ -22,18 +22,19 @@ import sys
 import warnings
 from pathlib import Path
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
 
+from app.training.ppo_eval import walk_forward_eval
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR       = ROOT / "runtime" / "models"
 TB_LOGS_DIR      = ROOT / "runtime" / "tb_logs"
 FEATURE_CACHE_DIR = ROOT / "runtime" / "feature_cache"
-
 
 # ---------------------------------------------------------------------------
 # Feature-cache helpers
@@ -46,15 +47,14 @@ def _feature_cache_paths(symbol: str, timeframe: str) -> tuple[Path, Path]:
         FEATURE_CACHE_DIR / f"{key}.meta.json",
     )
 
-
 def _load_feature_cache(
     symbol: str,
     timeframe: str,
     last_candle_ts: int,
-    last_aggtrade_ts: Optional[int],
-    feat_cols: List[str],
-    last_premium_ts: Optional[int] = None,
-) -> Optional[pd.DataFrame]:
+    last_aggtrade_ts: int | None,
+    feat_cols: list[str],
+    last_premium_ts: int | None = None,
+) -> pd.DataFrame | None:
     """Return cached feature DataFrame if it is still valid, else None."""
     data_path, meta_path = _feature_cache_paths(symbol, timeframe)
     if not meta_path.exists() or not data_path.exists():
@@ -78,15 +78,14 @@ def _load_feature_cache(
     except Exception:
         return None
 
-
 def _save_feature_cache(
     symbol: str,
     timeframe: str,
     df: pd.DataFrame,
     last_candle_ts: int,
-    last_aggtrade_ts: Optional[int],
-    feat_cols: List[str],
-    last_premium_ts: Optional[int] = None,
+    last_aggtrade_ts: int | None,
+    feat_cols: list[str],
+    last_premium_ts: int | None = None,
 ) -> None:
     """Persist feature DataFrame and its validation metadata to disk."""
     FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,7 +100,7 @@ def _save_feature_cache(
     meta_path.write_text(json.dumps(meta))
 
 # Default PPO hyperparameters (mirrors scripts/train_ppo.py)
-DEFAULT_PPO_KWARGS: Dict[str, Any] = dict(
+DEFAULT_PPO_KWARGS: dict[str, Any] = dict(
     learning_rate=3e-4,
     n_steps=2048,
     batch_size=256,
@@ -116,7 +115,6 @@ DEFAULT_PPO_KWARGS: Dict[str, Any] = dict(
 )
 
 TB_PORT = 6006
-
 
 def _ensure_tensorboard_running() -> None:
     """Start TensorBoard in the background if not already running.
@@ -146,11 +144,9 @@ def _ensure_tensorboard_running() -> None:
         stderr=subprocess.DEVNULL,
     )
 
-
 TRAIN_FRAC   = 0.70
 DEFAULT_TRAIN_EP_LEN = 1440   # 1 day of 1m bars
 DEFAULT_EVAL_EP_LEN  = 2880   # 2 days of 1m bars
-
 
 def resolve_episode_lengths(timeframe: str) -> tuple[int, int]:
     """Return fair episode lengths for the given timeframe.
@@ -189,14 +185,13 @@ def resolve_episode_lengths(timeframe: str) -> tuple[int, int]:
     eval_ep_len  = bars_per_day * 4   # 4 days in bars
     return train_ep_len, eval_ep_len
 
-
 # ---------------------------------------------------------------------------
 # SB3 progress callback
 # ---------------------------------------------------------------------------
 
 def _make_progress_callback(
     total_steps: int,
-    on_progress: Optional[Callable[[int, int], None]],
+    on_progress: Callable[[int, int], None] | None,
 ):
     """Return a SB3 BaseCallback that fires on_progress(current, total)."""
     try:
@@ -214,91 +209,6 @@ def _make_progress_callback(
         return _ProgressCallback()
     except ImportError:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Evaluation helper (mirrors scripts/train_ppo.py)
-# ---------------------------------------------------------------------------
-
-def _run_episode(env, model=None) -> dict:
-    obs, _ = env.reset()
-    total_r = 0.0
-    pos_counts: Dict[int, int] = {-1: 0, 0: 0, 1: 0}
-    n_trades = 0
-    prev_pos = 0
-
-    while True:
-        if model is not None:
-            action, _ = model.predict(obs, deterministic=True)
-            action = int(action)
-        else:
-            action = 1  # buy-and-hold
-
-        obs, r, done, trunc, info = env.step(action)
-        total_r += r
-        pos = info.get("position", 0)
-        pos_counts[pos] = pos_counts.get(pos, 0) + 1
-        if pos != prev_pos:
-            n_trades += 1
-        prev_pos = pos
-        if done or trunc:
-            break
-
-    total_steps = sum(pos_counts.values())
-    return {
-        "log_ret":   total_r,
-        "pct_ret":   math.exp(total_r) - 1,
-        "n_trades":  n_trades,
-        "long_pct":  pos_counts.get(1, 0) / max(total_steps, 1),
-        "flat_pct":  pos_counts.get(0, 0) / max(total_steps, 1),
-    }
-
-
-def _walk_forward_eval(df: pd.DataFrame, model, eval_start_idx: int,
-                        n_windows: int, ep_len: int,
-                        frame_stack: int = 1,
-                        decision_interval: int = 1,
-                        reward_horizon: int = 1) -> List[dict]:
-    from app.rl.crypto_env import CryptoTradingEnv
-
-    results = []
-    idx = eval_start_idx
-    available = len(df) - idx - 1
-    actual_windows = min(n_windows, available // ep_len)
-
-    for w in range(actual_windows):
-        window_df = df.iloc[idx: idx + ep_len + 1].reset_index(drop=True)
-        ppo_env = CryptoTradingEnv(
-            window_df,
-            episode_length=ep_len,
-            deterministic=True,
-            frame_stack=frame_stack,
-            decision_interval=decision_interval,
-            reward_horizon=reward_horizon,
-        )
-        bnh_env = CryptoTradingEnv(
-            window_df,
-            episode_length=ep_len,
-            deterministic=True,
-            frame_stack=frame_stack,
-            decision_interval=decision_interval,
-            reward_horizon=reward_horizon,
-        )
-
-        ppo_r = _run_episode(ppo_env, model)
-        bnh_r = _run_episode(bnh_env, model=None)
-
-        results.append({
-            "window":    w + 1,
-            "start_bar": idx,
-            "ppo":       ppo_r,
-            "bnh":       bnh_r,
-            "beats_bnh": ppo_r["log_ret"] > bnh_r["log_ret"],
-        })
-        idx += ep_len
-
-    return results
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -324,9 +234,9 @@ def run_ppo_training(
     decision_interval: int = 1,
     reward_horizon: int = 1,
     train_frac: float = TRAIN_FRAC,
-    job_id: Optional[int] = None,
-    on_progress: Optional[Callable[[int, int], None]] = None,
-) -> Dict[str, Any]:
+    job_id: int | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     """Train PPO and return results dict.
 
     Parameters
@@ -365,7 +275,7 @@ def run_ppo_training(
         ).fetchone()
         last_candle_ts: int = int(_row[0]) if _row and _row[0] else 0
 
-        last_aggtrade_ts: Optional[int] = None
+        last_aggtrade_ts: int | None = None
         if timeframe == "1m":
             _at_row = conn.execute(
                 "SELECT MAX(timestamp_ms) FROM futures_aggtrade_minutes WHERE symbol=?",
@@ -374,7 +284,7 @@ def run_ppo_training(
             if _at_row and _at_row[0]:
                 last_aggtrade_ts = int(_at_row[0])
 
-        last_premium_ts: Optional[int] = None
+        last_premium_ts: int | None = None
         try:
             _pm_row = conn.execute(
                 "SELECT MAX(timestamp_ms) FROM futures_premium_metrics WHERE symbol=?",
@@ -535,7 +445,7 @@ def run_ppo_training(
             on_progress(total_steps, total_steps)
 
         # --- Walk-forward eval ---
-        eval_results = _walk_forward_eval(
+        eval_results = walk_forward_eval(
             df, model,
             eval_start_idx=train_end,
             n_windows=eval_windows,
@@ -616,7 +526,6 @@ def run_ppo_training(
         "avg_edge":     round(avg_edge, 6),
         "model_path":   str(model_path) + ".zip",
     }
-
 
 def deploy_candidate_model(symbol: str, timeframe: str, job_id: int) -> str:
     """Copy candidate model to active path and clear ppo_strategy model cache.

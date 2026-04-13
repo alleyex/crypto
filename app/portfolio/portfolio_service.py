@@ -8,12 +8,10 @@ Limits are only enforced when total_capital > 0 (i.e. explicitly configured).
 When total_capital == 0 (default) the service is purely informational.
 """
 from dataclasses import dataclass
-from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import table_exists
 from app.core.db import utc_now_iso
-
 
 # ---------------------------------------------------------------------------
 # Default config values
@@ -22,7 +20,6 @@ from app.core.db import utc_now_iso
 DEFAULT_TOTAL_CAPITAL: float = 0.0          # 0 = no enforcement
 DEFAULT_MAX_STRATEGY_ALLOCATION_PCT: float = 0.5   # 50 % per strategy
 DEFAULT_MAX_TOTAL_EXPOSURE_PCT: float = 0.8        # 80 % total
-
 
 # ---------------------------------------------------------------------------
 # SQL
@@ -81,7 +78,6 @@ WHERE re.signal_type = 'BUY'
   AND o.id IS NULL;
 """
 
-
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -91,20 +87,20 @@ class PortfolioConfig:
     total_capital: float
     max_strategy_allocation_pct: float
     max_total_exposure_pct: float
-    updated_at: Optional[str] = None
+    updated_at: str | None = None
 
     @property
     def enforcement_active(self) -> bool:
         return self.total_capital > 0
 
     @property
-    def max_strategy_notional(self) -> Optional[float]:
+    def max_strategy_notional(self) -> float | None:
         if self.total_capital <= 0:
             return None
         return self.total_capital * self.max_strategy_allocation_pct
 
     @property
-    def max_total_notional(self) -> Optional[float]:
+    def max_total_notional(self) -> float | None:
         if self.total_capital <= 0:
             return None
         return self.total_capital * self.max_total_exposure_pct
@@ -123,7 +119,6 @@ class PortfolioConfig:
         if self.updated_at is not None:
             d["updated_at"] = self.updated_at
         return d
-
 
 # ---------------------------------------------------------------------------
 # Config accessors
@@ -150,12 +145,11 @@ def get_portfolio_config(connection: DBConnection) -> PortfolioConfig:
         updated_at=row[3],
     )
 
-
 def set_portfolio_config(
     connection: DBConnection,
-    total_capital: Optional[float] = None,
-    max_strategy_allocation_pct: Optional[float] = None,
-    max_total_exposure_pct: Optional[float] = None,
+    total_capital: float | None = None,
+    max_strategy_allocation_pct: float | None = None,
+    max_total_exposure_pct: float | None = None,
 ) -> PortfolioConfig:
     existing = get_portfolio_config(connection)
     merged = PortfolioConfig(
@@ -178,17 +172,15 @@ def set_portfolio_config(
     connection.commit()
     return merged
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_latest_price(connection: DBConnection, symbol: str) -> Optional[float]:
+def _get_latest_price(connection: DBConnection, symbol: str) -> float | None:
     if not table_exists(connection, "candles"):
         return None
     row = connection.execute(SELECT_LATEST_CLOSE_SQL, (symbol,)).fetchone()
     return float(row[0]) if row is not None else None
-
 
 def _get_latest_prices(connection: DBConnection, symbols: list[str]) -> dict[str, float]:
     """Batch fetch latest close prices for multiple symbols in a single query."""
@@ -208,7 +200,6 @@ def _get_latest_prices(connection: DBConnection, symbols: list[str]) -> dict[str
         tuple(symbols),
     ).fetchall()
     return {row[0]: float(row[1]) for row in rows}
-
 
 def _compute_pending_approved_notional(
     connection: DBConnection,
@@ -239,7 +230,6 @@ def _compute_pending_approved_notional(
         per_strategy[strategy_name] = per_strategy.get(strategy_name, 0.0) + notional
     return total, per_strategy
 
-
 def _compute_per_strategy_open_qty(connection: DBConnection) -> dict[str, dict[str, float]]:
     """Return {strategy_name: {symbol: net_open_qty}} from fill history."""
     if not (table_exists(connection, "fills") and table_exists(connection, "orders")
@@ -261,7 +251,6 @@ def _compute_per_strategy_open_qty(connection: DBConnection) -> dict[str, dict[s
         if qty > 0:
             result.setdefault(strategy_name, {})[symbol] = round(qty, 8)
     return result
-
 
 # ---------------------------------------------------------------------------
 # Portfolio summary
@@ -329,7 +318,7 @@ def get_portfolio_summary(connection: DBConnection) -> dict:
 
     # Limit check
     violations: list[str] = []
-    within_total_limit: Optional[bool] = None
+    within_total_limit: bool | None = None
     if config.max_total_notional is not None:
         within_total_limit = total_open_notional <= config.max_total_notional
         if not within_total_limit:
@@ -353,7 +342,6 @@ def get_portfolio_summary(connection: DBConnection) -> dict:
         "violations": violations,
         "within_limits": len(violations) == 0,
     }
-
 
 # ---------------------------------------------------------------------------
 # Risk integration: limit check before approving a BUY

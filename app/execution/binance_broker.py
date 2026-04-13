@@ -14,7 +14,7 @@ Configuration (via environment variables):
 import hashlib
 import hmac
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Union
 from urllib.parse import urlencode
 
 import requests
@@ -27,7 +27,6 @@ from app.core.settings import (
     BINANCE_FUTURES_API_KEY,
     BINANCE_FUTURES_API_SECRET,
 )
-
 
 # Spot
 TESTNET_BASE_URL = "https://testnet.binance.vision"
@@ -47,7 +46,6 @@ _FUTURES_TRADES_ENDPOINT = "/fapi/v1/userTrades"
 _FUTURES_TIME_ENDPOINT = "/fapi/v1/time"
 _DEFAULT_RECV_WINDOW_MS = 10000
 
-
 class BinanceAPIError(RuntimeError):
     """Structured Binance API failure with response details for logging."""
 
@@ -55,10 +53,10 @@ class BinanceAPIError(RuntimeError):
         self,
         message: str,
         *,
-        status_code: Optional[int] = None,
+        status_code: int | None = None,
         url: str = "",
         response_text: str = "",
-        response_json: Optional[dict[str, Any]] = None,
+        response_json: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -78,14 +76,12 @@ class BinanceAPIError(RuntimeError):
             payload["binance_msg"] = self.response_json.get("msg")
         return payload
 
-
-def _response_details(response: requests.Response) -> tuple[str, Optional[dict[str, Any]]]:
+def _response_details(response: requests.Response) -> tuple[str, dict[str, Any] | None]:
     try:
         response_json = response.json()
     except ValueError:
         response_json = None
     return response.text, response_json
-
 
 def _sign(query_string: str, secret: str) -> str:
     return hmac.new(
@@ -94,14 +90,12 @@ def _sign(query_string: str, secret: str) -> str:
         hashlib.sha256,
     ).hexdigest()
 
-
 def _weighted_avg_fill_price(fills: list) -> float:
     """Compute weighted-average fill price from Binance fills array."""
     total_qty = sum(float(f["qty"]) for f in fills)
     if total_qty == 0:
         return 0.0
     return sum(float(f["price"]) * float(f["qty"]) for f in fills) / total_qty
-
 
 def _total_commission(fills: list) -> tuple[float, str]:
     """Sum commission across all partial fills. Returns (amount, asset)."""
@@ -110,7 +104,6 @@ def _total_commission(fills: list) -> tuple[float, str]:
     asset = fills[0].get("commissionAsset", "")
     total = sum(float(f.get("commission", 0)) for f in fills)
     return total, asset
-
 
 def _aggregate_trades_for_order(
     trades: list[dict[str, Any]],
@@ -157,7 +150,6 @@ def _aggregate_trades_for_order(
         "transact_time": transact_time,
     }
 
-
 class BinanceBrokerClient:
     """Live broker client targeting Binance Spot or Futures (USDM) API.
 
@@ -196,7 +188,7 @@ class BinanceBrokerClient:
         self._timeout = timeout_seconds
         self._time_offset_ms = 0
 
-    def _public_request(self, method: str, endpoint: str, params: Optional[Dict[str, Union[str, int, float]]] = None) -> Any:
+    def _public_request(self, method: str, endpoint: str, params: dict[str, Union[str, int, float]] | None = None) -> Any:
         url = f"{self._base_url}{endpoint}"
         response = requests.request(
             method.upper(),
@@ -218,14 +210,14 @@ class BinanceBrokerClient:
     def _current_timestamp_ms(self) -> int:
         return int(time.time() * 1000) + int(self._time_offset_ms)
 
-    def _signed_request(self, method: str, endpoint: str, params: Dict[str, Union[str, int, float]]) -> dict:
+    def _signed_request(self, method: str, endpoint: str, params: dict[str, Union[str, int, float]]) -> dict:
         if not self._api_key or not self._api_secret:
             raise ValueError(
                 "Binance API key and secret must be set via "
                 "CRYPTO_BINANCE_API_KEY and CRYPTO_BINANCE_API_SECRET."
             )
 
-        def _perform_request(request_params: Dict[str, Union[str, int, float]]) -> dict:
+        def _perform_request(request_params: dict[str, Union[str, int, float]]) -> dict:
             query_string = urlencode(request_params)
             signature = _sign(query_string, self._api_secret)
             signed_query = f"{query_string}&signature={signature}"
@@ -278,7 +270,7 @@ class BinanceBrokerClient:
                 response_json=exc.response_json,
             ) from exc
 
-    def check_account_connectivity(self) -> Dict[str, Union[str, bool, int]]:
+    def check_account_connectivity(self) -> dict[str, Union[str, bool, int]]:
         timestamp = self._current_timestamp_ms()
         data = self._signed_request("GET", self._account_endpoint, {"timestamp": timestamp})
         if self._futures:
@@ -309,9 +301,9 @@ class BinanceBrokerClient:
         symbol: str,
         side: str,
         qty: float,
-    ) -> Dict[str, Union[str, float, bool]]:
+    ) -> dict[str, Union[str, float, bool]]:
         timestamp = self._current_timestamp_ms()
-        params: Dict[str, Union[str, int, float]] = {
+        params: dict[str, Union[str, int, float]] = {
             "symbol": symbol,
             "side": side.upper(),
             "type": "MARKET",
@@ -338,7 +330,7 @@ class BinanceBrokerClient:
         side: str,
         qty: float,
         ref_price: float,
-    ) -> Dict[str, Union[str, float]]:
+    ) -> dict[str, Union[str, float]]:
         """Place a MARKET order on Binance and return fill details.
 
         Args:
@@ -356,7 +348,7 @@ class BinanceBrokerClient:
             ValueError: if required credentials are not configured.
         """
         timestamp = self._current_timestamp_ms()
-        params: Dict[str, Union[str, int, float]] = {
+        params: dict[str, Union[str, int, float]] = {
             "symbol": symbol,
             "side": side.upper(),
             "type": "MARKET",
@@ -427,7 +419,7 @@ class BinanceBrokerClient:
             "transact_time": transact_time,
         }
 
-    def query_order(self, symbol: str, broker_order_id: str) -> Dict[str, Union[str, float]]:
+    def query_order(self, symbol: str, broker_order_id: str) -> dict[str, Union[str, float]]:
         """Query order status from Binance. Returns fill details if FILLED."""
         timestamp = self._current_timestamp_ms()
         endpoint = _FUTURES_ORDER_ENDPOINT if self._futures else _ORDER_ENDPOINT
@@ -492,13 +484,13 @@ class BinanceBrokerClient:
         self,
         symbol: str,
         *,
-        start_time: Optional[int] = None,
-        end_time: Optional[int] = None,
+        start_time: int | None = None,
+        end_time: int | None = None,
         limit: int = 1000,
     ) -> list[dict[str, Any]]:
         """Return recent account trades for a symbol."""
         timestamp = self._current_timestamp_ms()
-        params: Dict[str, Union[str, int, float]] = {
+        params: dict[str, Union[str, int, float]] = {
             "symbol": symbol,
             "timestamp": timestamp,
             "limit": max(1, min(int(limit), 1000)),
@@ -516,7 +508,7 @@ class BinanceBrokerClient:
     def get_positions(
         self,
         *,
-        symbol: Optional[str] = None,
+        symbol: str | None = None,
         include_flat: bool = False,
     ) -> list[dict[str, Any]]:
         """Return normalized futures positions from Binance.
@@ -530,7 +522,7 @@ class BinanceBrokerClient:
         if not self._futures:
             return []
         timestamp = self._current_timestamp_ms()
-        params: Dict[str, Union[str, int, float]] = {"timestamp": timestamp}
+        params: dict[str, Union[str, int, float]] = {"timestamp": timestamp}
         if symbol:
             params["symbol"] = symbol.upper()
         rows = self._signed_request("GET", "/fapi/v2/positionRisk", params)

@@ -1,12 +1,10 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection
-from app.core.migrations import run_migrations
 from app.data.candles_service import TIMEFRAME_INTERVAL_MS
 from app.data.candles_service import candle_staleness_threshold_seconds
 from app.system.heartbeat import upsert_heartbeat
-
 
 INSERT_FUTURES_CANDLE_SQL = """
 INSERT INTO futures_candles (
@@ -27,17 +25,11 @@ INSERT INTO futures_candles (
 ON CONFLICT(symbol, timeframe, open_time) DO NOTHING;
 """
 
-
 SELECT_LATEST_FUTURES_OPEN_TIME_SQL = """
 SELECT MAX(open_time)
 FROM futures_candles
 WHERE symbol = ? AND timeframe = ?;
 """
-
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
 
 def save_klines(
     connection: DBConnection,
@@ -76,8 +68,7 @@ def save_klines(
     )
     return len(rows)
 
-
-def get_status(connection: DBConnection) -> List[Dict[str, Any]]:
+def get_status(connection: DBConnection) -> list[dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT symbol, timeframe,
@@ -128,19 +119,17 @@ def get_status(connection: DBConnection) -> List[Dict[str, Any]]:
         )
     return result
 
-
-def get_latest_open_time(connection: DBConnection, symbol: str, timeframe: str) -> Optional[int]:
+def get_latest_open_time(connection: DBConnection, symbol: str, timeframe: str) -> int | None:
     row = connection.execute(SELECT_LATEST_FUTURES_OPEN_TIME_SQL, (symbol, timeframe)).fetchone()
     if row is None or row[0] is None:
         return None
     return int(row[0])
 
-
 def delete_candles(
     connection: DBConnection,
     *,
-    symbols: Optional[list[str]] = None,
-    timeframes: Optional[list[str]] = None,
+    symbols: list[str] | None = None,
+    timeframes: list[str] | None = None,
 ) -> int:
     clauses: list[str] = []
     params: list[Any] = []

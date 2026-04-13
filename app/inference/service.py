@@ -15,19 +15,18 @@ predict_latest(connection, symbol, timeframe, feature_set)
     → PredictionResult | None
 
 predict_batch(connection, symbol, timeframe, feature_set, vectors)
-    → List[PredictionResult]
+    → list[PredictionResult]
 
 get_inference_status(connection, symbol, timeframe, feature_set)
     → Dict with champion metadata + readiness flag
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.registry.registry_service import get_champion
 from app.features.store import get_features, get_latest_feature_vector
 from app.training.dataset import FEATURE_NAMES, _safe_float
 from app.training.trainer import predict_proba
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -46,8 +45,8 @@ class PredictionResult:
         symbol: str,
         timeframe: str,
         feature_set: str,
-        open_time: Optional[int],
-        close: Optional[float],
+        open_time: int | None,
+        close: float | None,
         probability: float,
         threshold: float,
         model_id: int,
@@ -66,7 +65,7 @@ class PredictionResult:
         self.model_version = model_version
         self.model_type = model_type
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
             "timeframe": self.timeframe,
@@ -81,12 +80,11 @@ class PredictionResult:
             "model_type": self.model_type,
         }
 
-
 # ---------------------------------------------------------------------------
 # Feature extraction
 # ---------------------------------------------------------------------------
 
-def _extract_feature_row(fv: Dict[str, Any]) -> List[float]:
+def _extract_feature_row(fv: dict[str, Any]) -> list[float]:
     """Extract ordered feature values from a feature-vector dict."""
     row = []
     for name in FEATURE_NAMES:
@@ -96,14 +94,13 @@ def _extract_feature_row(fv: Dict[str, Any]) -> List[float]:
         row.append(val)
     return row
 
-
 # ---------------------------------------------------------------------------
 # Core inference helpers
 # ---------------------------------------------------------------------------
 
 def _run_prediction(
-    fv: Dict[str, Any],
-    weights: List[float],
+    fv: dict[str, Any],
+    weights: list[float],
     bias: float,
     symbol: str,
     timeframe: str,
@@ -128,7 +125,6 @@ def _run_prediction(
         model_type=model_type,
     )
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -139,7 +135,7 @@ def predict_latest(
     timeframe: str = "1m",
     feature_set: str = "v1",
     threshold: float = 0.5,
-) -> Optional[PredictionResult]:
+) -> PredictionResult | None:
     """Return a prediction for the most recent stored feature vector.
 
     Returns None if no champion model or no feature vectors are available.
@@ -166,7 +162,6 @@ def predict_latest(
         model_type=model.get("model_type", "unknown"),
     )
 
-
 def predict_batch(
     connection: Any,
     symbol: str,
@@ -175,9 +170,9 @@ def predict_batch(
     threshold: float = 0.5,
     limit: int = 500,
     offset: int = 0,
-    start_time: Optional[int] = None,
-    end_time: Optional[int] = None,
-) -> Dict[str, Any]:
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> dict[str, Any]:
     """Return predictions for stored feature vectors using the champion model.
 
     Parameters mirror ``get_features()`` pagination/filtering.
@@ -243,13 +238,12 @@ def predict_batch(
         },
     }
 
-
 def get_inference_status(
     connection: Any,
     symbol: str,
     timeframe: str = "1m",
     feature_set: str = "v1",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return readiness status for inference on a symbol/timeframe."""
     champion = get_champion(connection, symbol, timeframe, feature_set)
     fv = get_latest_feature_vector(connection, symbol, timeframe, feature_set) if champion else None

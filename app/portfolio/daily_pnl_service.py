@@ -1,11 +1,9 @@
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import parse_db_timestamp
 from app.core.db import table_exists
 from app.core.db import utc_now_iso
-from app.core.migrations import run_migrations
 
 CREATE_DAILY_REALIZED_PNL_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS daily_realized_pnl (
@@ -17,16 +15,13 @@ CREATE TABLE IF NOT EXISTS daily_realized_pnl (
 );
 """
 
-
 DELETE_DAILY_REALIZED_PNL_SQL = "DELETE FROM daily_realized_pnl;"
-
 
 SELECT_FILLS_SQL = """
 SELECT symbol, side, qty, price, created_at
 FROM fills
 ORDER BY id ASC;
 """
-
 
 UPSERT_DAILY_REALIZED_PNL_SQL = """
 INSERT INTO daily_realized_pnl (
@@ -40,15 +35,9 @@ ON CONFLICT(symbol, pnl_date) DO UPDATE SET
     updated_at = excluded.updated_at;
 """
 
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
-
 def _fills_table_exists(connection: DBConnection) -> bool:
     return table_exists(connection, "fills")
 def rebuild_daily_realized_pnl(connection: DBConnection) -> int:
-    ensure_table(connection)
     connection.execute(DELETE_DAILY_REALIZED_PNL_SQL)
 
     if not _fills_table_exists(connection):
@@ -95,11 +84,10 @@ def rebuild_daily_realized_pnl(connection: DBConnection) -> int:
     connection.commit()
     return len(daily_pnl)
 
-
 def get_daily_realized_pnl(
     connection: DBConnection,
     symbol: str,
-    pnl_date: Optional[str] = None,
+    pnl_date: str | None = None,
 ) -> float:
     """Read daily realized PnL from the pre-built ledger table.
 
@@ -107,7 +95,6 @@ def get_daily_realized_pnl(
     call after every fill.  This function is a fast point-read only — it does
     not trigger a rebuild.
     """
-    ensure_table(connection)
     target_date = pnl_date or datetime.now(timezone.utc).date().isoformat()
     row = connection.execute(
         """

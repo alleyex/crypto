@@ -1,18 +1,17 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.data.binance_client import fetch_klines
 from app.data.candles_service import TIMEFRAME_INTERVAL_MS
-from app.data.candles_service import ensure_table as ensure_candles_table
 from app.data.candles_service import get_latest_open_time
 from app.data.candles_service import save_klines
+from app.core.utils import dedup_ordered
 from app.data.fetch_history import record_fetch
 
 PAGE_SIZE = 1000
 SEED_LIMIT = 100  # candles to fetch when no prior data exists
 MAX_WORKERS = int(os.getenv("CRYPTO_MARKET_DATA_WORKERS", "4"))
-
 
 def _fetch_all_since(symbol: str, start_ms: int, interval: str = "1m") -> list:
     """Paginate through Binance klines from start_ms until no more data. Returns raw klines."""
@@ -28,8 +27,7 @@ def _fetch_all_since(symbol: str, start_ms: int, interval: str = "1m") -> list:
         cursor_ms = int(klines[-1][0]) + 1
     return all_klines
 
-
-def _fetch_one(symbol: str, timeframe: str, start_ms: Optional[int], limit: int) -> Dict[str, Any]:
+def _fetch_one(symbol: str, timeframe: str, start_ms: int | None, limit: int) -> dict[str, Any]:
     """Fetch klines for a single symbol+timeframe. Returns dict with klines + metadata."""
     if start_ms is not None:
         klines = _fetch_all_since(symbol=symbol, start_ms=start_ms, interval=timeframe)
@@ -39,16 +37,13 @@ def _fetch_one(symbol: str, timeframe: str, start_ms: Optional[int], limit: int)
         mode = "seed"
     return {"symbol": symbol, "timeframe": timeframe, "klines": klines, "mode": mode}
 
-
 def run_market_data_job(
     connection,
-    symbol_names: Optional[list[str]] = None,
-    timeframes: Optional[list[str]] = None,
+    symbol_names: list[str] | None = None,
+    timeframes: list[str] | None = None,
     limit: int = SEED_LIMIT,
-    start_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    ensure_candles_table(connection)
-
+    start_ms: int | None = None,
+) -> dict[str, Any]:
     if symbol_names is None:
         from app.scheduler.control import read_active_symbols
         symbol_names = read_active_symbols()
@@ -56,8 +51,8 @@ def run_market_data_job(
         from app.scheduler.control import read_active_timeframes
         timeframes = read_active_timeframes()
 
-    active_symbols = list(dict.fromkeys(symbol_names))
-    active_timeframes = list(dict.fromkeys(timeframes))
+    active_symbols = dedup_ordered(symbol_names)
+    active_timeframes = dedup_ordered(timeframes)
 
     # Build tasks: determine start_ms per (symbol, timeframe)
     tasks = []
@@ -78,7 +73,7 @@ def run_market_data_job(
             tasks.append((symbol, timeframe, task_start_ms, mode_hint))
 
     # Fetch from Binance in parallel (I/O bound)
-    fetch_results: Dict[str, Any] = {}
+    fetch_results: dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(tasks))) as pool:
         futures = {
             pool.submit(_fetch_one, sym, tf, t_start, limit): (sym, tf, hint)
@@ -114,7 +109,7 @@ def run_market_data_job(
             saved = 0
 
         total_saved_klines += saved
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "symbol": symbol,
             "timeframe": timeframe,
             "saved_klines": saved,

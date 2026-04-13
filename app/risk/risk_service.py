@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 from app.audit.service import insert_event
 from app.core.db import DBConnection
@@ -7,7 +7,6 @@ from app.core.db import insert_and_get_rowid
 from app.core.db import parse_db_timestamp
 from app.core.db import table_exists
 from app.core.db import utc_now_iso
-from app.core.migrations import run_migrations
 from app.core.settings import BINANCE_FUTURES
 from app.core.settings import COOLDOWN_SECONDS
 from app.core.settings import DEFAULT_ORDER_QTY
@@ -19,7 +18,6 @@ from app.portfolio.portfolio_service import check_portfolio_limits
 from app.risk.risk_config import get_risk_config
 from app.system.kill_switch import enable_kill_switch
 from app.system.kill_switch import kill_switch_enabled
-
 
 CREATE_RISK_EVENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS risk_events (
@@ -35,7 +33,6 @@ CREATE TABLE IF NOT EXISTS risk_events (
 );
 """
 
-
 SELECT_LATEST_SIGNAL_SQL = """
 SELECT
     id,
@@ -48,7 +45,6 @@ ORDER BY id DESC
 LIMIT 1;
 """
 
-
 SELECT_SIGNAL_BY_ID_SQL = """
 SELECT
     id,
@@ -59,7 +55,6 @@ SELECT
 FROM signals
 WHERE id = ?;
 """
-
 
 SELECT_PREVIOUS_SIGNAL_SQL = """
 SELECT signal_type
@@ -72,14 +67,12 @@ ORDER BY id DESC
 LIMIT 1;
 """
 
-
 SELECT_POSITION_SQL = """
 SELECT qty, realized_pnl
 FROM positions
 WHERE symbol = ?
 LIMIT 1;
 """
-
 
 SELECT_PENDING_APPROVED_BUY_COUNT_SQL = """
 SELECT COUNT(*)
@@ -91,7 +84,6 @@ WHERE re.symbol = ?
   AND o.id IS NULL;
 """
 
-
 SELECT_LATEST_FILL_SQL = """
 SELECT created_at
 FROM fills
@@ -99,7 +91,6 @@ WHERE symbol = ?
 ORDER BY id DESC
 LIMIT 1;
 """
-
 
 INSERT_RISK_EVENT_SQL = """
 INSERT INTO risk_events (
@@ -113,11 +104,6 @@ INSERT INTO risk_events (
     created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 """
-
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
 
 def _get_pending_approved_buy_qty(
     connection: DBConnection,
@@ -136,12 +122,10 @@ def _get_pending_approved_buy_qty(
     count = int(row[0]) if row else 0
     return count * order_qty
 
-
 def _binance_futures_position_mode_enabled() -> bool:
     return read_configured_execution_backend() == "binance" and BINANCE_FUTURES
 
-
-def _get_exchange_position_qty(symbol: str) -> Optional[float]:
+def _get_exchange_position_qty(symbol: str) -> float | None:
     if not _binance_futures_position_mode_enabled():
         return None
     try:
@@ -154,12 +138,11 @@ def _get_exchange_position_qty(symbol: str) -> Optional[float]:
     except Exception:
         return None
 
-
 def _get_strategy_target_position(
     strategy_name: str,
     symbol: str,
     timeframe: str,
-) -> Optional[int]:
+) -> int | None:
     if strategy_name != "ppo":
         return None
     try:
@@ -169,7 +152,6 @@ def _get_strategy_target_position(
     except Exception:
         return None
 
-
 def _evaluate_signal_row(
     connection: DBConnection,
     signal_row,
@@ -177,12 +159,12 @@ def _evaluate_signal_row(
     max_position_qty: float,
     cooldown_seconds: int,
     max_daily_loss: float,
-) -> Dict[str, Union[int, str]]:
+) -> dict[str, Union[int, str]]:
     signal_id, symbol, timeframe, strategy_name, signal_type = signal_row
     target_position = _get_strategy_target_position(strategy_name, symbol, timeframe)
 
-    daily_realized_pnl: Optional[float] = None
-    total_realized_pnl: Optional[float] = None
+    daily_realized_pnl: float | None = None
+    total_realized_pnl: float | None = None
 
     # 0. Kill switch — block all risk evaluation when the switch is active.
     if kill_switch_enabled():
@@ -238,7 +220,7 @@ def _evaluate_signal_row(
             )
         else:
             # 3. Cooldown — check time since last fill.
-            latest_fill_at: Optional[datetime] = None
+            latest_fill_at: datetime | None = None
             if table_exists(connection, "fills"):
                 fill_row = connection.execute(SELECT_LATEST_FILL_SQL, (symbol,)).fetchone()
                 if fill_row is not None:
@@ -309,7 +291,6 @@ def _evaluate_signal_row(
         "reason": reason,
     }
 
-
 def _apply_position_and_duplicate_rules(
     connection: DBConnection,
     signal_id: int,
@@ -322,7 +303,7 @@ def _apply_position_and_duplicate_rules(
     order_qty: float,
     max_position_qty: float,
     pending_qty: float,
-    target_position: Optional[int] = None,
+    target_position: int | None = None,
 ) -> tuple:
     """Apply position-limit and duplicate-signal rules. Returns (decision, reason)."""
     if _binance_futures_position_mode_enabled() and target_position in (-1, 0, 1):
@@ -356,14 +337,13 @@ def _apply_position_and_duplicate_rules(
             return "REJECTED", portfolio_reason
     return "APPROVED", "Passed basic risk checks."
 
-
 def evaluate_latest_signal(
     connection: DBConnection,
-    order_qty: Optional[float] = None,
-    max_position_qty: Optional[float] = None,
-    cooldown_seconds: Optional[int] = None,
-    max_daily_loss: Optional[float] = None,
-) -> Optional[Dict[str, Union[int, str]]]:
+    order_qty: float | None = None,
+    max_position_qty: float | None = None,
+    cooldown_seconds: int | None = None,
+    max_daily_loss: float | None = None,
+) -> dict[str, Union[int, str]] | None:
     latest_signal = connection.execute(SELECT_LATEST_SIGNAL_SQL).fetchone()
     if latest_signal is None:
         return None
@@ -380,15 +360,14 @@ def evaluate_latest_signal(
         max_daily_loss=max_daily_loss if max_daily_loss is not None else cfg.max_daily_loss,
     )
 
-
 def evaluate_signal_id(
     connection: DBConnection,
     signal_id: int,
-    order_qty: Optional[float] = None,
-    max_position_qty: Optional[float] = None,
-    cooldown_seconds: Optional[int] = None,
-    max_daily_loss: Optional[float] = None,
-) -> Optional[Dict[str, Union[int, str]]]:
+    order_qty: float | None = None,
+    max_position_qty: float | None = None,
+    cooldown_seconds: int | None = None,
+    max_daily_loss: float | None = None,
+) -> dict[str, Union[int, str]] | None:
     signal_row = connection.execute(SELECT_SIGNAL_BY_ID_SQL, (signal_id,)).fetchone()
     if signal_row is None:
         return None
@@ -406,17 +385,16 @@ def evaluate_signal_id(
         max_daily_loss=max_daily_loss if max_daily_loss is not None else cfg.max_daily_loss,
     )
 
-
 def evaluate_signal_ids(
     connection: DBConnection,
-    signal_ids: List[int],
-    order_qty: Optional[float] = None,
-    max_position_qty: Optional[float] = None,
-    cooldown_seconds: Optional[int] = None,
-    max_daily_loss: Optional[float] = None,
-) -> List[Dict[str, Union[int, str]]]:
+    signal_ids: list[int],
+    order_qty: float | None = None,
+    max_position_qty: float | None = None,
+    cooldown_seconds: int | None = None,
+    max_daily_loss: float | None = None,
+) -> list[dict[str, Union[int, str]]]:
     """Evaluate a batch of signal IDs, loading per-strategy risk config for each."""
-    results: List[Dict[str, Union[int, str]]] = []
+    results: list[dict[str, Union[int, str]]] = []
     for sid in signal_ids:
         result = evaluate_signal_id(
             connection,

@@ -1,10 +1,8 @@
-from typing import Dict, Union
+from typing import Union
 
 from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import insert_and_get_rowid
-from app.core.migrations import run_migrations
-
 INSERT_SIGNAL_SQL = """
 INSERT INTO signals (
     symbol,
@@ -16,11 +14,6 @@ INSERT INTO signals (
 ) VALUES (?, ?, ?, ?, ?, ?);
 """
 
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
-
 def insert_signal(
     connection: DBConnection,
     signal_type: str,
@@ -29,7 +22,7 @@ def insert_signal(
     strategy_name: str = "manual_test",
     short_ma: float = 0.0,
     long_ma: float = 0.0,
-) -> Dict[str, Union[int, float, str]]:
+) -> dict[str, Union[int, float, str]]:
     signal_id = insert_and_get_rowid(
         connection,
         INSERT_SIGNAL_SQL,

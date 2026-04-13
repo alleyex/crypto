@@ -46,7 +46,6 @@ _CLIP_RET1 = 0.20  # ±20% per bar
 _CLIP_RET5 = 0.40
 _CLIP_RET20 = 0.80
 
-
 # ---------------------------------------------------------------------------
 # Normalization helpers
 # ---------------------------------------------------------------------------
@@ -62,7 +61,6 @@ def rolling_zscore(s: pd.Series, w: int) -> pd.Series:
     sigma = shifted.rolling(window=w, min_periods=w // 2).std()
     return ((s - mu) / sigma.replace(0, np.nan)).clip(-_CLIP_Z, _CLIP_Z)
 
-
 def robust_zscore(s: pd.Series, w: int) -> pd.Series:
     """Robust rolling z-score (median / IQR) with look-ahead prevention.
 
@@ -75,7 +73,6 @@ def robust_zscore(s: pd.Series, w: int) -> pd.Series:
     iqr = roll.quantile(0.75) - roll.quantile(0.25)
     scale = (iqr / 1.35).replace(0, np.nan)  # 1.35 maps IQR → σ-equivalent
     return ((s - med) / scale).clip(-_CLIP_Z, _CLIP_Z)
-
 
 # ---------------------------------------------------------------------------
 # Low-level indicator helpers
@@ -92,59 +89,12 @@ def _true_range(df: pd.DataFrame) -> pd.Series:
         axis=1,
     ).max(axis=1)
 
-
 # ---------------------------------------------------------------------------
-# Public API
+# Feature group sub-functions (all modify df in-place)
 # ---------------------------------------------------------------------------
 
-def build_crypto_features(
-    df: pd.DataFrame,
-    funding_df: "pd.DataFrame | None" = None,
-    orderbook_df: "pd.DataFrame | None" = None,
-    aggtrade_df: "pd.DataFrame | None" = None,
-    premium_df: "pd.DataFrame | None" = None,
-) -> pd.DataFrame:
-    """Compute feature set for a candle DataFrame.
-
-    Parameters
-    ----------
-    df:
-        DataFrame sorted by open_time ascending with required OHLCV columns.
-        Will be sorted internally if not already.
-    funding_df:
-        Optional funding rate DataFrame with columns:
-          funding_time_ms (int), funding_rate (float), mark_price (float).
-        When provided, funding rate features are computed and merged.
-        Each funding rate applies forward until the next settlement (every 8h).
-    orderbook_df:
-        Optional order book DataFrame with columns:
-          timestamp_ms (int), ob_imbalance (float),
-          spread_pct (float), mid_price (float).
-        When provided, snapshots are merged as-of using the most recent
-        snapshot at or before each candle open_time.
-    aggtrade_df:
-        Optional aggTrade minute DataFrame from futures_aggtrade_minutes with
-        columns: timestamp_ms, qty_total, qty_taker_buy, qty_taker_sell,
-        quote_total, quote_taker_buy, quote_taker_sell, vwap, trade_count,
-        coverage_ratio.
-        Rows with coverage_ratio < 0.3 or trade_count < 30 are discarded.
-        When None, aggtrade feature columns are filled with neutral constants.
-    premium_df:
-        Optional per-minute futures premium DataFrame from futures_premium_metrics
-        with columns: timestamp_ms (int), last_funding_rate (float),
-        mark_index_basis_pct (float).
-        When provided, computes funding_rate_z20 (z-score of per-minute funding
-        rate over 480-bar window) and basis_z (z-score of mark/index basis over
-        50 bars).  When None, both columns default to 0.0 (neutral).
-
-    Returns
-    -------
-    DataFrame with original columns plus all feature columns.
-    Rows with insufficient history will have NaN in feature columns.
-    """
-    df = df.copy().sort_values("open_time").reset_index(drop=True)
-
-    # ── Time features (open_time is UTC milliseconds) ─────────────────────
+def _add_time_features(df: pd.DataFrame) -> None:
+    """Hour/day cyclical encoding and session flags."""
     ts_sec = df["open_time"] / 1000
     hour = (ts_sec // 3600 % 24).astype(float)
     dow  = (ts_sec // 86400 % 7).astype(float)   # 0=Thu (unix epoch), wraps weekly
@@ -155,18 +105,23 @@ def build_crypto_features(
     df["is_asia_session"] = ((hour >= 0) & (hour < 8)).astype(np.float32)
     df["is_us_session"]   = ((hour >= 13) & (hour < 22)).astype(np.float32)
 
-    close = df["close"].astype(float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    volume = df["volume"].astype(float)
-    trades = df["number_of_trades"].astype(float)
-    quote_vol = df["quote_asset_volume"].astype(float)
-    taker_base = df["taker_buy_base_volume"].astype(float)
+def _add_price_volatility_features(
+    df: pd.DataFrame,
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    volume: pd.Series,
+    safe_close: pd.Series,
+    safe_vol: pd.Series,
+    trades: pd.Series,
+    safe_trades: pd.Series,
+    quote_vol: pd.Series,
+    taker_base: pd.Series,
+) -> "tuple[pd.Series, pd.Series]":
+    """Log returns, taker ratios, spread, ATR, volatility, volume features.
 
-    safe_close = close.replace(0, np.nan)
-    safe_vol = volume.replace(0, np.nan)
-    safe_trades = trades.replace(0, np.nan)
-
+    Returns (tr, atr_14) for use by the trend/momentum group.
+    """
     # ── Type ①: Log returns (bounded, no normalisation needed) ───────────
     df["log_ret_1"] = np.log(close / close.shift(1)).clip(-_CLIP_RET1, _CLIP_RET1)
     df["log_ret_5"] = np.log(close / close.shift(5)).clip(-_CLIP_RET5, _CLIP_RET5)
@@ -217,6 +172,19 @@ def build_crypto_features(
     df["log_ret_3"] = np.log(close / close.shift(3)).clip(-0.30, 0.30)
     df["log_ret_10"] = np.log(close / close.shift(10)).clip(-0.60, 0.60)
 
+    return tr, atr_14
+
+def _add_trend_momentum_features(
+    df: pd.DataFrame,
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    volume: pd.Series,
+    safe_close: pd.Series,
+    tr: pd.Series,
+    atr_14: pd.Series,
+) -> None:
+    """SMA, RSI, k-bar patterns, BB, VWAP, ADX, MACD, V4/V5 indicators."""
     # ── Trend: price distance from SMA ───────────────────────────────────
     sma20 = close.rolling(window=_SMA_SHORT, min_periods=_SMA_SHORT // 2).mean()
     sma60 = close.rolling(window=_SMA_LONG, min_periods=_SMA_LONG // 2).mean()
@@ -277,6 +245,7 @@ def build_crypto_features(
     df["adx_14"] = (adx / 100.0).clip(0.0, 1.0)  # normalise [0,100]→[0,1]
 
     # ── Cumulative taker flow imbalance (Type ①: bounded) ─────────────────
+    taker_base = df["taker_buy_base_volume"].astype(float)
     taker_sell_base = (volume - taker_base).clip(lower=0)
     net_flow = taker_base - taker_sell_base  # positive = buy pressure
     safe_roll_vol_5  = volume.rolling(window=5,  min_periods=3).sum().replace(0, np.nan)
@@ -286,7 +255,6 @@ def build_crypto_features(
 
     # ── Consecutive bar streak (Type ①: bounded) ──────────────────────────
     direction = np.sign(close - df["open"].astype(float))  # +1 / 0 / -1
-    streak = pd.array([0.0] * len(df), dtype=float)
     streak_vals = [0.0]
     for i in range(1, len(direction)):
         d = float(direction.iloc[i])
@@ -402,44 +370,50 @@ def build_crypto_features(
     bb_width_ma = df["bb_width_norm"].rolling(50, min_periods=25).mean().replace(0, np.nan)
     df["bb_squeeze"] = (df["bb_width_norm"] / bb_width_ma).clip(0.2, 3.0)
 
-    # ── Funding Rate features (optional) ──────────────────────────────────
-    # Requires funding_df with columns: funding_time_ms, funding_rate.
-    # Funding settles every 8 hours (00:00 / 08:00 / 16:00 UTC).
-    # Each rate applies forward until the next settlement.
-    if funding_df is not None and len(funding_df) > 0:
-        fr = funding_df[["funding_time_ms", "funding_rate"]].copy()
-        fr = fr.sort_values("funding_time_ms").reset_index(drop=True)
-        fr["funding_rate"] = fr["funding_rate"].astype(float)
+def _add_funding_features(df: pd.DataFrame, funding_df: "pd.DataFrame | None") -> None:
+    """Funding rate features — requires funding_df with funding_time_ms and funding_rate."""
+    if funding_df is None or len(funding_df) == 0:
+        return
+    fr = funding_df[["funding_time_ms", "funding_rate"]].copy()
+    fr = fr.sort_values("funding_time_ms").reset_index(drop=True)
+    fr["funding_rate"] = fr["funding_rate"].astype(float)
 
-        # Merge: for each candle, take the most recent funding rate (as-of join)
-        candle_ms = df["open_time"].values.astype(np.int64)
-        fund_ms   = fr["funding_time_ms"].values.astype(np.int64)
-        fund_rate = fr["funding_rate"].values
+    # Merge: for each candle, take the most recent funding rate (as-of join)
+    candle_ms = df["open_time"].values.astype(np.int64)
+    fund_ms   = fr["funding_time_ms"].values.astype(np.int64)
+    fund_rate = fr["funding_rate"].values
 
-        # searchsorted gives index of first fund_ms > candle_ms
-        idx = np.searchsorted(fund_ms, candle_ms, side="right") - 1
-        idx = np.clip(idx, 0, len(fund_rate) - 1)
-        fr_values = np.where(idx >= 0, fund_rate[idx], np.nan)
+    # searchsorted gives index of first fund_ms > candle_ms
+    idx = np.searchsorted(fund_ms, candle_ms, side="right") - 1
+    idx = np.clip(idx, 0, len(fund_rate) - 1)
+    fr_values = np.where(idx >= 0, fund_rate[idx], np.nan)
 
-        df["funding_rate"] = fr_values  # raw rate (e.g. 0.0001 = 0.01%)
+    df["funding_rate"] = fr_values  # raw rate (e.g. 0.0001 = 0.01%)
 
-        # z-score over 20 settlements (~7 days)
-        fr_series = pd.Series(df["funding_rate"])
-        fr_shifted = fr_series.shift(1)
-        fr_mu  = fr_shifted.rolling(20, min_periods=10).mean()
-        fr_std = fr_shifted.rolling(20, min_periods=10).std().replace(0, np.nan)
-        df["funding_rate_z20"] = ((fr_series - fr_mu) / fr_std).clip(-4.0, 4.0)
+    # z-score over 20 settlements (~7 days)
+    fr_series = pd.Series(df["funding_rate"])
+    fr_shifted = fr_series.shift(1)
+    fr_mu  = fr_shifted.rolling(20, min_periods=10).mean()
+    fr_std = fr_shifted.rolling(20, min_periods=10).std().replace(0, np.nan)
+    df["funding_rate_z20"] = ((fr_series - fr_mu) / fr_std).clip(-4.0, 4.0)
 
-        # Cyclical encoding: hours until next 8h settlement (0 to 8)
-        hour_utc = ((df["open_time"] / 1000) // 3600 % 24).astype(float)
-        hours_to_next = (8.0 - (hour_utc % 8.0)) % 8.0
-        df["funding_cos"] = np.cos(2 * np.pi * hours_to_next / 8.0)
-        df["funding_sin"] = np.sin(2 * np.pi * hours_to_next / 8.0)
+    # Cyclical encoding: hours until next 8h settlement (0 to 8)
+    hour_utc = ((df["open_time"] / 1000) // 3600 % 24).astype(float)
+    hours_to_next = (8.0 - (hour_utc % 8.0)) % 8.0
+    df["funding_cos"] = np.cos(2 * np.pi * hours_to_next / 8.0)
+    df["funding_sin"] = np.sin(2 * np.pi * hours_to_next / 8.0)
 
-    # ── AggTrade microstructure features (optional) ───────────────────────
-    # Neutral defaults — used when aggtrade_df is None or has no valid rows.
-    # taker_buy_ratio=0.5 (neutral), quote_flow_imb=0.0 (neutral),
-    # taker_buy_ratio_5=0.5 (neutral), vwap_dev=0.0 (neutral).
+def _add_aggtrade_features(
+    df: pd.DataFrame,
+    aggtrade_df: "pd.DataFrame | None",
+    close: pd.Series,
+    safe_close: pd.Series,
+) -> None:
+    """AggTrade microstructure features.
+
+    Neutral defaults (taker_buy_ratio=0.5, quote_flow_imb=0.0, vwap_dev=0.0)
+    are used when aggtrade_df is None or has no valid rows.
+    """
     _at_taker = pd.Series(0.5, index=df.index, dtype=np.float32)
     _at_qflow = pd.Series(0.0, index=df.index, dtype=np.float32)
     _at_vwap  = pd.Series(0.0, index=df.index, dtype=np.float32)
@@ -488,73 +462,156 @@ def build_crypto_features(
     df["taker_buy_ratio_5"] = df["taker_buy_ratio"].rolling(5, min_periods=3).mean().clip(0.0, 1.0).fillna(0.5)
     df["vwap_dev"]          = _at_vwap
 
-    # ── Futures Premium features (optional) ───────────────────────────────
-    # Neutral defaults: 0.0 (z-scores are mean-zero by definition).
-    # funding_rate_z20: per-minute funding rate z-scored over 480 bars (8 h).
-    # basis_z:          mark/index basis z-scored over 50 bars.
+def _add_premium_features(df: pd.DataFrame, premium_df: "pd.DataFrame | None") -> None:
+    """Futures premium features (funding_rate_z20, basis_z).
+
+    Defaults to 0.0 (neutral) when premium_df is None.
+    """
     df["funding_rate_z20"] = pd.Series(0.0, index=df.index, dtype=np.float32)
     df["basis_z"]          = pd.Series(0.0, index=df.index, dtype=np.float32)
 
-    if premium_df is not None and len(premium_df) > 0:
-        pm = premium_df[["timestamp_ms", "last_funding_rate", "mark_index_basis_pct"]].copy()
-        pm = pm.sort_values("timestamp_ms").reset_index(drop=True)
-        pm["last_funding_rate"]    = pm["last_funding_rate"].astype(float)
-        pm["mark_index_basis_pct"] = pm["mark_index_basis_pct"].astype(float)
+    if premium_df is None or len(premium_df) == 0:
+        return
 
-        # As-of join: for each candle, take the most-recent premium row
-        pm_ms       = pm["timestamp_ms"].values.astype(np.int64)
-        pm_fr       = pm["last_funding_rate"].values
-        pm_basis    = pm["mark_index_basis_pct"].values
-        candle_ms_p = df["open_time"].values.astype(np.int64)
+    pm = premium_df[["timestamp_ms", "last_funding_rate", "mark_index_basis_pct"]].copy()
+    pm = pm.sort_values("timestamp_ms").reset_index(drop=True)
+    pm["last_funding_rate"]    = pm["last_funding_rate"].astype(float)
+    pm["mark_index_basis_pct"] = pm["mark_index_basis_pct"].astype(float)
 
-        idx_p = np.searchsorted(pm_ms, candle_ms_p, side="right") - 1
-        idx_p = np.clip(idx_p, 0, len(pm_fr) - 1)
-        valid_p = idx_p >= 0
+    # As-of join: for each candle, take the most-recent premium row
+    pm_ms       = pm["timestamp_ms"].values.astype(np.int64)
+    pm_fr       = pm["last_funding_rate"].values
+    pm_basis    = pm["mark_index_basis_pct"].values
+    candle_ms_p = df["open_time"].values.astype(np.int64)
 
-        fr_vals    = np.where(valid_p, pm_fr[idx_p],    np.nan)
-        basis_vals = np.where(valid_p, pm_basis[idx_p], np.nan)
+    idx_p = np.searchsorted(pm_ms, candle_ms_p, side="right") - 1
+    idx_p = np.clip(idx_p, 0, len(pm_fr) - 1)
+    valid_p = idx_p >= 0
 
-        fr_series    = pd.Series(fr_vals,    index=df.index)
-        basis_series = pd.Series(basis_vals, index=df.index)
+    fr_vals    = np.where(valid_p, pm_fr[idx_p],    np.nan)
+    basis_vals = np.where(valid_p, pm_basis[idx_p], np.nan)
 
-        # funding_rate_z20: z-score over 480-bar window (~8 h of 1m data)
-        df["funding_rate_z20"] = rolling_zscore(fr_series,    w=480).fillna(0.0).astype(np.float32)
-        # basis_z: z-score over 50-bar window
-        df["basis_z"]          = rolling_zscore(basis_series, w=50).fillna(0.0).astype(np.float32)
+    fr_series    = pd.Series(fr_vals,    index=df.index)
+    basis_series = pd.Series(basis_vals, index=df.index)
 
-    # ── Order book features (optional) ───────────────────────────────────
-    if orderbook_df is not None and len(orderbook_df) > 0:
-        ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
-        ob = orderbook_df[ob_cols].copy().sort_values("timestamp_ms").reset_index(drop=True)
-        ob["timestamp_ms"] = ob["timestamp_ms"].astype(np.int64)
-        ob["ob_imbalance"] = ob["ob_imbalance"].astype(float)
-        ob["spread_pct"] = ob["spread_pct"].astype(float)
-        ob["mid_price"] = ob["mid_price"].astype(float)
+    # funding_rate_z20: z-score over 480-bar window (~8 h of 1m data)
+    df["funding_rate_z20"] = rolling_zscore(fr_series,    w=480).fillna(0.0).astype(np.float32)
+    # basis_z: z-score over 50-bar window
+    df["basis_z"]          = rolling_zscore(basis_series, w=50).fillna(0.0).astype(np.float32)
 
-        candle_ms = df["open_time"].values.astype(np.int64)
-        ob_ms = ob["timestamp_ms"].values.astype(np.int64)
-        idx = np.searchsorted(ob_ms, candle_ms, side="right") - 1
+def _add_orderbook_features(
+    df: pd.DataFrame,
+    orderbook_df: "pd.DataFrame | None",
+    close: pd.Series,
+    safe_close: pd.Series,
+) -> None:
+    """Order book snapshot features (ob_imbalance, spread_bps, mid_dev_from_close)."""
+    if orderbook_df is None or len(orderbook_df) == 0:
+        return
 
-        valid = idx >= 0
-        imbalance = np.full(len(df), np.nan, dtype=float)
-        spread_pct = np.full(len(df), np.nan, dtype=float)
-        mid_price = np.full(len(df), np.nan, dtype=float)
+    ob_cols = ["timestamp_ms", "ob_imbalance", "spread_pct", "mid_price"]
+    ob = orderbook_df[ob_cols].copy().sort_values("timestamp_ms").reset_index(drop=True)
+    ob["timestamp_ms"] = ob["timestamp_ms"].astype(np.int64)
+    ob["ob_imbalance"] = ob["ob_imbalance"].astype(float)
+    ob["spread_pct"] = ob["spread_pct"].astype(float)
+    ob["mid_price"] = ob["mid_price"].astype(float)
 
-        imbalance[valid] = ob["ob_imbalance"].values[idx[valid]]
-        spread_pct[valid] = ob["spread_pct"].values[idx[valid]]
-        mid_price[valid] = ob["mid_price"].values[idx[valid]]
+    candle_ms = df["open_time"].values.astype(np.int64)
+    ob_ms = ob["timestamp_ms"].values.astype(np.int64)
+    idx = np.searchsorted(ob_ms, candle_ms, side="right") - 1
 
-        df["ob_imbalance"] = pd.Series(imbalance, index=df.index).clip(-1.0, 1.0)
-        df["spread_bps"] = pd.Series(spread_pct, index=df.index).mul(10_000.0).clip(0.0, 50.0)
-        df["mid_dev_from_close"] = (
-            (pd.Series(mid_price, index=df.index) - close) / safe_close
-        ).clip(-0.01, 0.01)
-        df["ob_imbalance_5_mean"] = (
-            df["ob_imbalance"].rolling(window=5, min_periods=1).mean().clip(-1.0, 1.0)
-        )
+    valid = idx >= 0
+    imbalance = np.full(len(df), np.nan, dtype=float)
+    spread_pct = np.full(len(df), np.nan, dtype=float)
+    mid_price = np.full(len(df), np.nan, dtype=float)
+
+    imbalance[valid] = ob["ob_imbalance"].values[idx[valid]]
+    spread_pct[valid] = ob["spread_pct"].values[idx[valid]]
+    mid_price[valid] = ob["mid_price"].values[idx[valid]]
+
+    df["ob_imbalance"] = pd.Series(imbalance, index=df.index).clip(-1.0, 1.0)
+    df["spread_bps"] = pd.Series(spread_pct, index=df.index).mul(10_000.0).clip(0.0, 50.0)
+    df["mid_dev_from_close"] = (
+        (pd.Series(mid_price, index=df.index) - close) / safe_close
+    ).clip(-0.01, 0.01)
+    df["ob_imbalance_5_mean"] = (
+        df["ob_imbalance"].rolling(window=5, min_periods=1).mean().clip(-1.0, 1.0)
+    )
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def build_crypto_features(
+    df: pd.DataFrame,
+    funding_df: "pd.DataFrame | None" = None,
+    orderbook_df: "pd.DataFrame | None" = None,
+    aggtrade_df: "pd.DataFrame | None" = None,
+    premium_df: "pd.DataFrame | None" = None,
+) -> pd.DataFrame:
+    """Compute feature set for a candle DataFrame.
+
+    Parameters
+    ----------
+    df:
+        DataFrame sorted by open_time ascending with required OHLCV columns.
+        Will be sorted internally if not already.
+    funding_df:
+        Optional funding rate DataFrame with columns:
+          funding_time_ms (int), funding_rate (float), mark_price (float).
+        When provided, funding rate features are computed and merged.
+        Each funding rate applies forward until the next settlement (every 8h).
+    orderbook_df:
+        Optional order book DataFrame with columns:
+          timestamp_ms (int), ob_imbalance (float),
+          spread_pct (float), mid_price (float).
+        When provided, snapshots are merged as-of using the most recent
+        snapshot at or before each candle open_time.
+    aggtrade_df:
+        Optional aggTrade minute DataFrame from futures_aggtrade_minutes with
+        columns: timestamp_ms, qty_total, qty_taker_buy, qty_taker_sell,
+        quote_total, quote_taker_buy, quote_taker_sell, vwap, trade_count,
+        coverage_ratio.
+        Rows with coverage_ratio < 0.3 or trade_count < 30 are discarded.
+        When None, aggtrade feature columns are filled with neutral constants.
+    premium_df:
+        Optional per-minute futures premium DataFrame from futures_premium_metrics
+        with columns: timestamp_ms (int), last_funding_rate (float),
+        mark_index_basis_pct (float).
+        When provided, computes funding_rate_z20 (z-score of per-minute funding
+        rate over 480-bar window) and basis_z (z-score of mark/index basis over
+        50 bars).  When None, both columns default to 0.0 (neutral).
+
+    Returns
+    -------
+    DataFrame with original columns plus all feature columns.
+    Rows with insufficient history will have NaN in feature columns.
+    """
+    df = df.copy().sort_values("open_time").reset_index(drop=True)
+
+    close      = df["close"].astype(float)
+    high       = df["high"].astype(float)
+    low        = df["low"].astype(float)
+    volume     = df["volume"].astype(float)
+    trades     = df["number_of_trades"].astype(float)
+    quote_vol  = df["quote_asset_volume"].astype(float)
+    taker_base = df["taker_buy_base_volume"].astype(float)
+    safe_close = close.replace(0, np.nan)
+    safe_vol   = volume.replace(0, np.nan)
+    safe_trades = trades.replace(0, np.nan)
+
+    _add_time_features(df)
+    tr, atr_14 = _add_price_volatility_features(
+        df, close, high, low, volume, safe_close, safe_vol,
+        trades, safe_trades, quote_vol, taker_base,
+    )
+    _add_trend_momentum_features(df, close, high, low, volume, safe_close, tr, atr_14)
+    _add_funding_features(df, funding_df)
+    _add_aggtrade_features(df, aggtrade_df, close, safe_close)
+    _add_premium_features(df, premium_df)
+    _add_orderbook_features(df, orderbook_df, close, safe_close)
 
     return df
-
 
 def get_feature_columns() -> list:
     """Return the ordered list of model-input feature columns (V7 — basis_z added).

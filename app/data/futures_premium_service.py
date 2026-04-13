@@ -7,21 +7,16 @@ Binance Futures premium index endpoint and stores one row per symbol per minute.
 from __future__ import annotations
 
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
-
-import requests
 
 from app.core.db import DBConnection
 from app.core.settings import FUTURES_PREMIUM_SYMBOLS
+from app.data.binance_config import futures_rest_base_url
+from app.data.collection_state import CollectionState
+from app.data.retry_helpers import fetch_with_retry
 
-_PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
-_PREMIUM_TESTNET_URL = "https://testnet.binancefuture.com/fapi/v1/premiumIndex"
 _MARK_KLINES_URL = "https://fapi.binance.com/fapi/v1/markPriceKlines"
 _INDEX_KLINES_URL = "https://fapi.binance.com/fapi/v1/indexPriceKlines"
 _TIMEOUT = 8
@@ -30,49 +25,35 @@ _BACKOFF = 1.0
 _KLINES_LIMIT = 1500
 
 FUTURES_PREMIUM_PAUSED_FILE = Path("runtime/futures_premium.paused")
-
+_state = CollectionState(FUTURES_PREMIUM_PAUSED_FILE)
 
 def configured_futures_premium_symbols() -> list[str]:
     return list(FUTURES_PREMIUM_SYMBOLS)
 
-
 def is_futures_premium_collection_enabled() -> bool:
-    return not FUTURES_PREMIUM_PAUSED_FILE.exists()
-
+    return _state.is_enabled()
 
 def enable_futures_premium_collection() -> None:
-    if FUTURES_PREMIUM_PAUSED_FILE.exists():
-        FUTURES_PREMIUM_PAUSED_FILE.unlink()
-
+    _state.enable()
 
 def disable_futures_premium_collection() -> None:
-    FUTURES_PREMIUM_PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FUTURES_PREMIUM_PAUSED_FILE.write_text("paused\n", encoding="utf-8")
-
-
-def _is_testnet() -> bool:
-    return os.getenv("CRYPTO_BINANCE_TESTNET", "").strip().lower() in ("1", "true", "yes", "on")
-
+    _state.disable()
 
 def _premium_url() -> str:
-    return _PREMIUM_TESTNET_URL if _is_testnet() else _PREMIUM_URL
+    return f"{futures_rest_base_url()}/fapi/v1/premiumIndex"
 
-
-def _minute_ms(now_ms: Optional[int] = None) -> int:
+def _minute_ms(now_ms: int | None = None) -> int:
     now_ms = int(now_ms or datetime.now(timezone.utc).timestamp() * 1000)
     return (now_ms // 60_000) * 60_000
 
-
-def _previous_closed_minute_ms(now_ms: Optional[int] = None) -> int:
+def _previous_closed_minute_ms(now_ms: int | None = None) -> int:
     return _minute_ms(now_ms) - 60_000
-
 
 def _pair_for_symbol(symbol: str) -> str:
     normalized = symbol.upper()
     if normalized == "1000PEPEUSDT":
         return "PEPEUSDT"
     return normalized
-
 
 def _fetch_klines(url: str, params: dict[str, Any], timeout: int) -> list[list[Any]]:
     rows: list[list[Any]] = []
@@ -81,21 +62,7 @@ def _fetch_klines(url: str, params: dict[str, Any], timeout: int) -> list[list[A
     while cursor <= end_time:
         local_params = dict(params)
         local_params["startTime"] = cursor
-        batch: list[list[Any]] = []
-        last_exc: Exception | None = None
-        for attempt in range(_RETRIES + 1):
-            try:
-                response = requests.get(url, params=local_params, timeout=timeout)
-                response.raise_for_status()
-                batch = response.json() or []
-                last_exc = None
-                break
-            except Exception as exc:
-                last_exc = exc
-                if attempt < _RETRIES:
-                    time.sleep(_BACKOFF * (2 ** attempt))
-                    continue
-                raise last_exc
+        batch = fetch_with_retry(url, params=local_params, timeout=timeout, retries=_RETRIES, backoff=_BACKOFF).json() or []
         if not batch:
             break
         rows.extend(batch)
@@ -103,7 +70,6 @@ def _fetch_klines(url: str, params: dict[str, Any], timeout: int) -> list[list[A
             break
         cursor = int(batch[-1][0]) + 60_000
     return rows
-
 
 def _fetch_mark_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> dict[int, float]:
     params = {
@@ -116,7 +82,6 @@ def _fetch_mark_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> d
     rows = _fetch_klines(_MARK_KLINES_URL, params, timeout)
     return {int(row[0]): float(row[4]) for row in rows}
 
-
 def _fetch_index_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> dict[int, float]:
     params = {
         "pair": _pair_for_symbol(symbol),
@@ -128,29 +93,15 @@ def _fetch_index_rows(symbol: str, start_ms: int, end_ms: int, timeout: int) -> 
     rows = _fetch_klines(_INDEX_KLINES_URL, params, timeout)
     return {int(row[0]): float(row[4]) for row in rows}
 
-
 def fetch_futures_premium_metrics(
-    symbols: Optional[list[str]] = None,
-    now_ms: Optional[int] = None,
+    symbols: list[str] | None = None,
+    now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     symbol_filter = {s.upper() for s in (symbols or configured_futures_premium_symbols())}
     timeout = int(os.getenv("CRYPTO_BINANCE_TIMEOUT_SECONDS", str(_TIMEOUT)))
-    last_exc: Exception = RuntimeError("fetch_futures_premium_metrics: no attempts made")
-    data: list[dict[str, Any]] = []
-    for attempt in range(_RETRIES + 1):
-        try:
-            resp = requests.get(_premium_url(), timeout=timeout)
-            resp.raise_for_status()
-            payload = resp.json()
-            rows = payload if isinstance(payload, list) else [payload]
-            data = [row for row in rows if str(row.get("symbol") or "").upper() in symbol_filter]
-            break
-        except Exception as exc:
-            last_exc = exc
-            if attempt < _RETRIES:
-                time.sleep(_BACKOFF * (2 ** attempt))
-                continue
-            raise last_exc
+    payload = fetch_with_retry(_premium_url(), timeout=timeout, retries=_RETRIES, backoff=_BACKOFF).json()
+    rows = payload if isinstance(payload, list) else [payload]
+    data = [row for row in rows if str(row.get("symbol") or "").upper() in symbol_filter]
     minute_ms = _minute_ms(now_ms)
     result: list[dict[str, Any]] = []
     for row in data:
@@ -181,12 +132,11 @@ def fetch_futures_premium_metrics(
         )
     return result
 
-
 def fetch_futures_premium_history(
     symbol: str,
     start_ms: int,
     end_ms: int,
-    timeout: Optional[int] = None,
+    timeout: int | None = None,
 ) -> list[dict[str, Any]]:
     if start_ms > end_ms:
         return []
@@ -218,7 +168,6 @@ def fetch_futures_premium_history(
         )
     return result
 
-
 _UPSERT_SQL = """
 INSERT INTO futures_premium_metrics
     (symbol, timestamp_ms, mark_price, index_price, estimated_settle_price,
@@ -235,7 +184,6 @@ ON CONFLICT(symbol, timestamp_ms) DO UPDATE SET
     mark_index_spread_bps = excluded.mark_index_spread_bps,
     source = excluded.source;
 """
-
 
 def save_futures_premium_metrics(connection: DBConnection, rows: list[dict[str, Any]]) -> int:
     saved = 0
@@ -259,7 +207,6 @@ def save_futures_premium_metrics(connection: DBConnection, rows: list[dict[str, 
     connection.commit()
     return saved
 
-
 def _latest_symbol_timestamps(connection: DBConnection, symbols: list[str]) -> dict[str, int]:
     if not symbols:
         return {}
@@ -275,11 +222,10 @@ def _latest_symbol_timestamps(connection: DBConnection, symbols: list[str]) -> d
     ).fetchall()
     return {str(symbol): int(latest_ms) for symbol, latest_ms in rows if latest_ms is not None}
 
-
 def backfill_missing_futures_premium_metrics(
     connection: DBConnection,
     symbols: list[str],
-    now_ms: Optional[int] = None,
+    now_ms: int | None = None,
 ) -> int:
     latest_by_symbol = _latest_symbol_timestamps(connection, symbols)
     previous_closed_minute_ms = _previous_closed_minute_ms(now_ms)
@@ -295,11 +241,10 @@ def backfill_missing_futures_premium_metrics(
         saved += save_futures_premium_metrics(connection, rows)
     return saved
 
-
 def collect_futures_premium_metrics(
     connection: DBConnection,
-    symbol_names: Optional[list[str]] = None,
-    now_ms: Optional[int] = None,
+    symbol_names: list[str] | None = None,
+    now_ms: int | None = None,
 ) -> dict[str, Any]:
     symbols = list(symbol_names or configured_futures_premium_symbols())
     archive_saved = backfill_missing_futures_premium_metrics(connection, symbols, now_ms=now_ms)
@@ -312,8 +257,7 @@ def collect_futures_premium_metrics(
         "symbols": symbols,
     }
 
-
-def get_futures_premium_stats(connection: DBConnection) -> List[Dict[str, Any]]:
+def get_futures_premium_stats(connection: DBConnection) -> list[dict[str, Any]]:
     rows = connection.execute(
         """
         SELECT symbol,

@@ -11,16 +11,14 @@ Queries the local DB to produce a snapshot useful for monitoring:
 All windows are configurable; the default period is 24 hours.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from app.core.db import DBConnection, parse_db_timestamp, table_exists
-
 
 def _cutoff_timestamp(period_hours: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(hours=period_hours)
 
-
-def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
+def _risk_summary(connection: DBConnection, period_hours: int) -> dict[str, Any]:
     if not table_exists(connection, "risk_events"):
         return {"total": 0, "approved": 0, "rejected": 0, "reject_rate": None, "top_rejection_reasons": []}
     cutoff = _cutoff_timestamp(period_hours)
@@ -63,8 +61,7 @@ def _risk_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]
         "top_rejection_reasons": top_reasons,
     }
 
-
-def _signal_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
+def _signal_summary(connection: DBConnection, period_hours: int) -> dict[str, Any]:
     if not table_exists(connection, "signals"):
         return {"total": 0, "by_type": {}}
     cutoff = _cutoff_timestamp(period_hours)
@@ -81,8 +78,7 @@ def _signal_summary(connection: DBConnection, period_hours: int) -> Dict[str, An
     by_type = {r[0]: int(r[1]) for r in rows}
     return {"total": sum(by_type.values()), "by_type": by_type}
 
-
-def _execution_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
+def _execution_summary(connection: DBConnection, period_hours: int) -> dict[str, Any]:
     if not table_exists(connection, "fills"):
         return {"fills": 0, "fill_volume": None, "orders_total": 0}
     cutoff = _cutoff_timestamp(period_hours)
@@ -105,8 +101,7 @@ def _execution_summary(connection: DBConnection, period_hours: int) -> Dict[str,
 
     return {"fills": fills, "fill_volume": fill_volume, "orders_total": orders_total}
 
-
-def _pnl_summary(connection: DBConnection) -> Dict[str, Any]:
+def _pnl_summary(connection: DBConnection) -> dict[str, Any]:
     if not table_exists(connection, "daily_realized_pnl"):
         return {"today": None, "last_7_days": []}
 
@@ -118,7 +113,7 @@ def _pnl_summary(connection: DBConnection) -> Dict[str, Any]:
         LIMIT 21;
         """
     ).fetchall()
-    last_7: List[Dict[str, Any]] = [
+    last_7: list[dict[str, Any]] = [
         {"date": r[0], "symbol": r[1], "realized_pnl": round(float(r[2]), 6)}
         for r in rows
     ]
@@ -130,8 +125,7 @@ def _pnl_summary(connection: DBConnection) -> Dict[str, Any]:
 
     return {"today": today_total, "last_7_days": last_7}
 
-
-def _queue_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any]:
+def _queue_summary(connection: DBConnection, period_hours: int) -> dict[str, Any]:
     if not table_exists(connection, "job_queue"):
         return {"avg_job_duration_seconds": None, "completed": 0, "failed": 0}
     cutoff = _cutoff_timestamp(period_hours)
@@ -171,8 +165,7 @@ def _queue_summary(connection: DBConnection, period_hours: int) -> Dict[str, Any
         "failed": counts.get("failed", 0),
     }
 
-
-def build_metrics(connection: DBConnection, period_hours: int = 24) -> Dict[str, Any]:
+def build_metrics(connection: DBConnection, period_hours: int = 24) -> dict[str, Any]:
     """Return an operational metrics snapshot for the given look-back window."""
     return {
         "period_hours": period_hours,

@@ -1,14 +1,13 @@
 """Walk-forward validation with an expanding training window."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.backtest.runner import run_backtest
-
 
 def run_walk_forward(
     symbol: str,
     strategy_name: str,
-    candles: List[Dict],
+    candles: list[dict],
     n_splits: int = 5,
     initial_capital: float = 10000.0,
     order_qty: float = 0.001,
@@ -17,7 +16,7 @@ def run_walk_forward(
     max_daily_loss: float = 0.0,
     timeframe: str = "1m",
     fill_on: str = "close",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run expanding-window walk-forward validation.
 
     Splits sorted candles into (n_splits + 1) equal chunks.  For fold i
@@ -37,7 +36,7 @@ def run_walk_forward(
 
     Returns
     -------
-    Dict with keys:
+    dict with keys:
       - splits: list of per-fold result dicts (train_metrics, test_metrics,
                 train_candle_count, test_candle_count, fold)
       - oos_metrics: aggregated out-of-sample statistics across all folds
@@ -105,11 +104,10 @@ def run_walk_forward(
         "oos_metrics": oos_metrics,
     }
 
-
-def _aggregate_oos(splits: List[Dict]) -> Dict[str, Any]:
+def _aggregate_oos(splits: list[dict]) -> dict[str, Any]:
     """Compute mean and std of key metrics across out-of-sample test folds."""
     keys = ("total_return_pct", "sharpe_ratio", "max_drawdown_pct", "win_rate_pct")
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     for key in keys:
         values = [

@@ -35,7 +35,7 @@ Schema (migration 028)
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection, fetch_all_as_dicts, utc_now_iso
 
@@ -50,15 +50,12 @@ INSERT INTO model_registry
 VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?);
 """
 
-
 def _now_utc() -> str:
     return utc_now_iso()
-
 
 def _version_tag() -> str:
     """Generate a sortable version tag from the current UTC timestamp."""
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
-
 
 # ---------------------------------------------------------------------------
 # Write operations
@@ -69,10 +66,10 @@ def register_model(
     symbol: str,
     timeframe: str,
     feature_set: str,
-    model: Dict[str, Any],
-    training_job_id: Optional[int] = None,
-    metrics: Optional[Dict[str, Any]] = None,
-    notes: Optional[str] = None,
+    model: dict[str, Any],
+    training_job_id: int | None = None,
+    metrics: dict[str, Any] | None = None,
+    notes: str | None = None,
 ) -> int:
     """Register a new model version as a candidate. Returns its id."""
     cursor = connection.execute(
@@ -91,11 +88,10 @@ def register_model(
     connection.commit()
     return cursor.lastrowid  # type: ignore[return-value]
 
-
 def promote_model(
     connection: DBConnection,
     model_id: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Promote a model to champion.
 
     Archives the current champion for the same (symbol, timeframe, feature_set).
@@ -127,11 +123,10 @@ def promote_model(
     connection.commit()
     return get_model(connection, model_id)
 
-
 def archive_model(
     connection: DBConnection,
     model_id: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Archive a model (remove it from serving). Returns updated row or None."""
     if _get_raw(connection, model_id) is None:
         return None
@@ -142,12 +137,11 @@ def archive_model(
     connection.commit()
     return get_model(connection, model_id)
 
-
 def update_notes(
     connection: DBConnection,
     model_id: int,
     notes: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Update the notes field on a model. Returns updated row or None."""
     if _get_raw(connection, model_id) is None:
         return None
@@ -158,7 +152,6 @@ def update_notes(
     connection.commit()
     return get_model(connection, model_id)
 
-
 # ---------------------------------------------------------------------------
 # Read operations
 # ---------------------------------------------------------------------------
@@ -166,7 +159,7 @@ def update_notes(
 def get_model(
     connection: DBConnection,
     model_id: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     rows = fetch_all_as_dicts(
         connection,
         "SELECT * FROM model_registry WHERE id = ?;",
@@ -174,8 +167,7 @@ def get_model(
     )
     return _deserialise(rows[0]) if rows else None
 
-
-def _get_raw(connection: DBConnection, model_id: int) -> Optional[Dict[str, Any]]:
+def _get_raw(connection: DBConnection, model_id: int) -> dict[str, Any] | None:
     rows = fetch_all_as_dicts(
         connection,
         "SELECT * FROM model_registry WHERE id = ?;",
@@ -183,13 +175,12 @@ def _get_raw(connection: DBConnection, model_id: int) -> Optional[Dict[str, Any]
     )
     return rows[0] if rows else None
 
-
 def get_champion(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
     feature_set: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return the current champion for a (symbol, timeframe, feature_set), or None."""
     rows = fetch_all_as_dicts(
         connection,
@@ -203,19 +194,18 @@ def get_champion(
     )
     return _deserialise(rows[0]) if rows else None
 
-
 def list_models(
     connection: DBConnection,
-    symbol: Optional[str] = None,
-    timeframe: Optional[str] = None,
-    feature_set: Optional[str] = None,
-    status: Optional[str] = None,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    feature_set: str | None = None,
+    status: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return paginated model registry rows, newest first."""
-    clauses: List[str] = []
-    params: List[Any] = []
+    clauses: list[str] = []
+    params: list[Any] = []
     for col, val in (("symbol", symbol), ("timeframe", timeframe),
                      ("feature_set", feature_set), ("status", status)):
         if val is not None:
@@ -240,13 +230,12 @@ def list_models(
         "models": [_deserialise(r) for r in rows],
     }
 
-
 def list_versions(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
     feature_set: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return all versions for a (symbol, timeframe, feature_set), newest first."""
     rows = fetch_all_as_dicts(
         connection,
@@ -259,12 +248,11 @@ def list_versions(
     )
     return [_deserialise(r) for r in rows]
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _deserialise(row: Dict[str, Any]) -> Dict[str, Any]:
+def _deserialise(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
     for field in ("model_json", "metrics_json"):
         raw = result.pop(field, None)

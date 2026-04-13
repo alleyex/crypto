@@ -1,14 +1,13 @@
 """Backtest run persistence service."""
 import json
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection, fetch_all_as_dicts, insert_and_get_rowid
 
 _VALID_SORT_KEYS = frozenset(
     {"sharpe_ratio", "total_return_pct", "max_drawdown_pct", "win_rate_pct", "profit_factor"}
 )
-
 
 _INSERT_SQL = """
 INSERT INTO backtest_runs (
@@ -20,8 +19,7 @@ INSERT INTO backtest_runs (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
-
-def _safe_float(value: Any) -> Optional[float]:
+def _safe_float(value: Any) -> float | None:
     """Coerce to float, returning None for inf/nan (not storable as SQL REAL)."""
     if value is None:
         return None
@@ -33,19 +31,18 @@ def _safe_float(value: Any) -> Optional[float]:
         return f
     return None
 
-
 def persist_run(
     connection: DBConnection,
     run_type: str,
-    result: Dict[str, Any],
-    days: Optional[int] = None,
+    result: dict[str, Any],
+    days: int | None = None,
     timeframe: str = "1m",
     fill_on: str = "close",
-    params: Optional[Dict[str, Any]] = None,
-    experiment_name: Optional[str] = None,
-    wf_group_id: Optional[str] = None,
-    fold_index: Optional[int] = None,
-    equity_curve: Optional[List[Dict[str, Any]]] = None,
+    params: dict[str, Any] | None = None,
+    experiment_name: str | None = None,
+    wf_group_id: str | None = None,
+    fold_index: int | None = None,
+    equity_curve: list[dict[str, Any]] | None = None,
 ) -> int:
     """Persist a single backtest result row and return its id."""
     metrics = result.get("metrics") or {}
@@ -79,19 +76,18 @@ def persist_run(
     connection.commit()
     return run_id
 
-
 def list_runs(
     connection: DBConnection,
-    symbol: Optional[str] = None,
-    strategy_name: Optional[str] = None,
-    run_type: Optional[str] = None,
-    experiment_name: Optional[str] = None,
+    symbol: str | None = None,
+    strategy_name: str | None = None,
+    run_type: str | None = None,
+    experiment_name: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return paginated backtest history, newest first."""
-    where_clauses: List[str] = []
-    params: List[Any] = []
+    where_clauses: list[str] = []
+    params: list[Any] = []
 
     if symbol:
         where_clauses.append("symbol = ?")
@@ -125,8 +121,7 @@ def list_runs(
     )
     return {"total": total, "limit": limit, "offset": offset, "runs": rows}
 
-
-def list_experiments(connection: DBConnection) -> List[str]:
+def list_experiments(connection: DBConnection) -> list[str]:
     """Return sorted list of distinct experiment names (excluding NULL)."""
     rows = connection.execute(
         "SELECT DISTINCT experiment_name FROM backtest_runs"
@@ -134,18 +129,16 @@ def list_experiments(connection: DBConnection) -> List[str]:
     ).fetchall()
     return [str(r[0]) for r in rows]
 
-
-def get_run(connection: DBConnection, run_id: int) -> Optional[Dict[str, Any]]:
+def get_run(connection: DBConnection, run_id: int) -> dict[str, Any] | None:
     """Return a single run by id, or None if not found."""
     rows = fetch_all_as_dicts(
         connection, "SELECT * FROM backtest_runs WHERE id = ?;", (run_id,)
     )
     return rows[0] if rows else None
 
-
 def get_equity_curve(
     connection: DBConnection, run_id: int
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Return the equity curve for a run, or None if not stored / run not found."""
     row = connection.execute(
         "SELECT equity_curve_json FROM backtest_runs WHERE id = ?;", (run_id,)
@@ -157,13 +150,12 @@ def get_equity_curve(
         return []
     return json.loads(raw)
 
-
 def update_run(
     connection: DBConnection,
     run_id: int,
-    notes: Optional[str] = None,
-    tags: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+    notes: str | None = None,
+    tags: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Update mutable fields (notes, tags) on an existing run. Returns updated row or None."""
     if get_run(connection, run_id) is None:
         return None
@@ -179,10 +171,9 @@ def update_run(
     connection.commit()
     return get_run(connection, run_id)
 
-
 def compare_runs(
-    connection: DBConnection, run_ids: List[int]
-) -> Dict[str, Any]:
+    connection: DBConnection, run_ids: list[int]
+) -> dict[str, Any]:
     """Return rows for the given IDs (in requested order) plus per-metric best run id."""
     if not run_ids:
         return {"runs": [], "best": {}}
@@ -195,7 +186,7 @@ def compare_runs(
     id_to_row = {r["id"]: r for r in rows}
     ordered = [id_to_row[rid] for rid in run_ids if rid in id_to_row]
 
-    best: Dict[str, Any] = {}
+    best: dict[str, Any] = {}
     for metric in _VALID_SORT_KEYS:
         ascending = metric == "max_drawdown_pct"
         valid = [(r["id"], r.get(metric)) for r in ordered if r.get(metric) is not None]
@@ -203,20 +194,19 @@ def compare_runs(
             best[metric] = min(valid, key=lambda x: x[1] if ascending else -x[1])[0]
     return {"runs": ordered, "best": best}
 
-
 def leaderboard_runs(
     connection: DBConnection,
-    strategy_name: Optional[str] = None,
+    strategy_name: str | None = None,
     sort_by: str = "sharpe_ratio",
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return top runs sorted by a metric column, best first."""
     if sort_by not in _VALID_SORT_KEYS:
         raise ValueError(
             f"sort_by must be one of {sorted(_VALID_SORT_KEYS)}, got {sort_by!r}."
         )
     where_clauses = [f"{sort_by} IS NOT NULL"]
-    params: List[Any] = []
+    params: list[Any] = []
     if strategy_name:
         where_clauses.append("strategy_name = ?")
         params.append(strategy_name)
@@ -231,10 +221,9 @@ def leaderboard_runs(
         tuple(params) + (limit,),
     )
 
-
 def promote_run(
     connection: DBConnection, run_id: int
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Mark run as champion for its strategy. Clears promoted_at from all other runs
     of the same strategy. Returns the updated row or None if run not found."""
     run = get_run(connection, run_id)
@@ -251,10 +240,9 @@ def promote_run(
     connection.commit()
     return get_run(connection, run_id)
 
-
 def get_champion_run(
     connection: DBConnection, strategy_name: str
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return the current champion run for a strategy, or None."""
     rows = fetch_all_as_dicts(
         connection,
@@ -264,15 +252,13 @@ def get_champion_run(
     )
     return rows[0] if rows else None
 
-
 _WF_AGGREGATE_METRICS = (
     "sharpe_ratio", "total_return_pct", "max_drawdown_pct", "win_rate_pct", "profit_factor"
 )
 
-
 def get_walk_forward_group(
     connection: DBConnection, wf_group_id: str
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return all folds for a WF group plus per-metric aggregate stats, or None."""
     rows = fetch_all_as_dicts(
         connection,
@@ -283,7 +269,7 @@ def get_walk_forward_group(
     if not rows:
         return None
 
-    agg: Dict[str, Any] = {}
+    agg: dict[str, Any] = {}
     for metric in _WF_AGGREGATE_METRICS:
         vals = [float(r[metric]) for r in rows if r.get(metric) is not None]
         if vals:
@@ -301,8 +287,7 @@ def get_walk_forward_group(
         "aggregate": agg,
     }
 
-
-def list_walk_forward_groups(connection: DBConnection) -> List[Dict[str, Any]]:
+def list_walk_forward_groups(connection: DBConnection) -> list[dict[str, Any]]:
     """Return summary rows for every distinct WF group, newest first."""
     rows = connection.execute(
         """
@@ -325,14 +310,13 @@ def list_walk_forward_groups(connection: DBConnection) -> List[Dict[str, Any]]:
         for r in rows
     ]
 
-
 def get_best_sweep_run(
     connection: DBConnection,
     strategy_name: str,
-    symbol: Optional[str] = None,
+    symbol: str | None = None,
     sort_by: str = "sharpe_ratio",
     min_trade_count: int = 1,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return the best persisted sweep run for a strategy, or None.
 
     Raises ValueError if sort_by is not a recognised metric column.
@@ -345,8 +329,8 @@ def get_best_sweep_run(
             f"sort_by must be one of {sorted(_VALID_SORT_KEYS)}, got {sort_by!r}."
         )
 
-    clauses: List[str] = ["run_type = ?", "strategy_name = ?"]
-    params: List[Any] = ["sweep", strategy_name]
+    clauses: list[str] = ["run_type = ?", "strategy_name = ?"]
+    params: list[Any] = ["sweep", strategy_name]
     if symbol:
         clauses.append("symbol = ?")
         params.append(symbol)
@@ -366,7 +350,7 @@ def get_best_sweep_run(
 
     ascending = sort_by == "max_drawdown_pct"
 
-    def _sort_key(row: Dict[str, Any]):
+    def _sort_key(row: dict[str, Any]):
         v = row.get(sort_by)
         if v is None:
             return (1, 0.0)

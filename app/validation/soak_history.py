@@ -2,31 +2,26 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from typing import Optional
+
+from app.core.settings import SOAK_SNAPSHOT_INTERVAL_SECONDS
 
 RUNTIME_DIR = Path("runtime")
 SOAK_HISTORY_FILE = RUNTIME_DIR / "soak_validation_history.jsonl"
 SOAK_ACCEPTANCE_TARGET_HOURS = 24 * 7
-# Snapshot interval assumed when estimating accumulated hours from ok count.
-# Must match the scheduler's --interval setting (default 60 s).
-SOAK_SNAPSHOT_INTERVAL_SECONDS = 60
 # Minimum accumulated healthy operation hours required for paper trading
 # readiness.  Lower than the wall-clock span target to account for planned
 # restarts and maintenance windows on a dev machine.
 SOAK_ACCUMULATED_TARGET_HOURS = 72
 
-
-def _parse_checked_at(value: Optional[str]) -> Optional[datetime]:
+def _parse_checked_at(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value)
-
 
 def build_soak_validation_report() -> dict[str, Any]:
     from app.validation.soak_report import build_soak_validation_report as _build_soak_validation_report
 
     return _build_soak_validation_report()
-
 
 def record_soak_validation_snapshot() -> dict[str, Any]:
     report = build_soak_validation_report()
@@ -34,7 +29,6 @@ def record_soak_validation_snapshot() -> dict[str, Any]:
     with SOAK_HISTORY_FILE.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(report, sort_keys=True) + "\n")
     return report
-
 
 def read_soak_validation_history(limit: int = 20) -> list[dict[str, Any]]:
     if not SOAK_HISTORY_FILE.exists():
@@ -45,7 +39,6 @@ def read_soak_validation_history(limit: int = 20) -> list[dict[str, Any]]:
     for line in reversed(lines[-limit:]):
         records.append(json.loads(line))
     return records
-
 
 def _compute_longest_ok_streak_hours(records: list[dict[str, Any]]) -> float:
     """Return the length in hours of the longest consecutive ok run."""
@@ -58,7 +51,6 @@ def _compute_longest_ok_streak_hours(records: list[dict[str, Any]]) -> float:
         else:
             current = 0
     return round(longest * SOAK_SNAPSHOT_INTERVAL_SECONDS / 3600, 2)
-
 
 def build_soak_history_summary() -> dict[str, Any]:
     _empty: dict[str, Any] = {

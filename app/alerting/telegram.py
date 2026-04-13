@@ -11,18 +11,14 @@ from app.core.settings import TELEGRAM_CHAT_ID
 from app.core.settings import TELEGRAM_TIMEOUT_SECONDS
 from app.system.heartbeat import record_heartbeat
 
-
 RUNTIME_DIR = Path("runtime")
 TELEGRAM_MESSAGE_STATE_FILE = RUNTIME_DIR / "telegram_message_state.json"
-
 
 def telegram_configured() -> bool:
     return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
-
 def _message_fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
 
 def _read_sent_message_fingerprints() -> set[str]:
     if not TELEGRAM_MESSAGE_STATE_FILE.exists():
@@ -34,14 +30,12 @@ def _read_sent_message_fingerprints() -> set[str]:
     fingerprints = payload.get("fingerprints", [])
     return {str(item) for item in fingerprints if item}
 
-
 def _write_sent_message_fingerprints(fingerprints: set[str]) -> None:
     TELEGRAM_MESSAGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     TELEGRAM_MESSAGE_STATE_FILE.write_text(
         json.dumps({"fingerprints": sorted(fingerprints)}, sort_keys=True),
         encoding="utf-8",
     )
-
 
 def _audit_alert_delivery(status: str, message: str, payload: dict[str, Any]) -> None:
     try:
@@ -55,7 +49,6 @@ def _audit_alert_delivery(status: str, message: str, payload: dict[str, Any]) ->
     except Exception:
         # Alert delivery must remain fail-safe even if audit logging is unavailable.
         return
-
 
 def send_telegram_message(text: str) -> dict[str, Any]:
     fingerprint = _message_fingerprint(text)

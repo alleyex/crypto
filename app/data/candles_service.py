@@ -1,12 +1,11 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection
-from app.core.migrations import run_migrations
 from app.core.settings import CANDLE_STALENESS_MULTIPLIER
 from app.system.heartbeat import upsert_heartbeat
 
-TIMEFRAME_INTERVAL_MS: Dict[str, int] = {
+TIMEFRAME_INTERVAL_MS: dict[str, int] = {
     "1m": 60_000,
     "3m": 180_000,
     "5m": 300_000,
@@ -17,7 +16,6 @@ TIMEFRAME_INTERVAL_MS: Dict[str, int] = {
     "1d": 86_400_000,
 }
 
-
 def candle_staleness_threshold_seconds(timeframe: str, multiplier: int = CANDLE_STALENESS_MULTIPLIER) -> int:
     """Return the staleness threshold in seconds for a given timeframe.
 
@@ -27,7 +25,6 @@ def candle_staleness_threshold_seconds(timeframe: str, multiplier: int = CANDLE_
     """
     interval_ms = TIMEFRAME_INTERVAL_MS.get(timeframe, 60_000)
     return round(interval_ms / 1000 * multiplier)
-
 
 CREATE_CANDLES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS candles (
@@ -50,7 +47,6 @@ CREATE TABLE IF NOT EXISTS candles (
 );
 """
 
-
 INSERT_CANDLE_SQL = """
 INSERT INTO candles (
     symbol,
@@ -70,7 +66,6 @@ INSERT INTO candles (
 ON CONFLICT(symbol, timeframe, open_time) DO NOTHING;
 """
 
-
 SELECT_LATEST_CLOSE_SQL = """
 SELECT close
 FROM candles
@@ -85,11 +80,6 @@ SELECT MAX(open_time)
 FROM candles
 WHERE symbol = ? AND timeframe = ?;
 """
-
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
 
 def save_klines(
     connection: DBConnection,
@@ -132,8 +122,7 @@ def save_klines(
     )
     return len(rows)
 
-
-def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
+def get_candles_status(connection: DBConnection) -> list[dict[str, Any]]:
     """Return per-(symbol, timeframe) candle statistics including gap estimates."""
     rows = connection.execute(
         """
@@ -184,24 +173,22 @@ def get_candles_status(connection: DBConnection) -> List[Dict[str, Any]]:
         })
     return result
 
-
 def get_latest_open_time(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
-) -> Optional[int]:
+) -> int | None:
     """Return the most recent open_time (ms) stored for symbol+timeframe, or None."""
     row = connection.execute(SELECT_LATEST_OPEN_TIME_SQL, (symbol, timeframe)).fetchone()
     if row is None or row[0] is None:
         return None
     return int(row[0])
 
-
 def get_latest_close(
     connection: DBConnection,
     symbol: str = "BTCUSDT",
     timeframe: str = "1m",
-) -> Optional[float]:
+) -> float | None:
     row = connection.execute(SELECT_LATEST_CLOSE_SQL, (symbol, timeframe)).fetchone()
     if row is None:
         return None

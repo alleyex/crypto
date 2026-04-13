@@ -1,10 +1,7 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection
-from app.portfolio.positions_service import ensure_table as ensure_positions_table
-from app.risk.risk_service import ensure_table as ensure_risk_table
 from app.risk.risk_service import evaluate_signal_ids
-
 
 _UNEVALUATED_SIGNALS_SQL = """
 SELECT s.id
@@ -14,14 +11,10 @@ WHERE re.id IS NULL
 ORDER BY s.id ASC;
 """
 
-
 def run_risk_job(
     connection: DBConnection,
-    signal_ids: Optional[List[int]] = None,
-) -> Dict[str, Any]:
-    ensure_positions_table(connection)
-    ensure_risk_table(connection)
-
+    signal_ids: list[int] | None = None,
+) -> dict[str, Any]:
     if signal_ids is None:
         rows = connection.execute(_UNEVALUATED_SIGNALS_SQL).fetchall()
         signal_ids = [int(row[0]) for row in rows]

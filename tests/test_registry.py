@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.core.migrations import run_migrations
 from app.features.compute import MIN_CANDLES
 from app.registry.registry_service import (
     VALID_STATUSES,
@@ -21,6 +20,7 @@ from app.registry.registry_service import (
     register_model,
     update_notes,
 )
+from conftest import make_conn as _make_conn
 
 
 # ---------------------------------------------------------------------------
@@ -53,11 +53,6 @@ _DUMMY_METRICS: Dict[str, Any] = {
 }
 
 
-def _make_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return conn
 
 
 def _register(conn, symbol="BTCUSDT", timeframe="1m", feature_set="v1",
@@ -67,34 +62,7 @@ def _register(conn, symbol="BTCUSDT", timeframe="1m", feature_set="v1",
                           metrics=_DUMMY_METRICS, notes=notes)
 
 
-class _PersistentConn:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=()):
-        return self._conn.execute(sql, params)
-
-    def executemany(self, sql, seq_of_params):
-        return self._conn.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        pass
-
-    def really_close(self):
-        self._conn.close()
-
-
-def _make_api_conn() -> _PersistentConn:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    run_migrations(conn)
-    return _PersistentConn(conn)
+from tests.conftest import _PersistentConn, _make_api_conn
 
 
 def _make_candles(closes: List[float]) -> List[Dict]:
@@ -360,6 +328,8 @@ def test_update_notes_not_found():
 def _registry_client(monkeypatch) -> tuple:
     pconn = _make_api_conn()
     monkeypatch.setattr("app.api.main.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
+    monkeypatch.setattr("app.api.deps.get_connection", lambda: pconn)
     return TestClient(app), pconn
 
 

@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict
+from typing import Any
 
 from app.core.db import get_connection
 from app.core.db import utc_now_iso
@@ -8,14 +8,41 @@ from app.training.job_service import get_job as get_training_job
 from app.training.job_service import update_job as update_training_job
 from app.training.ppo_trainer import run_ppo_training
 
+class CancelledTrainingJob(Exception):
+    def __init__(self, job_id: int):
+        super().__init__(f"PPO training job {job_id} was cancelled.")
+        self.job_id = job_id
 
-def run_ppo_training_job(job_id: int) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
+        return {"training_job_id": self.job_id, "status": "cancelled"}
+
+class MissingTrainingJob(Exception):
+    def __init__(self, job_id: int):
+        super().__init__(f"PPO training job {job_id} no longer exists.")
+        self.job_id = job_id
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"training_job_id": self.job_id, "status": "deleted"}
+
+def _cancel_requested(connection, job_id: int) -> bool:
+    job = get_training_job(connection, job_id)
+    if job is None:
+        raise MissingTrainingJob(job_id)
+    if str(job.get("status") or "").lower() == "cancelled":
+        return True
+    progress = job.get("progress_json") or {}
+    return bool(progress.get("cancel_requested"))
+
+def run_ppo_training_job(job_id: int) -> dict[str, Any]:
+    started_at: str | None = None
     connection = get_connection()
     try:
         run_migrations(connection)
         job = get_training_job(connection, job_id)
         if job is None:
-            raise ValueError(f"PPO training job {job_id} not found.")
+            raise MissingTrainingJob(job_id)
+        if _cancel_requested(connection, job_id):
+            raise CancelledTrainingJob(job_id)
         params = dict(job.get("params") or {})
         if params.get("job_type") != "ppo":
             raise ValueError(f"Training job {job_id} is not a PPO job.")
@@ -34,6 +61,8 @@ def run_ppo_training_job(job_id: int) -> Dict[str, Any]:
         prog = json.dumps({"pct": pct, "step": current, "total": total})
         conn = get_connection()
         try:
+            if _cancel_requested(conn, job_id):
+                raise CancelledTrainingJob(job_id)
             conn.execute(
                 "UPDATE training_jobs SET progress_json=? WHERE id=?;",
                 (prog, job_id),
@@ -82,6 +111,17 @@ def run_ppo_training_job(job_id: int) -> Dict[str, Any]:
         finished_at = utc_now_iso()
         conn = get_connection()
         try:
+            if _cancel_requested(conn, job_id):
+                update_training_job(
+                    conn,
+                    job_id,
+                    status="cancelled",
+                    error="Cancelled by user.",
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                conn.commit()
+                raise CancelledTrainingJob(job_id)
             update_training_job(
                 conn,
                 job_id,
@@ -114,6 +154,24 @@ def run_ppo_training_job(job_id: int) -> Dict[str, Any]:
                 }
             ],
         }
+    except CancelledTrainingJob:
+        finished_at = utc_now_iso()
+        conn = get_connection()
+        try:
+            update_training_job(
+                conn,
+                job_id,
+                status="cancelled",
+                error="Cancelled by user.",
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        raise
+    except MissingTrainingJob:
+        raise
     except Exception as exc:
         finished_at = utc_now_iso()
         conn = get_connection()

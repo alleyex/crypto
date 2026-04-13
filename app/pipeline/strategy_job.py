@@ -1,18 +1,16 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.db import DBConnection
 from app.core.settings import DEFAULT_STRATEGY_NAME
-from app.strategy.signal_service import ensure_table as ensure_signals_table
+from app.core.utils import dedup_ordered
 from app.strategy.registry import generate_registered_signal
-
 
 def run_strategy_job(
     connection: DBConnection,
     strategy_name: str = DEFAULT_STRATEGY_NAME,
-    symbol_names: Optional[list[str]] = None,
-    timeframe_names: Optional[list[str]] = None,
-) -> Dict[str, Any]:
-    ensure_signals_table(connection)
+    symbol_names: list[str] | None = None,
+    timeframe_names: list[str] | None = None,
+) -> dict[str, Any]:
     if symbol_names is None or timeframe_names is None:
         from app.scheduler.control import read_active_symbols
         from app.scheduler.control import read_active_timeframes
@@ -21,8 +19,8 @@ def run_strategy_job(
         symbol_names = read_active_symbols()
     if timeframe_names is None:
         timeframe_names = read_active_timeframes()
-    active_symbol_names = list(dict.fromkeys(symbol_names))
-    active_timeframe_names = list(dict.fromkeys(timeframe_names))
+    active_symbol_names = dedup_ordered(symbol_names)
+    active_timeframe_names = dedup_ordered(timeframe_names)
     signal_steps: list[dict[str, Any]] = []
     generated_signal_results: list[dict[str, Any]] = []
     for symbol_name in active_symbol_names:
@@ -64,14 +62,13 @@ def run_strategy_job(
         "steps": signal_steps,
     }
 
-
 def run_strategy_jobs(
     connection: DBConnection,
     strategy_names: list[str],
-    symbol_names: Optional[list[str]] = None,
-    timeframe_names: Optional[list[str]] = None,
-) -> Dict[str, Any]:
-    normalized_names = list(dict.fromkeys(strategy_names or [DEFAULT_STRATEGY_NAME]))
+    symbol_names: list[str] | None = None,
+    timeframe_names: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_names = dedup_ordered(strategy_names or [DEFAULT_STRATEGY_NAME])
     results = []
     for name in normalized_names:
         try:
@@ -122,8 +119,8 @@ def run_strategy_jobs(
     return {
         "status": status,
         "strategy_names": normalized_names,
-        "symbol_names": list(dict.fromkeys((symbol_names or []) + aggregated_symbol_names)),
-        "timeframe_names": list(dict.fromkeys((timeframe_names or []) + aggregated_timeframe_names)),
+        "symbol_names": dedup_ordered((symbol_names or []) + aggregated_symbol_names),
+        "timeframe_names": dedup_ordered((timeframe_names or []) + aggregated_timeframe_names),
         "signal_ids": aggregated_signal_ids,
         "steps": [step for result in results for step in result.get("steps", [])],
         "results": results,

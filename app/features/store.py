@@ -19,7 +19,7 @@ Schema (created by migration 026):
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection, fetch_all_as_dicts, utc_now_iso
 
@@ -52,12 +52,11 @@ WHERE symbol = ? AND timeframe = ? AND feature_set = ?
 {extra_where};
 """
 
-
 def materialize_features(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
-    candles: List[Dict[str, Any]],
+    candles: list[dict[str, Any]],
     feature_set: str = FEATURE_SET_VERSION,
 ) -> int:
     """Compute and persist feature vectors for the given candles.
@@ -82,18 +81,17 @@ def materialize_features(
     connection.commit()
     return len(params)
 
-
 def get_features(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
     feature_set: str = FEATURE_SET_VERSION,
-    start_time: Optional[int] = None,
-    end_time: Optional[int] = None,
+    start_time: int | None = None,
+    end_time: int | None = None,
     limit: int = 500,
     offset: int = 0,
     ascending: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return paginated feature vectors for a symbol/timeframe.
 
     Parameters
@@ -108,8 +106,8 @@ def get_features(
     Dict with keys: symbol, timeframe, feature_set, total, limit, offset, vectors.
     Each vector in ``vectors`` includes all feature fields plus metadata.
     """
-    extra_clauses: List[str] = []
-    extra_params: List[Any] = []
+    extra_clauses: list[str] = []
+    extra_params: list[Any] = []
     if start_time is not None:
         extra_clauses.append("AND open_time >= ?")
         extra_params.append(start_time)
@@ -152,13 +150,12 @@ def get_features(
         "vectors": vectors,
     }
 
-
 def get_latest_feature_vector(
     connection: DBConnection,
     symbol: str,
     timeframe: str,
     feature_set: str = FEATURE_SET_VERSION,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return the most recent stored feature vector, or None."""
     row = connection.execute(
         """
@@ -176,7 +173,6 @@ def get_latest_feature_vector(
     fv["id"] = row[2]
     fv["created_at"] = row[1]
     return fv
-
 
 def delete_features(
     connection: DBConnection,

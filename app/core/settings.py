@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-
 def _get_database_backend() -> str:
     explicit = os.getenv("CRYPTO_DB_BACKEND")
     if explicit is not None and explicit.strip():
@@ -13,20 +12,17 @@ def _get_database_backend() -> str:
         return "postgres"
     return "sqlite"
 
-
 def _get_float(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None:
         return default
     return float(value)
 
-
 def _get_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
         return default
     return int(value)
-
 
 def _get_choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
     value = os.getenv(name)
@@ -37,11 +33,9 @@ def _get_choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
         return normalized
     return default
 
-
 def _get_csv_list(name: str, default: str) -> list[str]:
     value = os.getenv(name, default)
     return [item.strip().upper() for item in value.split(",") if item.strip()]
-
 
 DEFAULT_ORDER_QTY = _get_float("CRYPTO_ORDER_QTY", 0.001)
 COMMISSION_RATE = _get_float("CRYPTO_COMMISSION_RATE", 0.001)  # 0.1% per side
@@ -105,3 +99,9 @@ FUTURES_CANDLE_SYMBOLS = _get_csv_list(
     "CRYPTO_FUTURES_CANDLE_SYMBOLS",
     "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,1000PEPEUSDT",
 )
+# WebSocket restart delay for futures streaming services (seconds).
+WS_RESTART_SECONDS = _get_int("CRYPTO_WS_RESTART_SECONDS", 15)
+# Minimum candles required before feature computation is valid.
+MIN_CANDLES = _get_int("CRYPTO_MIN_CANDLES", 60)
+# How often soak validation snapshots are recorded (seconds).
+SOAK_SNAPSHOT_INTERVAL_SECONDS = _get_int("CRYPTO_SOAK_SNAPSHOT_INTERVAL_SECONDS", 60)

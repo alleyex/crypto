@@ -1,26 +1,24 @@
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Union
 
 from app.alerting.telegram import send_telegram_message
 from app.audit.service import log_event
 
-
 RUNTIME_DIR = Path("runtime")
 KILL_SWITCH_FILE = RUNTIME_DIR / "kill.switch"
-
 
 def enable_kill_switch(
     reason: str = "Kill switch enabled.",
     source: str = "kill_switch",
-    notify_message: Optional[str] = "Crypto alert: kill switch has been enabled.",
-    payload_extra: Optional[Dict[str, object]] = None,
+    notify_message: str | None = "Crypto alert: kill switch has been enabled.",
+    payload_extra: dict[str, object] | None = None,
 ) -> str:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     already_enabled = KILL_SWITCH_FILE.exists()
     KILL_SWITCH_FILE.write_text("kill\n", encoding="utf-8")
     if notify_message and not already_enabled:
         send_telegram_message(notify_message)
-    payload: Dict[str, object] = {
+    payload: dict[str, object] = {
         "kill_switch_file": str(KILL_SWITCH_FILE),
         "already_enabled": already_enabled,
     }
@@ -35,8 +33,7 @@ def enable_kill_switch(
     )
     return str(KILL_SWITCH_FILE)
 
-
-def disable_kill_switch() -> Tuple[bool, str]:
+def disable_kill_switch() -> tuple[bool, str]:
     if KILL_SWITCH_FILE.exists():
         KILL_SWITCH_FILE.unlink()
         log_event(
@@ -56,13 +53,11 @@ def disable_kill_switch() -> Tuple[bool, str]:
     )
     return False, str(KILL_SWITCH_FILE)
 
-
-def get_kill_switch_status() -> Dict[str, Union[str, bool]]:
+def get_kill_switch_status() -> dict[str, Union[str, bool]]:
     return {
         "enabled": KILL_SWITCH_FILE.exists(),
         "kill_switch_file": str(KILL_SWITCH_FILE),
     }
-
 
 def kill_switch_enabled() -> bool:
     return KILL_SWITCH_FILE.exists()

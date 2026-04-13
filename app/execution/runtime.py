@@ -1,18 +1,15 @@
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Union
 
 from app.audit.service import log_event
 from app.core.settings import EXECUTION_BACKEND
-
 
 RUNTIME_DIR = Path("runtime")
 EXECUTION_BACKEND_FILE = RUNTIME_DIR / "execution.backend"
 SUPPORTED_EXECUTION_BACKENDS = ("paper", "noop", "simulated_live", "binance")
 
-
-def list_supported_execution_backends() -> List[str]:
+def list_supported_execution_backends() -> list[str]:
     return list(SUPPORTED_EXECUTION_BACKENDS)
-
 
 def read_configured_execution_backend() -> str:
     if not EXECUTION_BACKEND_FILE.exists():
@@ -22,13 +19,12 @@ def read_configured_execution_backend() -> str:
         return configured_name
     return EXECUTION_BACKEND
 
-
 def set_execution_backend(
     backend_name: str,
     *,
     audit_action: str = "set_execution_backend",
     audit_message: str = "Execution backend updated.",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     normalized_name = str(backend_name).strip().lower()
     if normalized_name not in SUPPORTED_EXECUTION_BACKENDS:
         raise ValueError(f"Unsupported execution backend: {normalized_name}")
@@ -50,8 +46,7 @@ def set_execution_backend(
         "execution_backend_file": str(EXECUTION_BACKEND_FILE),
     }
 
-
-def get_execution_backend_runtime_status() -> Dict[str, Union[str, List[str]]]:
+def get_execution_backend_runtime_status() -> dict[str, Union[str, list[str]]]:
     return {
         "backend": read_configured_execution_backend(),
         "default_backend": EXECUTION_BACKEND,

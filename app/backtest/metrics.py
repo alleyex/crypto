@@ -1,17 +1,15 @@
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-
-def _daily_closes(equity_curve: List[Dict]) -> List[float]:
+def _daily_closes(equity_curve: list[dict]) -> list[float]:
     """Return the last equity value per calendar day (UTC)."""
-    daily: Dict[str, float] = {}
+    daily: dict[str, float] = {}
     for point in equity_curve:
         date = point["timestamp"][:10]
         daily[date] = point["equity"]
     return [daily[d] for d in sorted(daily)]
 
-
-def _sharpe_ratio(daily_closes: List[float], periods_per_year: int = 252) -> Optional[float]:
+def _sharpe_ratio(daily_closes: list[float], periods_per_year: int = 252) -> float | None:
     if len(daily_closes) < 2:
         return None
     returns = [
@@ -28,8 +26,7 @@ def _sharpe_ratio(daily_closes: List[float], periods_per_year: int = 252) -> Opt
         return None
     return round((mean / math.sqrt(variance)) * math.sqrt(periods_per_year), 4)
 
-
-def _max_drawdown_pct(equity_curve: List[Dict]) -> float:
+def _max_drawdown_pct(equity_curve: list[dict]) -> float:
     if not equity_curve:
         return 0.0
     peak = equity_curve[0]["equity"]
@@ -44,10 +41,9 @@ def _max_drawdown_pct(equity_curve: List[Dict]) -> float:
                 max_dd = dd
     return round(max_dd * 100, 4)
 
-
-def _round_trip_stats(trades: List[Dict]) -> Dict[str, Any]:
+def _round_trip_stats(trades: list[dict]) -> dict[str, Any]:
     """Compute win rate and profit factor from sequential BUY/SELL pairs."""
-    buy_price: Optional[float] = None
+    buy_price: float | None = None
     wins = losses = 0
     gross_profit = gross_loss = 0.0
 
@@ -66,7 +62,7 @@ def _round_trip_stats(trades: List[Dict]) -> Dict[str, Any]:
 
     total = wins + losses
     win_rate = round(wins / total * 100, 2) if total > 0 else None
-    profit_factor: Optional[float]
+    profit_factor: float | None
     if gross_loss == 0:
         profit_factor = None if gross_profit == 0 else float("inf")
     else:
@@ -78,12 +74,11 @@ def _round_trip_stats(trades: List[Dict]) -> Dict[str, Any]:
         "round_trips": total,
     }
 
-
 def compute_metrics(
-    equity_curve: List[Dict],
-    trades: List[Dict],
+    equity_curve: list[dict],
+    trades: list[dict],
     initial_capital: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if not equity_curve:
         return {}
 

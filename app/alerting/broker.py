@@ -1,29 +1,11 @@
 from pathlib import Path
 from typing import Any
-from typing import Optional
 
+from app.alerting.base import run_alert
 from app.alerting.state import build_fingerprint
-from app.alerting.state import clear_alert_state
-from app.alerting.state import read_alert_state
-from app.alerting.state import write_alert_state
-from app.alerting.telegram import send_telegram_message
-from app.core.settings import ALERT_REFIRE_SECONDS
-
 
 RUNTIME_DIR = Path("runtime")
 BROKER_ALERT_STATE_FILE = RUNTIME_DIR / "broker_alert_state.json"
-
-
-def _read_state() -> Optional[dict[str, Any]]:
-    return read_alert_state(BROKER_ALERT_STATE_FILE, ttl_seconds=ALERT_REFIRE_SECONDS)
-
-
-def _write_state(state: dict[str, Any]) -> None:
-    write_alert_state(BROKER_ALERT_STATE_FILE, state)
-
-
-def _clear_state() -> None:
-    clear_alert_state(BROKER_ALERT_STATE_FILE)
 
 
 def _build_fingerprint(check: dict[str, Any]) -> str:
@@ -45,51 +27,51 @@ def _build_fingerprint(check: dict[str, Any]) -> str:
     })
 
 
-def maybe_send_broker_alert(report: dict[str, Any]) -> dict[str, Any]:
-    broker_check = report.get("checks", {}).get("broker_protection", {})
-    if not isinstance(broker_check, dict) or broker_check.get("status") != "degraded":
-        _clear_state()
-        return {"sent": False, "reason": "Broker protection status is ok."}
-
-    fingerprint = _build_fingerprint(broker_check)
-    previous = _read_state()
-    if previous is not None and previous.get("fingerprint") == fingerprint:
-        return {"sent": False, "reason": "Broker alert already sent for current protected state."}
-
+def _build_message(check: dict[str, Any]) -> str:
     message = "Crypto alert: broker protection triggered. backend={backend}, reason={reason}".format(
-        backend=broker_check.get("backend", "unknown"),
-        reason=broker_check.get("reason", "unknown"),
+        backend=check.get("backend", "unknown"),
+        reason=check.get("reason", "unknown"),
     )
-    if broker_check.get("severity"):
-        message += f", severity={broker_check['severity']}"
-    if broker_check.get("reason_code"):
-        message += f", code={broker_check['reason_code']}"
-    if broker_check.get("recommended_action"):
-        message += f", action={broker_check['recommended_action']}"
-    latest_order = broker_check.get("latest_order") or {}
+    if check.get("severity"):
+        message += f", severity={check['severity']}"
+    if check.get("reason_code"):
+        message += f", code={check['reason_code']}"
+    if check.get("recommended_action"):
+        message += f", action={check['recommended_action']}"
+    latest_order = check.get("latest_order") or {}
     if latest_order.get("status"):
         message += f", latest_order_status={latest_order['status']}"
     if latest_order.get("age_seconds") is not None:
         message += f", latest_order_age={latest_order['age_seconds']}s"
-    if broker_check.get("unfilled_order_count"):
-        message += f", unfilled_orders={broker_check['unfilled_order_count']}"
-    latest_fill = broker_check.get("latest_fill") or {}
+    if check.get("unfilled_order_count"):
+        message += f", unfilled_orders={check['unfilled_order_count']}"
+    latest_fill = check.get("latest_fill") or {}
     if latest_fill.get("price") is not None:
         message += f", latest_fill_price={latest_fill['price']}"
-    if broker_check.get("approved_risk_count") is not None:
-        message += f", approved_risk_count={broker_check['approved_risk_count']}"
-    if broker_check.get("anomalous_rejected_risk_streak") is not None:
-        message += f", anomalous_rejected_risk_streak={broker_check['anomalous_rejected_risk_streak']}"
-    elif broker_check.get("rejected_risk_streak") is not None:
-        message += f", rejected_risk_streak={broker_check['rejected_risk_streak']}"
-    if broker_check.get("expected_rejected_risk_streak") is not None:
-        message += f", expected_rejected_risk_streak={broker_check['expected_rejected_risk_streak']}"
-    if broker_check.get("latest_rejection_reason"):
-        message += f", latest_rejection_reason={broker_check['latest_rejection_reason']}"
-    if broker_check.get("expected_latest_rejection_reason"):
-        message += f", expected_latest_rejection_reason={broker_check['expected_latest_rejection_reason']}"
+    if check.get("approved_risk_count") is not None:
+        message += f", approved_risk_count={check['approved_risk_count']}"
+    if check.get("anomalous_rejected_risk_streak") is not None:
+        message += f", anomalous_rejected_risk_streak={check['anomalous_rejected_risk_streak']}"
+    elif check.get("rejected_risk_streak") is not None:
+        message += f", rejected_risk_streak={check['rejected_risk_streak']}"
+    if check.get("expected_rejected_risk_streak") is not None:
+        message += f", expected_rejected_risk_streak={check['expected_rejected_risk_streak']}"
+    if check.get("latest_rejection_reason"):
+        message += f", latest_rejection_reason={check['latest_rejection_reason']}"
+    if check.get("expected_latest_rejection_reason"):
+        message += f", expected_latest_rejection_reason={check['expected_latest_rejection_reason']}"
+    return message
 
-    send_result = send_telegram_message(message)
-    if send_result.get("sent"):
-        _write_state({"fingerprint": fingerprint, "backend": broker_check.get("backend")})
-    return send_result
+
+def maybe_send_broker_alert(report: dict[str, Any]) -> dict[str, Any]:
+    broker_check = report.get("checks", {}).get("broker_protection", {})
+    return run_alert(
+        BROKER_ALERT_STATE_FILE,
+        broker_check,
+        is_ok=lambda c: not isinstance(c, dict) or c.get("status") != "degraded",
+        ok_reason="Broker protection status is ok.",
+        duplicate_reason="Broker alert already sent for current protected state.",
+        fingerprint_fn=_build_fingerprint,
+        message_fn=_build_message,
+        state_fn=lambda fp, c: {"fingerprint": fp, "backend": c.get("backend")},
+    )

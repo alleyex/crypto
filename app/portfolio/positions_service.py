@@ -1,8 +1,6 @@
 from app.audit.service import insert_event
 from app.core.db import DBConnection
 from app.core.db import utc_now_iso
-from app.core.migrations import run_migrations
-
 
 CREATE_POSITIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS positions (
@@ -13,7 +11,6 @@ CREATE TABLE IF NOT EXISTS positions (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
-
 
 UPSERT_POSITION_SQL = """
 INSERT INTO positions (
@@ -30,17 +27,11 @@ ON CONFLICT(symbol) DO UPDATE SET
     updated_at = excluded.updated_at;
 """
 
-
 SELECT_FILLS_SQL = """
 SELECT symbol, side, qty, price
 FROM fills
 ORDER BY id ASC;
 """
-
-
-def ensure_table(connection: DBConnection) -> None:
-    run_migrations(connection)
-
 
 def update_positions(connection: DBConnection) -> int:
     fills = connection.execute(SELECT_FILLS_SQL).fetchall()

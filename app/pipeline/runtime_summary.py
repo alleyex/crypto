@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.audit.service import log_event
 from app.core.db import get_database_label
@@ -7,8 +7,7 @@ from app.execution.adapter import get_execution_adapter_name
 from app.execution.adapter import get_execution_backend_status
 from app.system.heartbeat import record_heartbeat
 
-
-def build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+def build_pipeline_payload(result: dict[str, Any]) -> dict[str, Any]:
     symbol_names: list[str] = []
     strategy_names: list[str] = []
     generated_signal_count = 0
@@ -54,7 +53,7 @@ def build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
     if not strategy_names and result.get("strategy_name") is not None:
         strategy_names = [str(result["strategy_name"])]
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "step_count": len(result.get("steps", [])),
         "strategy_name": result.get("strategy_name", DEFAULT_STRATEGY_NAME),
         "strategy_names": strategy_names,
@@ -70,14 +69,13 @@ def build_pipeline_payload(result: Dict[str, Any]) -> Dict[str, Any]:
         payload["database"] = result["database"]
     return payload
 
-
 def record_pipeline_runtime(
-    result: Dict[str, Any],
+    result: dict[str, Any],
     *,
     status: str,
     message: str,
     source: str = "pipeline",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if "database" not in result:
         result["database"] = get_database_label()
     payload = build_pipeline_payload(result)

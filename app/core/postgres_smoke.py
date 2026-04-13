@@ -6,7 +6,6 @@ from typing import Any
 from app.core.db import PostgresConnectionAdapter
 from app.core.migrations import run_migrations
 
-
 def _load_psycopg() -> Any:
     try:
         return importlib.import_module("psycopg")
@@ -15,12 +14,11 @@ def _load_psycopg() -> Any:
             "psycopg is not installed. Run `pip install -r requirements.txt` before PostgreSQL smoke testing."
         ) from exc
 
-
 def _connect_with_retry(database_url: str) -> Any:
     psycopg = _load_psycopg()
     retries = max(int(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRIES", "15")), 1)
     delay_seconds = max(float(os.getenv("CRYPTO_POSTGRES_CONNECT_RETRY_DELAY_SECONDS", "1")), 0.0)
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
 
     for attempt in range(1, retries + 1):
         try:
@@ -33,7 +31,6 @@ def _connect_with_retry(database_url: str) -> Any:
 
     assert last_error is not None
     raise last_error
-
 
 def run_postgres_smoke(database_url: str) -> dict[str, Any]:
     if not database_url.strip():
@@ -78,7 +75,6 @@ def run_postgres_smoke(database_url: str) -> dict[str, Any]:
         "temp_first_note": str(first_note),
         "temp_last_note": str(last_note),
     }
-
 
 def run_postgres_migration_smoke(database_url: str) -> dict[str, Any]:
     if not database_url.strip():

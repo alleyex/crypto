@@ -1,14 +1,13 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 RUNTIME_DIR = Path("runtime")
 FETCH_HISTORY_FILE = RUNTIME_DIR / "market_fetch_history.jsonl"
 MAX_HISTORY_ENTRIES = 200
 
-
-def record_fetch(result: Dict[str, Any]) -> None:
+def record_fetch(result: dict[str, Any]) -> None:
     """Append a fetch job result to the history log."""
     entry = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -34,8 +33,7 @@ def record_fetch(result: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-
-def read_fetch_history(limit: int = 20) -> List[Dict[str, Any]]:
+def read_fetch_history(limit: int = 20) -> list[dict[str, Any]]:
     """Return the most recent fetch history entries, newest first."""
     if not FETCH_HISTORY_FILE.exists():
         return []

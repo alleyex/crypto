@@ -11,16 +11,15 @@ The model is serialised to JSON for portability.
 Public API
 ----------
 train(X, y, ...)  -> TrainResult
-predict_proba(weights, bias, X) -> List[float]
-predict(weights, bias, X, threshold) -> List[int]
-evaluate(y_true, y_pred) -> Dict
+predict_proba(weights, bias, X) -> list[float]
+predict(weights, bias, X, threshold) -> list[int]
+evaluate(y_true, y_pred) -> dict
 """
 
 import json
 import math
 import random
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Sigmoid
@@ -33,29 +32,26 @@ def _sigmoid(z: float) -> float:
     exp_z = math.exp(z)
     return exp_z / (1.0 + exp_z)
 
-
 # ---------------------------------------------------------------------------
 # Core training
 # ---------------------------------------------------------------------------
 
-def _dot(weights: List[float], row: List[float]) -> float:
+def _dot(weights: list[float], row: list[float]) -> float:
     return sum(w * x for w, x in zip(weights, row))
 
-
-def _forward(weights: List[float], bias: float, row: List[float]) -> float:
+def _forward(weights: list[float], bias: float, row: list[float]) -> float:
     return _sigmoid(_dot(weights, row) + bias)
 
-
 def train(
-    X: List[List[float]],
-    y: List[int],
+    X: list[list[float]],
+    y: list[int],
     n_features: int,
     learning_rate: float = 0.01,
     n_epochs: int = 100,
     batch_size: int = 32,
     l2_lambda: float = 1e-4,
     seed: int = 42,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Train a logistic regression model via mini-batch gradient descent.
 
     Parameters
@@ -71,7 +67,7 @@ def train(
 
     Returns
     -------
-    Dict with keys: weights (list), bias (float), train_loss (float per epoch),
+    dict with keys: weights (list), bias (float), train_loss (float per epoch),
     n_epochs, learning_rate, l2_lambda.
     """
     if not X or not y:
@@ -89,7 +85,7 @@ def train(
     n = len(X)
     actual_batch = n if (batch_size <= 0 or batch_size >= n) else batch_size
 
-    loss_history: List[float] = []
+    loss_history: list[float] = []
 
     for epoch in range(n_epochs):
         # Shuffle indices each epoch
@@ -144,38 +140,35 @@ def train(
         "n_train": len(X),
     }
 
-
 # ---------------------------------------------------------------------------
 # Inference helpers
 # ---------------------------------------------------------------------------
 
 def predict_proba(
-    weights: List[float],
+    weights: list[float],
     bias: float,
-    X: List[List[float]],
-) -> List[float]:
+    X: list[list[float]],
+) -> list[float]:
     """Return P(y=1) for each row."""
     return [_forward(weights, bias, row) for row in X]
 
-
 def predict(
-    weights: List[float],
+    weights: list[float],
     bias: float,
-    X: List[List[float]],
+    X: list[list[float]],
     threshold: float = 0.5,
-) -> List[int]:
+) -> list[int]:
     """Return binary predictions."""
     return [1 if p >= threshold else 0 for p in predict_proba(weights, bias, X)]
-
 
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
 def evaluate(
-    y_true: List[int],
-    y_pred: List[int],
-) -> Dict[str, Any]:
+    y_true: list[int],
+    y_pred: list[int],
+) -> dict[str, Any]:
     """Compute accuracy, precision, recall, F1 for binary classification."""
     n = len(y_true)
     if n == 0:
@@ -189,7 +182,7 @@ def evaluate(
     accuracy = round(correct / n, 4)
     precision = round(tp / (tp + fp), 4) if (tp + fp) > 0 else None
     recall = round(tp / (tp + fn), 4) if (tp + fn) > 0 else None
-    f1: Optional[float] = None
+    f1: float | None = None
     if precision is not None and recall is not None and (precision + recall) > 0:
         f1 = round(2 * precision * recall / (precision + recall), 4)
 
@@ -205,18 +198,17 @@ def evaluate(
         "tn": correct - tp,
     }
 
-
 # ---------------------------------------------------------------------------
 # Serialisation
 # ---------------------------------------------------------------------------
 
 def model_to_dict(
-    train_result: Dict[str, Any],
-    feature_names: List[str],
+    train_result: dict[str, Any],
+    feature_names: list[str],
     symbol: str,
     timeframe: str,
     feature_set: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wrap training output into a portable model dict."""
     return {
         "model_type": "logistic_regression_v1",
@@ -234,6 +226,5 @@ def model_to_dict(
         "final_train_loss": train_result["final_train_loss"],
     }
 
-
-def model_from_json(raw: str) -> Dict[str, Any]:
+def model_from_json(raw: str) -> dict[str, Any]:
     return json.loads(raw)

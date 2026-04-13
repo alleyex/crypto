@@ -2,30 +2,24 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from typing import Optional
 
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
 from app.core.db import insert_and_get_rowid
-from app.core.db import parse_db_timestamp
 from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_STRATEGY_NAME
 from app.execution.adapter import get_execution_backend_status
 from app.execution.adapter import get_execution_adapter_name
-from app.pipeline.execution_job import run_execution_job
-from app.pipeline.market_data_job import run_market_data_job
-from app.pipeline.risk_job import run_risk_job
-from app.pipeline.runtime_summary import record_pipeline_runtime
-from app.pipeline.strategy_job import run_strategy_job
-from app.pipeline.strategy_job import run_strategy_jobs
-from app.training.ppo_queue_job import run_ppo_training_job
 
+# Re-exports — callers may still import these from job_queue for backward compat.
+from app.core.pipeline_orchestration import enqueue_and_run_pipeline_batch as enqueue_and_run_pipeline_batch  # noqa: F401
+from app.core.pipeline_orchestration import run_next_pipeline_batch as run_next_pipeline_batch  # noqa: F401
+from app.core.pipeline_orchestration import run_pipeline_batch as run_pipeline_batch  # noqa: F401
 
 JOB_TYPES = ("market_data", "strategy", "risk", "execution", "training_ppo")
 JOB_STATUSES = ("queued", "leased", "completed", "failed")
 PIPELINE_QUEUE_JOB_TYPES = ("market_data", "strategy", "risk", "execution")
-
 
 INSERT_JOB_SQL = """
 INSERT INTO job_queue (
@@ -40,16 +34,13 @@ INSERT INTO job_queue (
 ) VALUES (?, 'queued', ?, NULL, NULL, ?, ?, ?);
 """
 
-
 def ensure_table(connection: DBConnection) -> None:
     run_migrations(connection)
 
-
-def _serialize_payload(payload: Optional[dict[str, Any]]) -> Optional[str]:
+def _serialize_payload(payload: dict[str, Any] | None) -> str | None:
     if payload is None:
         return None
     return json.dumps(payload, ensure_ascii=True, sort_keys=True)
-
 
 def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
@@ -62,13 +53,12 @@ def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized.append(item)
     return normalized
 
-
 def build_job_payload(
     *,
-    strategy_name: Optional[str] = None,
-    strategy_names: Optional[list[str]] = None,
-    symbol_names: Optional[list[str]] = None,
-    payload: Optional[dict[str, Any]] = None,
+    strategy_name: str | None = None,
+    strategy_names: list[str] | None = None,
+    symbol_names: list[str] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     job_payload: dict[str, Any] = dict(payload or {})
     backend_status = get_execution_backend_status()
@@ -82,13 +72,12 @@ def build_job_payload(
         job_payload["symbol_names"] = list(dict.fromkeys(symbol_names))
     return job_payload
 
-
 def enqueue_job(
     connection: DBConnection,
     job_type: str,
-    payload: Optional[dict[str, Any]] = None,
-    depends_on_job_id: Optional[int] = None,
-    batch_id: Optional[str] = None,
+    payload: dict[str, Any] | None = None,
+    depends_on_job_id: int | None = None,
+    batch_id: str | None = None,
 ) -> int:
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unsupported job type: {job_type}")
@@ -102,14 +91,13 @@ def enqueue_job(
     connection.commit()
     return job_id
 
-
 def enqueue_pipeline_jobs(
     connection: DBConnection,
     *,
-    strategy_name: Optional[str] = None,
-    strategy_names: Optional[list[str]] = None,
-    symbol_names: Optional[list[str]] = None,
-    payload: Optional[dict[str, Any]] = None,
+    strategy_name: str | None = None,
+    strategy_names: list[str] | None = None,
+    symbol_names: list[str] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     ensure_table(connection)
     job_payload = build_job_payload(
@@ -121,7 +109,7 @@ def enqueue_pipeline_jobs(
     batch_id = str(uuid.uuid4())
     job_payload["batch_id"] = batch_id
     jobs: list[dict[str, Any]] = []
-    prev_job_id: Optional[int] = None
+    prev_job_id: int | None = None
     for job_type in PIPELINE_QUEUE_JOB_TYPES:
         job_id = enqueue_job(connection, job_type, payload=job_payload or None, depends_on_job_id=prev_job_id, batch_id=batch_id)
         jobs.append(
@@ -136,12 +124,11 @@ def enqueue_pipeline_jobs(
         prev_job_id = job_id
     return jobs
 
-
 def list_jobs(
     connection: DBConnection,
     limit: int = 20,
-    status: Optional[str] = None,
-    job_type: Optional[str] = None,
+    status: str | None = None,
+    job_type: str | None = None,
 ) -> list[dict[str, Any]]:
     ensure_table(connection)
     clauses: list[str] = []
@@ -178,8 +165,7 @@ def list_jobs(
     )
     return _normalize_rows(rows)
 
-
-def get_job(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
+def get_job(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
     ensure_table(connection)
     rows = fetch_all_as_dicts(
         connection,
@@ -205,8 +191,7 @@ def get_job(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
     normalized = _normalize_rows(rows)
     return normalized[0] if normalized else None
 
-
-def lease_next_job(connection: DBConnection, job_type: Optional[str] = None) -> Optional[dict[str, Any]]:
+def lease_next_job(connection: DBConnection, job_type: str | None = None) -> dict[str, Any] | None:
     ensure_table(connection)
     clauses = [
         "status = 'queued'",
@@ -248,8 +233,7 @@ def lease_next_job(connection: DBConnection, job_type: Optional[str] = None) -> 
     connection.commit()
     return get_job(connection, job_id)
 
-
-def lease_job_by_id(connection: DBConnection, job_id: int) -> Optional[dict[str, Any]]:
+def lease_job_by_id(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
     ensure_table(connection)
     connection.execute(
         """
@@ -268,11 +252,10 @@ def lease_job_by_id(connection: DBConnection, job_id: int) -> Optional[dict[str,
         return None
     return job
 
-
 def complete_job(
     connection: DBConnection,
     job_id: int,
-    result: Optional[dict[str, Any]] = None,
+    result: dict[str, Any] | None = None,
 ) -> None:
     ensure_table(connection)
     connection.execute(
@@ -288,14 +271,15 @@ def complete_job(
         (_serialize_payload(result), utc_now_iso(), job_id),
     )
     connection.commit()
+    # Lazy import to avoid circular dependency (job_runner imports job_queue)
+    from app.core.job_runner import _propagate_dependent_job_payload
     _propagate_dependent_job_payload(connection, job_id, result=result)
-
 
 def fail_job(
     connection: DBConnection,
     job_id: int,
     error_message: str,
-    result: Optional[dict[str, Any]] = None,
+    result: dict[str, Any] | None = None,
 ) -> None:
     ensure_table(connection)
     connection.execute(
@@ -311,7 +295,6 @@ def fail_job(
         (_serialize_payload(result), error_message, utc_now_iso(), job_id),
     )
     connection.commit()
-
 
 def retry_job(connection: DBConnection, job_id: int) -> dict[str, Any]:
     ensure_table(connection)
@@ -340,16 +323,14 @@ def retry_job(connection: DBConnection, job_id: int) -> dict[str, Any]:
         raise RuntimeError(f"Retried job not found after update: {job_id}")
     return retried_job
 
-
 def fail_batch_jobs(
     connection: DBConnection,
     batch_id: str,
     *,
     error_message: str,
-    result: Optional[dict[str, Any]] = None,
+    result: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     ensure_table(connection)
-    # Single UPDATE for all matching jobs — no per-row round-trips.
     connection.execute(
         """
         UPDATE job_queue
@@ -363,7 +344,6 @@ def fail_batch_jobs(
         (_serialize_payload(result), error_message, utc_now_iso(), batch_id),
     )
     connection.commit()
-    # Fetch all updated rows in one query.
     rows = fetch_all_as_dicts(
         connection,
         """
@@ -377,391 +357,6 @@ def fail_batch_jobs(
     )
     return _normalize_rows(rows)
 
-
-def run_job(
-    connection: DBConnection,
-    job_type: str,
-    payload: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    normalized_payload = dict(payload or {})
-    if job_type == "market_data":
-        return run_market_data_job(
-            connection,
-            symbol_names=normalized_payload.get("symbol_names"),
-        )
-
-    if job_type == "strategy":
-        strategy_names = normalized_payload.get("strategy_names") or []
-        strategy_name = normalized_payload.get("strategy_name")
-        symbol_names = normalized_payload.get("symbol_names")
-        if strategy_names:
-            return run_strategy_jobs(
-                connection,
-                strategy_names=[str(name) for name in strategy_names],
-                symbol_names=symbol_names,
-            )
-        return run_strategy_job(
-            connection,
-            strategy_name=str(strategy_name or DEFAULT_STRATEGY_NAME),
-            symbol_names=symbol_names,
-        )
-
-    if job_type == "risk":
-        signal_ids = normalized_payload.get("signal_ids")
-        normalized_signal_ids = [int(i) for i in signal_ids] if signal_ids is not None else None
-        return run_risk_job(connection, signal_ids=normalized_signal_ids)
-
-    if job_type == "execution":
-        risk_event_ids = normalized_payload.get("risk_event_ids")
-        symbol_names = normalized_payload.get("symbol_names")
-        normalized_risk_event_ids = [int(item) for item in risk_event_ids] if risk_event_ids is not None else None
-        return run_execution_job(
-            connection,
-            risk_event_ids=normalized_risk_event_ids,
-            symbol_names=symbol_names,
-        )
-    if job_type == "training_ppo":
-        training_job_id = normalized_payload.get("training_job_id")
-        if training_job_id is None:
-            raise ValueError("training_ppo job requires training_job_id.")
-        return run_ppo_training_job(int(training_job_id))
-
-    raise ValueError(f"Unsupported job type: {job_type}")
-
-
-def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
-    return run_job(
-        connection,
-        job_type=str(job["job_type"]),
-        payload=dict(job.get("payload") or {}),
-    )
-
-
-def _propagate_dependent_job_payload(
-    connection: DBConnection,
-    job_id: int,
-    *,
-    result: Optional[dict[str, Any]] = None,
-) -> None:
-    parent_job = get_job(connection, job_id)
-    if parent_job is None:
-        return
-
-    parent_type = str(parent_job["job_type"])
-    if parent_type == "strategy":
-        propagated_fields = {"signal_ids": list((result or {}).get("signal_ids") or [])}
-        target_job_type = "risk"
-    elif parent_type == "risk":
-        propagated_fields = {"risk_event_ids": list((result or {}).get("risk_event_ids") or [])}
-        target_job_type = "execution"
-    else:
-        return
-
-    # Filter by job_type in SQL — eliminates per-row get_job() round-trips.
-    rows = fetch_all_as_dicts(
-        connection,
-        """
-        SELECT id, payload_json
-        FROM job_queue
-        WHERE depends_on_job_id = ? AND status = 'queued' AND job_type = ?
-        ORDER BY id ASC;
-        """,
-        (job_id, target_job_type),
-    )
-    if not rows:
-        return
-
-    # Parse payload from the row directly and batch all UPDATEs in one call.
-    params = []
-    for row in rows:
-        raw = row.get("payload_json")
-        current_payload = json.loads(raw) if raw else {}
-        current_payload.update(propagated_fields)
-        params.append((_serialize_payload(current_payload), int(row["id"])))
-
-    connection.executemany(
-        "UPDATE job_queue SET payload_json = ? WHERE id = ?;",
-        params,
-    )
-    connection.commit()
-
-
-def run_next_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
-    ensure_table(connection)
-    if batch_id is None:
-        # Find the oldest queued batch directly — no Python-side filtering of 200 rows.
-        row = connection.execute(
-            """
-            SELECT batch_id FROM job_queue
-            WHERE status = 'queued' AND batch_id IS NOT NULL
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1;
-            """
-        ).fetchone()
-        resolved_batch_id = str(row[0]) if row else None
-    else:
-        resolved_batch_id = batch_id
-
-    if not resolved_batch_id:
-        return {
-            "status": "empty",
-            "message": "No queued pipeline batches available." if batch_id is None else f"No queued jobs available for pipeline batch {batch_id}.",
-        }
-
-    batch_jobs_rows = fetch_all_as_dicts(
-        connection,
-        """
-        SELECT id, job_type, status, payload_json, result_json, error_message,
-               attempt_count, depends_on_job_id, created_at, started_at, completed_at
-        FROM job_queue
-        WHERE batch_id = ? AND status = 'queued'
-        ORDER BY id ASC;
-        """,
-        (resolved_batch_id,),
-    )
-    batch_jobs = _normalize_rows(batch_jobs_rows)
-    if not batch_jobs:
-        return {
-            "status": "empty",
-            "message": f"No queued jobs available for pipeline batch {resolved_batch_id}.",
-        }
-
-    next_job = batch_jobs[0]
-    if batch_id is None:
-        run_result = run_next_queued_job(connection, job_type=str(next_job["job_type"]))
-    else:
-        leased_job = lease_job_by_id(connection, int(next_job["id"]))
-        if leased_job is None:
-            return {
-                "status": "empty",
-                "batch_id": resolved_batch_id,
-                "message": f"Unable to lease queued job {next_job['id']} for pipeline batch {resolved_batch_id}.",
-            }
-        run_result = _run_leased_queue_job(connection, leased_job)
-    run_result["batch_id"] = resolved_batch_id
-    run_result["remaining_job_types"] = [str(job["job_type"]) for job in batch_jobs[1:]]
-    return run_result
-
-
-def run_pipeline_batch(connection: DBConnection, batch_id: Optional[str] = None) -> dict[str, Any]:
-    ensure_table(connection)
-    requested_batch_id = batch_id
-    current_result = run_next_pipeline_batch(connection) if requested_batch_id is None else run_next_pipeline_batch(connection, batch_id=requested_batch_id)
-    if current_result["status"] != "completed":
-        return current_result
-
-    batch_id = current_result.get("batch_id")
-    jobs: list[dict[str, Any]] = [dict(current_result["job"])]
-    steps: list[dict[str, Any]] = list((current_result.get("result") or {}).get("steps") or [])
-    execution_backend_status = current_result.get("execution_backend_status")
-    initial_job_record = get_job(connection, int(current_result["job"]["id"])) if current_result.get("job") else None
-    initial_job_payload = dict((initial_job_record or {}).get("payload") or (current_result.get("job") or {}).get("payload") or {})
-    pipeline_context: dict[str, Any] = {
-        "strategy_name": str(
-            initial_job_payload.get("strategy_name")
-            or ((initial_job_payload.get("strategy_names") or [DEFAULT_STRATEGY_NAME])[0])
-        ),
-        "strategy_names": list(dict.fromkeys(initial_job_payload.get("strategy_names") or [])),
-        "requested_symbol_names": list(dict.fromkeys(initial_job_payload.get("symbol_names") or [])),
-    }
-    if not pipeline_context["strategy_names"] and pipeline_context["strategy_name"]:
-        pipeline_context["strategy_names"] = [pipeline_context["strategy_name"]]
-
-    while current_result.get("remaining_job_types"):
-        next_result = run_next_pipeline_batch(connection) if requested_batch_id is None else run_next_pipeline_batch(connection, batch_id=requested_batch_id)
-        if next_result["status"] != "completed":
-            next_result["batch_id"] = batch_id
-            next_result["completed_jobs"] = jobs
-            next_result["steps"] = steps
-            record_pipeline_runtime(
-                {
-                    **pipeline_context,
-                    "steps": steps,
-                    "execution_backend_status": execution_backend_status,
-                },
-                status="failed",
-                message=f"Pipeline batch failed during {str(next_result.get('job', {}).get('job_type') or 'unknown')} job.",
-                source="pipeline",
-            )
-            return next_result
-        if next_result.get("batch_id") != batch_id:
-            raise RuntimeError(
-                f"Pipeline batch changed while draining queued jobs: expected {batch_id}, got {next_result.get('batch_id')}"
-            )
-        jobs.append(dict(next_result["job"]))
-        steps.extend(list((next_result.get("result") or {}).get("steps") or []))
-        execution_backend_status = next_result.get("execution_backend_status", execution_backend_status)
-        current_result = next_result
-
-    result = {
-        "status": "completed",
-        "batch_id": batch_id,
-        "jobs": jobs,
-        "job": jobs[-1],
-        "result": {
-            "status": "ok",
-            "steps": steps,
-            "execution_backend_status": execution_backend_status,
-        },
-        "execution_backend_status": execution_backend_status,
-        "remaining_job_types": [],
-    }
-    record_pipeline_runtime(
-        {
-            **pipeline_context,
-            **dict(result["result"]),
-        },
-        status="completed",
-        message="Pipeline run completed.",
-        source="pipeline",
-    )
-    return result
-
-
-def enqueue_and_run_pipeline_batch(
-    connection: DBConnection,
-    *,
-    strategy_name: Optional[str] = None,
-    strategy_names: Optional[list[str]] = None,
-    symbol_names: Optional[list[str]] = None,
-    payload: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    jobs = enqueue_pipeline_jobs(
-        connection,
-        strategy_name=strategy_name,
-        strategy_names=strategy_names,
-        symbol_names=symbol_names,
-        payload=payload,
-    )
-    pipeline_context: dict[str, Any] = {
-        "strategy_name": strategy_name or (strategy_names[0] if strategy_names else DEFAULT_STRATEGY_NAME),
-        "strategy_names": list(dict.fromkeys(strategy_names or ([strategy_name] if strategy_name else []))),
-        "requested_symbol_names": list(dict.fromkeys(symbol_names or [])),
-    }
-    executed_jobs: list[dict[str, Any]] = []
-    steps: list[dict[str, Any]] = []
-    execution_backend_status = None
-    for item in jobs:
-        leased_job = lease_job_by_id(connection, int(item["job_id"]))
-        if leased_job is None:
-            raise RuntimeError(f"Unable to lease queued pipeline job {item['job_id']}.")
-        job_result = _run_leased_queue_job(connection, leased_job)
-        if job_result["status"] != "completed":
-            job_result["batch_id"] = item["batch_id"]
-            job_result["jobs"] = executed_jobs
-            job_result["steps"] = steps
-            job_result["enqueued_jobs"] = jobs
-            record_pipeline_runtime(
-                {
-                    **pipeline_context,
-                    "steps": steps,
-                    "execution_backend_status": execution_backend_status,
-                },
-                status="failed",
-                message=f"Pipeline batch failed during {item['job_type']} job.",
-                source="pipeline",
-            )
-            return job_result
-        executed_jobs.append(dict(job_result["job"]))
-        steps.extend(list((job_result.get("result") or {}).get("steps") or []))
-        execution_backend_status = job_result.get("execution_backend_status", execution_backend_status)
-    result = {
-        "status": "completed",
-        "batch_id": jobs[0]["batch_id"] if jobs else None,
-        "jobs": executed_jobs,
-        "job": executed_jobs[-1] if executed_jobs else None,
-        "result": {
-            "status": "ok",
-            "steps": steps,
-            "execution_backend_status": execution_backend_status,
-        },
-        "execution_backend_status": execution_backend_status,
-        "remaining_job_types": [],
-        "enqueued_jobs": jobs,
-    }
-    record_pipeline_runtime(
-        {
-            **pipeline_context,
-            **dict(result["result"]),
-        },
-        status="completed",
-        message="Pipeline run completed.",
-        source="pipeline",
-    )
-    return result
-
-
-def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) -> dict[str, Any]:
-    job_id = int(leased_job["id"])
-    backend_status = get_execution_backend_status()
-    try:
-        result = _run_leased_job(connection, leased_job)
-        result_with_backend = {**result, "execution_backend_status": backend_status}
-        complete_job(connection, job_id, result=result_with_backend)
-        completed_job = get_job(connection, job_id)
-        return {
-            "status": "completed",
-            "job": completed_job,
-            "result": result_with_backend,
-            "execution_backend_status": backend_status,
-        }
-    except Exception as exc:
-        if exc.__class__.__name__ in {"CancelledTrainingJob", "MissingTrainingJob"}:
-            payload = (
-                exc.to_payload()
-                if hasattr(exc, "to_payload") and callable(getattr(exc, "to_payload"))
-                else {
-                    "status": "cancelled",
-                    "training_job_id": ((leased_job.get("payload") or {}).get("training_job_id")),
-                }
-            )
-            result = {
-                **payload,
-                "execution_backend_status": backend_status,
-            }
-            complete_job(connection, job_id, result=result)
-            completed_job = get_job(connection, job_id)
-            return {
-                "status": "completed",
-                "job": completed_job,
-                "result": result,
-                "execution_backend_status": backend_status,
-            }
-        error_detail: dict[str, Any] = {
-            "error_type": exc.__class__.__name__,
-            "execution_backend_status": backend_status,
-        }
-        if hasattr(exc, "to_payload") and callable(getattr(exc, "to_payload")):
-            extra = exc.to_payload()
-            if isinstance(extra, dict):
-                error_detail["error_detail"] = extra
-        fail_job(
-            connection,
-            job_id,
-            str(exc),
-            result=error_detail,
-        )
-        failed_job = get_job(connection, job_id)
-        return {
-            "status": "failed",
-            "job": failed_job,
-            "error": str(exc),
-            "error_type": exc.__class__.__name__,
-            "execution_backend_status": backend_status,
-        }
-
-
-def run_next_queued_job(connection: DBConnection, job_type: Optional[str] = None) -> dict[str, Any]:
-    leased_job = lease_next_job(connection, job_type=job_type)
-    if leased_job is None:
-        return {
-            "status": "empty",
-            "job_type": job_type,
-            "message": "No queued jobs available.",
-        }
-    return _run_leased_queue_job(connection, leased_job)
-
-
 def reclaim_stale_leased_jobs(
     connection: DBConnection,
     lease_timeout_seconds: int = 300,
@@ -773,8 +368,6 @@ def reclaim_stale_leased_jobs(
     worker are automatically recovered without manual intervention.
     """
     ensure_table(connection)
-    # Push the cutoff comparison into SQL — avoids fetching all leased rows
-    # and filtering them in Python.
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)).isoformat()
     stale_rows = connection.execute(
         """
@@ -796,3 +389,4 @@ def reclaim_stale_leased_jobs(
     )
     connection.commit()
     return len(stale_ids)
+

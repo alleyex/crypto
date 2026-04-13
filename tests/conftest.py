@@ -15,6 +15,7 @@ may contain "binance" on the developer's machine.  All tests default to the
 """
 import sqlite3
 import os
+from typing import Any
 
 # Force PyTorch to use CPU in tests.  On Apple Silicon the MPS backend
 # accumulates state across multiple neural-network initialisations within
@@ -42,6 +43,36 @@ from app.core.migrations import run_migrations
 # configured by the caller" (should not patch) from "load_dotenv_file set it
 # incidentally during collection" (should patch with SQLite).
 _DATABASE_URL_AT_STARTUP: str | None = os.environ.get("CRYPTO_DATABASE_URL")
+
+
+def make_connection() -> sqlite3.Connection:
+    """Return a bare in-memory SQLite connection (no migrations, no row_factory)."""
+    return sqlite3.connect(":memory:")
+
+
+def make_conn() -> sqlite3.Connection:
+    """Return an in-memory SQLite connection with row_factory and migrations applied."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    run_migrations(conn)
+    return conn
+
+
+def make_kline(open_time: int, close: float) -> list:
+    """Return a minimal Binance-style kline list for testing."""
+    return [
+        open_time,
+        str(close - 1),
+        str(close + 1),
+        str(close - 2),
+        str(close),
+        "100",
+        open_time + 59_999,
+        "1000",
+        10,
+        "50",
+        "500",
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +113,9 @@ def _patch_get_connection_for_tests(monkeypatch, tmp_path):
     # Patch every module that imports get_connection at the module level.
     for module_path in (
         "app.api.main.get_connection",
+        "app.health.checks.get_connection",
+        "app.api.deps.get_connection",
+        "app.api.routes.exchange.get_connection",
         "app.audit.service.get_connection",
         "app.system.heartbeat.get_connection",
         "app.scheduler.runner.get_connection",
@@ -89,3 +123,35 @@ def _patch_get_connection_for_tests(monkeypatch, tmp_path):
         "app.validation.soak_report.get_connection",
     ):
         monkeypatch.setattr(module_path, make_conn)
+
+
+class _PersistentConn:
+    """Wraps a sqlite3 connection, ignoring close() so it can be reused across requests."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        return self._conn.execute(sql, params)
+
+    def executemany(self, sql: str, seq_of_params: Any) -> Any:
+        return self._conn.executemany(sql, seq_of_params)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        pass  # intentional no-op
+
+    def really_close(self) -> None:
+        self._conn.close()
+
+
+def _make_api_conn() -> _PersistentConn:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    run_migrations(conn)
+    return _PersistentConn(conn)

@@ -5,7 +5,6 @@ from datetime import timezone
 from re import match
 from re import sub
 from typing import Any
-from typing import Optional
 
 from app.core.settings import DATABASE_URL
 from app.core.settings import POSTGRES_CONNECT_RETRIES
@@ -14,7 +13,6 @@ from app.core.settings import POSTGRES_CONNECT_RETRY_DELAY_SECONDS
 DBConnection = Any
 DBError = Exception
 
-
 def _load_psycopg() -> Any:
     try:
         return importlib.import_module("psycopg")
@@ -22,7 +20,6 @@ def _load_psycopg() -> Any:
         raise RuntimeError(
             "psycopg is not installed. Run `pip install -r requirements.txt` before using PostgreSQL."
         ) from exc
-
 
 def _rewrite_query_params(query: str) -> str:
     rewritten: list[str] = []
@@ -45,13 +42,11 @@ def _rewrite_query_params(query: str) -> str:
 
     return "".join(rewritten)
 
-
 def _inject_returning_id(query: str) -> str:
     stripped = query.rstrip()
     if stripped.endswith(";"):
         stripped = stripped[:-1]
     return f"{stripped} RETURNING id;"
-
 
 class PostgresCursorAdapter:
     def __init__(self, cursor: Any, lastrowid: Any = None):
@@ -67,7 +62,6 @@ class PostgresCursorAdapter:
 
     def fetchall(self) -> Any:
         return self._cursor.fetchall()
-
 
 class PostgresConnectionAdapter:
     def __init__(self, connection: Any):
@@ -98,12 +92,10 @@ class PostgresConnectionAdapter:
     def close(self) -> None:
         self._connection.close()
 
-
-def get_backend_name(connection: Optional[DBConnection] = None) -> str:
+def get_backend_name(connection: DBConnection | None = None) -> str:
     if connection is None or isinstance(connection, PostgresConnectionAdapter):
         return "postgres"
     return "sqlite"
-
 
 def _materialize_postgres_cursor(rows: Any, description: Any, lastrowid: Any) -> PostgresCursorAdapter:
     class MaterializedCursor:
@@ -129,18 +121,16 @@ def _materialize_postgres_cursor(rows: Any, description: Any, lastrowid: Any) ->
 
     return PostgresCursorAdapter(MaterializedCursor(rows, description), lastrowid=lastrowid)
 
-
 def _table_identifier(table_name: str) -> str:
     if not match(r"^[A-Za-z_][A-Za-z0-9_]*$", table_name):
         raise ValueError(f"Unsupported table name: {table_name}")
     return table_name
 
-
 def get_connection() -> DBConnection:
     if not DATABASE_URL:
         raise RuntimeError("CRYPTO_DATABASE_URL must be set.")
     psycopg = _load_psycopg()
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
     for attempt in range(POSTGRES_CONNECT_RETRIES):
         try:
             return PostgresConnectionAdapter(psycopg.connect(DATABASE_URL))
@@ -153,8 +143,7 @@ def get_connection() -> DBConnection:
         f"Unable to connect to PostgreSQL after {POSTGRES_CONNECT_RETRIES} attempts: {last_error}"
     ) from last_error
 
-
-def list_tables(connection: DBConnection, backend: Optional[str] = None) -> list[str]:
+def list_tables(connection: DBConnection, backend: str | None = None) -> list[str]:
     if (backend or get_backend_name(connection)) != "postgres":
         rows = connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name ASC;"
@@ -170,8 +159,7 @@ def list_tables(connection: DBConnection, backend: Optional[str] = None) -> list
     ).fetchall()
     return [str(row[0]) for row in rows]
 
-
-def table_exists(connection: DBConnection, table_name: str, backend: Optional[str] = None) -> bool:
+def table_exists(connection: DBConnection, table_name: str, backend: str | None = None) -> bool:
     if (backend or get_backend_name(connection)) != "postgres":
         row = connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
@@ -189,8 +177,7 @@ def table_exists(connection: DBConnection, table_name: str, backend: Optional[st
     ).fetchone()
     return row is not None
 
-
-def get_table_columns(connection: DBConnection, table_name: str, backend: Optional[str] = None) -> set[str]:
+def get_table_columns(connection: DBConnection, table_name: str, backend: str | None = None) -> set[str]:
     if (backend or get_backend_name(connection)) != "postgres":
         rows = connection.execute(
             f"PRAGMA table_info({_table_identifier(table_name)});"
@@ -207,13 +194,12 @@ def get_table_columns(connection: DBConnection, table_name: str, backend: Option
     ).fetchall()
     return {str(row[0]) for row in rows}
 
-
 def get_table_column_type(
     connection: DBConnection,
     table_name: str,
     column_name: str,
-    backend: Optional[str] = None,
-) -> Optional[str]:
+    backend: str | None = None,
+) -> str | None:
     if (backend or get_backend_name(connection)) != "postgres":
         rows = connection.execute(
             f"PRAGMA table_info({_table_identifier(table_name)});"
@@ -233,7 +219,6 @@ def get_table_column_type(
     ).fetchone()
     return str(row[0]).lower() if row is not None and row[0] is not None else None
 
-
 def fetch_all_as_dicts(
     connection: DBConnection,
     query: str,
@@ -246,7 +231,6 @@ def fetch_all_as_dicts(
     column_names = [str(item[0]) for item in cursor.description]
     return [dict(zip(column_names, row)) for row in rows]
 
-
 def insert_and_get_rowid(connection: DBConnection, query: str, params: tuple[Any, ...] = ()) -> int:
     cursor = connection.execute(_inject_returning_id(query), params)
     row = cursor.fetchone()
@@ -254,18 +238,17 @@ def insert_and_get_rowid(connection: DBConnection, query: str, params: tuple[Any
         raise RuntimeError("PostgreSQL insert did not return an id.")
     return int(row[0])
 
-
 def get_database_info() -> dict[str, str]:
     return {"backend": "postgres", "database_url": DATABASE_URL}
-
 
 def get_database_label() -> str:
     return DATABASE_URL
 
-
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 def parse_db_timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):

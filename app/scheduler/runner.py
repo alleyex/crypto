@@ -2,7 +2,6 @@ import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import Optional
 
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
@@ -11,12 +10,12 @@ from app.pipeline.strategy_job import run_strategy_jobs
 from app.pipeline.run_pipeline import run_pipeline_collect
 from app.core.db import get_connection
 from app.core.job_queue import build_job_payload
-from app.core.job_queue import enqueue_and_run_pipeline_batch
 from app.core.job_queue import enqueue_pipeline_jobs
 from app.core.job_queue import enqueue_job
 from app.core.job_queue import reclaim_stale_leased_jobs
-from app.core.job_queue import run_pipeline_batch
-from app.core.job_queue import run_next_queued_job
+from app.core.job_runner import run_next_queued_job
+from app.core.pipeline_orchestration import enqueue_and_run_pipeline_batch
+from app.core.pipeline_orchestration import run_pipeline_batch
 from app.core.migrations import run_migrations
 from app.core.settings import DEFAULT_PIPELINE_ORCHESTRATION
 from app.core.settings import DEFAULT_STRATEGY_NAME
@@ -25,7 +24,6 @@ from app.execution.adapter import get_execution_adapter_name
 from app.system.heartbeat import record_heartbeat
 from app.system.kill_switch import get_kill_switch_status
 from app.system.kill_switch import kill_switch_enabled
-
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "scheduler.log"
@@ -47,7 +45,6 @@ _MODE_TO_JOB_TYPE: dict[str, str] = {
     "training-only": "training_ppo",
 }
 
-
 def _summarize_result(result: dict) -> str:
     queued_items: list[str] = []
     drained_items: list[str] = []
@@ -55,7 +52,7 @@ def _summarize_result(result: dict) -> str:
     decision_items: list[str] = []
     execution_items: list[str] = []
 
-    def _format_summary_item(label: Optional[str], value: str) -> str:
+    def _format_summary_item(label: str | None, value: str) -> str:
         if label:
             return f"{label}={value}"
         return value
@@ -104,7 +101,6 @@ def _summarize_result(result: dict) -> str:
     )
     return " ".join(summary_parts)
 
-
 def get_scheduler_log_file(mode: str = "pipeline") -> Path:
     if mode == "pipeline":
         return LOG_FILE
@@ -120,7 +116,6 @@ def get_scheduler_log_file(mode: str = "pipeline") -> Path:
         return TRAINING_WORKER_LOG_FILE
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
-
 def get_scheduler_log_files() -> dict[str, Path]:
     return {
         "pipeline": LOG_FILE,
@@ -131,12 +126,11 @@ def get_scheduler_log_files() -> dict[str, Path]:
         "training-only": TRAINING_WORKER_LOG_FILE,
     }
 
-
 def _write_log(line: str, mode: str = "pipeline") -> None:
+    print(line, flush=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with get_scheduler_log_file(mode).open("a", encoding="utf-8") as file:
         file.write(line + "\n")
-
 
 def _scheduler_component_name(mode: str) -> str:
     if mode == "pipeline":
@@ -153,12 +147,11 @@ def _scheduler_component_name(mode: str) -> str:
         return "training_worker"
     raise ValueError(f"Unsupported scheduler mode: {mode}")
 
-
 def _run_pipeline_job(
     orchestration: str,
     strategy_name: str,
-    strategy_names: Optional[list[str]],
-    symbol_names: Optional[list[str]],
+    strategy_names: list[str] | None,
+    symbol_names: list[str] | None,
 ) -> dict:
     """Execute or enqueue a full pipeline tick."""
     # direct: run_pipeline_collect manages its own connection and migrations.
@@ -270,14 +263,12 @@ def _run_pipeline_job(
 
     raise ValueError(f"Unsupported pipeline orchestration: {orchestration}")
 
-
 def _run_worker_job(
     mode: str,
     strategy_name: str,
-    strategy_names: Optional[list[str]],
-    symbol_names: Optional[list[str]],
-    queue_dispatch: bool,
-    queue_drain: bool,
+    strategy_names: list[str] | None,
+    symbol_names: list[str] | None,
+    orchestration: str,
 ) -> dict:
     """Execute or enqueue a single worker-mode job (non-pipeline modes)."""
     job_type = _MODE_TO_JOB_TYPE[mode]
@@ -285,7 +276,7 @@ def _run_worker_job(
     try:
         run_migrations(connection)
 
-        if queue_drain:
+        if orchestration == "queue_drain":
             drain_result = run_next_queued_job(connection, job_type=job_type)
             if drain_result["status"] == "completed":
                 result = dict(drain_result.get("result") or {})
@@ -317,7 +308,7 @@ def _run_worker_job(
                 ],
             }
 
-        if queue_dispatch:
+        if orchestration == "queue_dispatch":
             if mode == "strategy-only":
                 payload = build_job_payload(
                     strategy_name=strategy_name,
@@ -352,21 +343,47 @@ def _run_worker_job(
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
         if mode == "training-only":
-            return {"status": "completed", "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}]}
+            drain_result = run_next_queued_job(connection, job_type=job_type)
+            if drain_result["status"] == "completed":
+                result = dict(drain_result.get("result") or {})
+                result["steps"] = [
+                    {
+                        "step": "drain_queue",
+                        "status": "completed",
+                        "job_id": int(drain_result["job"]["id"]),
+                        "job_type": job_type,
+                    }
+                ] + list(result.get("steps", []))
+                return result
+            if drain_result["status"] == "empty":
+                return {
+                    "status": "completed",
+                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}],
+                }
+            return {
+                "status": "failed",
+                "steps": [
+                    {
+                        "step": "drain_queue",
+                        "status": "failed",
+                        "job_id": int(drain_result["job"]["id"]),
+                        "job_type": job_type,
+                        "error": drain_result["error"],
+                        "error_type": drain_result["error_type"],
+                    }
+                ],
+            }
     finally:
         connection.close()
 
     raise ValueError(f"Unsupported worker mode: {mode}")
 
-
 def _run_scheduled_job(
     mode: str,
     strategy_name: str = DEFAULT_STRATEGY_NAME,
-    strategy_names: Optional[list[str]] = None,
-    symbol_names: Optional[list[str]] = None,
-    queue_dispatch: bool = False,
-    queue_drain: bool = False,
-    pipeline_orchestration: str = "direct",
+    strategy_names: list[str] | None = None,
+    symbol_names: list[str] | None = None,
+    orchestration: str = "direct",
 ) -> dict:
     if kill_switch_enabled():
         return {
@@ -382,10 +399,9 @@ def _run_scheduled_job(
         }
 
     if mode == "pipeline":
-        return _run_pipeline_job(pipeline_orchestration, strategy_name, strategy_names, symbol_names)
+        return _run_pipeline_job(orchestration, strategy_name, strategy_names, symbol_names)
 
-    return _run_worker_job(mode, strategy_name, strategy_names, symbol_names, queue_dispatch, queue_drain)
-
+    return _run_worker_job(mode, strategy_name, strategy_names, symbol_names, orchestration)
 
 def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[str]:
     if mode not in ("pipeline", "strategy-only"):
@@ -397,7 +413,6 @@ def _resolve_active_strategies(mode: str, fallback_strategy_name: str) -> list[s
     except Exception:
         return [fallback_strategy_name]
 
-
 def _resolve_active_symbols(mode: str) -> list[str]:
     if mode not in ("pipeline", "market-data-only", "strategy-only", "risk-only", "execution-only"):
         return []
@@ -408,12 +423,10 @@ def _resolve_active_symbols(mode: str) -> list[str]:
     except Exception:
         return []
 
-
 def _format_strategy_log_label(strategy_names: list[str]) -> str:
     if len(strategy_names) == 1:
         return f"strategy={strategy_names[0]}"
     return "strategies=" + ",".join(strategy_names)
-
 
 def _format_symbol_log_label(symbol_names: list[str]) -> str:
     if not symbol_names:
@@ -422,13 +435,11 @@ def _format_symbol_log_label(symbol_names: list[str]) -> str:
         return f"symbol={symbol_names[0]}"
     return "symbols=" + ",".join(symbol_names)
 
-
 def _summarize_strategy_payload(strategy_names: list[str]) -> dict:
     return {
         "strategy_name": strategy_names[0],
         "strategy_names": strategy_names,
     }
-
 
 def _summarize_symbol_payload(symbol_names: list[str]) -> dict:
     if not symbol_names:
@@ -438,18 +449,16 @@ def _summarize_symbol_payload(symbol_names: list[str]) -> dict:
         "symbol_names": symbol_names,
     }
 
-
 def stop_requested() -> bool:
     return STOP_FILE.exists()
 
-
-def _reclaim_stale_leases(pipeline_orchestration: str, queue_drain: bool) -> int:
+def _reclaim_stale_leases(orchestration: str) -> int:
     """Reclaim jobs stuck in 'leased' state from a previous crashed worker.
 
     Only runs when the scheduler is operating in a queue-consuming mode
     (queue_drain, queue_batch, or queue_dispatch) — not for direct execution.
     """
-    if not queue_drain and pipeline_orchestration not in ("queue_drain", "queue_batch", "queue_dispatch"):
+    if orchestration not in ("queue_drain", "queue_batch", "queue_dispatch"):
         return 0
     connection = get_connection()
     try:
@@ -459,7 +468,6 @@ def _reclaim_stale_leases(pipeline_orchestration: str, queue_drain: bool) -> int
         return 0
     finally:
         connection.close()
-
 
 def _record_soak_snapshot() -> None:
     now_utc = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -471,67 +479,31 @@ def _record_soak_snapshot() -> None:
             f"[{now_utc()}] "
             f"soak_snapshot status={report.get('status', 'unknown')}"
         )
-        print(snapshot_line)
         _write_log(snapshot_line, mode="pipeline")
     except Exception as exc:
-        error_line = (
-            f"[{now_utc()}] "
-            f"soak_snapshot failed: {exc}"
-        )
-        print(error_line)
-        _write_log(error_line, mode="pipeline")
-
-
-def _resolve_pipeline_orchestration(
-    queue_dispatch: bool,
-    queue_drain: bool,
-    pipeline_orchestration_override: Optional[str],
-) -> str:
-    """Derive the canonical pipeline orchestration string for pipeline mode."""
-    effective = pipeline_orchestration_override or DEFAULT_PIPELINE_ORCHESTRATION
-    # CLI flags take lower precedence than env/override — only apply when no override given.
-    if pipeline_orchestration_override is None:
-        if queue_dispatch:
-            return "queue_dispatch"
-        if queue_drain:
-            return "queue_drain"
-    return effective
-
+        _write_log(f"[{now_utc()}] soak_snapshot failed: {exc}", mode="pipeline")
 
 def run_scheduler(
     interval_seconds: int = 60,
-    iterations: Optional[int] = None,
+    iterations: int | None = None,
     mode: str = "pipeline",
     strategy_name: str = DEFAULT_STRATEGY_NAME,
-    queue_dispatch: bool = False,
-    queue_drain: bool = False,
-    pipeline_orchestration_override: Optional[str] = None,
+    orchestration: str | None = None,
 ) -> None:
     if mode not in SCHEDULER_MODES:
         raise ValueError(
             f"Unsupported scheduler mode: {mode}. Expected one of: {', '.join(SCHEDULER_MODES)}"
         )
-    if queue_dispatch and queue_drain:
-        raise ValueError("queue_dispatch and queue_drain cannot both be enabled.")
 
     # Resolve orchestration once at startup.
-    if mode == "pipeline":
-        pipeline_orchestration = _resolve_pipeline_orchestration(
-            queue_dispatch, queue_drain, pipeline_orchestration_override
-        )
-        # Keep flags in sync so _reclaim_stale_leases and heartbeat payloads are accurate.
-        queue_dispatch = pipeline_orchestration == "queue_dispatch"
-        queue_drain = pipeline_orchestration == "queue_drain"
-    else:
-        # Worker modes: orchestration string is informational only.
-        if pipeline_orchestration_override is not None:
-            pipeline_orchestration = pipeline_orchestration_override
-        elif queue_dispatch:
-            pipeline_orchestration = "queue_dispatch"
-        elif queue_drain:
-            pipeline_orchestration = "queue_drain"
-        else:
-            pipeline_orchestration = "direct"
+    # Pipeline mode defaults to the env-configured DEFAULT_PIPELINE_ORCHESTRATION;
+    # worker modes default to "direct" unless explicitly overridden.
+    if orchestration is None:
+        orchestration = DEFAULT_PIPELINE_ORCHESTRATION if mode == "pipeline" else "direct"
+
+    # Derive convenience bools for heartbeat payloads (backward-compat).
+    queue_dispatch = orchestration == "queue_dispatch"
+    queue_drain = orchestration == "queue_drain"
 
     component = _scheduler_component_name(mode)
     run_count = 0
@@ -545,9 +517,7 @@ def run_scheduler(
     while True:
         if stop_requested():
             stopped_at = now_utc()
-            log_line = f"[{stopped_at}] scheduler stopped by flag: {STOP_FILE}"
-            print(log_line)
-            _write_log(log_line, mode)
+            _write_log(f"[{stopped_at}] scheduler stopped by flag: {STOP_FILE}", mode)
             record_heartbeat(
                 component=component,
                 status="stopped",
@@ -557,7 +527,7 @@ def run_scheduler(
                     "mode": mode,
                     "queue_dispatch": queue_dispatch,
                     "queue_drain": queue_drain,
-                    "pipeline_orchestration": pipeline_orchestration,
+                    "pipeline_orchestration": orchestration,
                 },
             )
             break
@@ -565,15 +535,13 @@ def run_scheduler(
         run_count += 1
         started_at = now_utc()
 
-        _reclaim_stale_leases(pipeline_orchestration, queue_drain)
+        _reclaim_stale_leases(orchestration)
 
         active_strategy_names = _resolve_active_strategies(mode, strategy_name)
         active_symbol_names = _resolve_active_symbols(mode)
 
         if not active_strategy_names:
-            log_line = f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies"
-            print(log_line)
-            _write_log(log_line, mode)
+            _write_log(f"[{started_at}] run={run_count} mode={mode} strategies=none skipped=no-enabled-active-strategies", mode)
             record_heartbeat(
                 component=component,
                 status="ok",
@@ -585,7 +553,7 @@ def run_scheduler(
                     "skipped": True,
                     "queue_dispatch": queue_dispatch,
                     "queue_drain": queue_drain,
-                    "pipeline_orchestration": pipeline_orchestration,
+                    "pipeline_orchestration": orchestration,
                     **_summarize_symbol_payload(active_symbol_names),
                 },
             )
@@ -605,7 +573,7 @@ def run_scheduler(
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
                 "queue_drain": queue_drain,
-                "pipeline_orchestration": pipeline_orchestration,
+                "pipeline_orchestration": orchestration,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },
@@ -615,16 +583,12 @@ def run_scheduler(
             strategy_name=active_strategy_name,
             strategy_names=active_strategy_names,
             symbol_names=active_symbol_names,
-            queue_dispatch=queue_dispatch,
-            queue_drain=queue_drain,
-            pipeline_orchestration=pipeline_orchestration,
+            orchestration=orchestration,
         )
         summary = _summarize_result(result)
         strategy_label = _format_strategy_log_label(active_strategy_names)
         symbol_label = _format_symbol_log_label(active_symbol_names)
-        log_line = f"[{started_at}] run={run_count} mode={mode} {strategy_label} {symbol_label} {summary}"
-        print(log_line)
-        _write_log(log_line, mode)
+        _write_log(f"[{started_at}] run={run_count} mode={mode} {strategy_label} {symbol_label} {summary}", mode)
         record_heartbeat(
             component=component,
             status="ok",
@@ -635,7 +599,7 @@ def run_scheduler(
                 "mode": mode,
                 "queue_dispatch": queue_dispatch,
                 "queue_drain": queue_drain,
-                "pipeline_orchestration": pipeline_orchestration,
+                "pipeline_orchestration": orchestration,
                 **_summarize_strategy_payload(active_strategy_names),
                 **_summarize_symbol_payload(active_symbol_names),
             },

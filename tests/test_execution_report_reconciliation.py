@@ -1,13 +1,8 @@
-import sqlite3
-
 import pytest
 
 from app.core.migrations import run_migrations
 from app.query.read_service import get_execution_report
-
-
-def make_connection() -> sqlite3.Connection:
-    return sqlite3.connect(":memory:")
+from conftest import make_connection
 
 
 def test_get_execution_report_prefers_binance_user_trade_commission(monkeypatch) -> None:

@@ -1,10 +1,9 @@
 """Load historical candles from the DB for use with run_backtest()."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.db import DBConnection
 from app.core.db import parse_db_timestamp
-
 
 _SELECT_CANDLES_SQL = """
 SELECT open_time, open, high, low, close, volume, close_time
@@ -16,20 +15,18 @@ ORDER BY open_time ASC
 {limit_clause};
 """
 
-
 def _iso_to_epoch_ms(iso: str) -> int:
     """Parse an ISO date/datetime string (UTC) to epoch milliseconds."""
     return int(parse_db_timestamp(iso).timestamp() * 1000)
-
 
 def load_candles_from_db(
     connection: DBConnection,
     symbol: str,
     timeframe: str = "1m",
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    limit: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    start: str | None = None,
+    end: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     """Query candles from the DB and return them as a list of dicts.
 
     Parameters

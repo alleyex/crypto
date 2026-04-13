@@ -16,7 +16,7 @@ Known constraints
 
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.backtest.metrics import compute_metrics
 from app.core.db import insert_and_get_rowid
@@ -26,7 +26,6 @@ from app.portfolio.positions_service import update_positions
 from app.risk.risk_config import set_risk_config
 from app.risk.risk_service import evaluate_signal_id
 from app.strategy.registry import generate_registered_signal
-
 
 _INSERT_CANDLE_SQL = """
 INSERT INTO candles (
@@ -52,21 +51,18 @@ _SELECT_POSITION_SQL = """
 SELECT qty, avg_price, realized_pnl FROM positions WHERE symbol = ? LIMIT 1;
 """
 
-
 def _make_connection():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     run_migrations(conn)
     return conn
 
-
 def _epoch_ms_to_iso(epoch_ms: int) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
-
-def _insert_candle(connection, candle: Dict, symbol: str, timeframe: str, iso_ts: str) -> None:
+def _insert_candle(connection, candle: dict, symbol: str, timeframe: str, iso_ts: str) -> None:
     open_time = int(candle["open_time"])
     close_time = int(candle.get("close_time", open_time + 59999))
     connection.execute(
@@ -81,7 +77,6 @@ def _insert_candle(connection, candle: Dict, symbol: str, timeframe: str, iso_ts
             iso_ts,
         ),
     )
-
 
 def _simulate_fill(
     connection,
@@ -106,17 +101,15 @@ def _simulate_fill(
         _INSERT_FILL_SQL, (order_id, symbol, side, qty, price, iso_ts)
     )
 
-
 def _get_position(connection, symbol: str):
     row = connection.execute(_SELECT_POSITION_SQL, (symbol,)).fetchone()
     if row is None:
         return 0.0, 0.0, 0.0
     return float(row[0]), float(row[1]), float(row[2])
 
-
 def _record_equity(
-    equity_curve: List[Dict],
-    candle: Dict,
+    equity_curve: list[dict],
+    candle: dict,
     connection,
     symbol: str,
     initial_capital: float,
@@ -135,11 +128,10 @@ def _record_equity(
         "qty": qty,
     })
 
-
 def run_backtest(
     symbol: str,
     strategy_name: str,
-    candles: List[Dict],
+    candles: list[dict],
     initial_capital: float = 10000.0,
     order_qty: float = 0.001,
     max_position_qty: float = 0.002,
@@ -147,14 +139,14 @@ def run_backtest(
     max_daily_loss: float = 0.0,
     timeframe: str = "1m",
     fill_on: str = "close",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run a backtest and return a result dict.
 
     Parameters
     ----------
     symbol:           Trading pair, e.g. "BTCUSDT".
     strategy_name:    Key from STRATEGY_REGISTRY, e.g. "ppo".
-    candles:          List of dicts with keys: open_time (epoch ms), open, high,
+    candles:          list of dicts with keys: open_time (epoch ms), open, high,
                       low, close, volume (optional), close_time (optional).
                       Must be provided in any order — sorted internally.
     initial_capital:  Reference capital for equity / return calculations.
@@ -169,7 +161,7 @@ def run_backtest(
 
     Returns
     -------
-    Dict with keys: symbol, strategy_name, candle_count, trade_count,
+    dict with keys: symbol, strategy_name, candle_count, trade_count,
     metrics, equity_curve, trades.
     """
     if not candles:
@@ -194,9 +186,9 @@ def run_backtest(
     )
 
     sorted_candles = sorted(candles, key=lambda c: int(c["open_time"]))
-    equity_curve: List[Dict] = []
-    trades: List[Dict] = []
-    pending_fill: Optional[Dict] = None  # used only when fill_on="next_open"
+    equity_curve: list[dict] = []
+    trades: list[dict] = []
+    pending_fill: dict | None = None  # used only when fill_on="next_open"
 
     for i, candle in enumerate(sorted_candles):
         iso_ts = _epoch_ms_to_iso(int(candle["open_time"]))
