@@ -9,25 +9,11 @@ from pydantic import BaseModel, Field
 from app.core.db import DBConnection, utc_now_iso
 
 from app.features.compute import FEATURE_SET_VERSION
-from app.features.store import get_features as get_feature_vectors
-from app.training.dataset import (
-    FEATURE_NAMES,
-    build_dataset,
-    dataset_summary,
-    train_test_split as training_split,
-)
 from app.training.job_service import (
-    create_job as create_training_job,
     get_job as get_training_job,
     list_jobs as list_training_jobs,
-    update_job as update_training_job,
 )
-from app.training.trainer import (
-    evaluate as evaluate_model,
-    model_to_dict,
-    predict,
-    train as train_model,
-)
+from app.training.supervised_service import run_supervised_training_job
 from app.api.deps import get_db
 
 router = APIRouter()
@@ -48,121 +34,18 @@ def run_training_job(
     body: TrainingJobRequest,
     connection: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
-    """Train a logistic regression model on stored feature vectors.
-
-    Loads all materialised feature vectors for symbol/timeframe/feature_set,
-    builds a supervised dataset, splits it chronologically, trains, evaluates,
-    and persists the result as a training_jobs row.
-
-    Returns the complete training job record.
-    """
-
-    hyperparams: dict[str, Any] = {
-        "test_ratio": body.test_ratio,
-        "n_epochs": body.n_epochs,
-        "learning_rate": body.learning_rate,
-        "batch_size": body.batch_size,
-        "l2_lambda": body.l2_lambda,
-        "seed": body.seed,
-    }
-    job_id = create_training_job(
+    return run_supervised_training_job(
         connection,
         symbol=body.symbol,
         timeframe=body.timeframe,
         feature_set=body.feature_set,
-        params=hyperparams,
+        test_ratio=body.test_ratio,
+        n_epochs=body.n_epochs,
+        learning_rate=body.learning_rate,
+        batch_size=body.batch_size,
+        l2_lambda=body.l2_lambda,
+        seed=body.seed,
     )
-
-    started_at = utc_now_iso()
-    update_training_job(connection, job_id, status="running", started_at=started_at)
-
-    try:
-        fv_result = get_feature_vectors(
-            connection,
-            symbol=body.symbol,
-            timeframe=body.timeframe,
-            feature_set=body.feature_set,
-            limit=100_000,
-        )
-        vectors = fv_result.get("vectors", [])
-        if len(vectors) < 10:
-            raise ValueError(
-                f"Insufficient feature vectors ({len(vectors)}) for training. "
-                "Run POST /features/materialize first."
-            )
-
-        X_all, y_all, times_all = build_dataset(vectors)
-        if len(X_all) < 10:
-            raise ValueError(
-                f"Dataset has only {len(X_all)} labelled rows after building. "
-                "Need at least 10."
-            )
-
-        X_train, y_train, _, X_test, y_test, _ = training_split(
-            X_all, y_all, times_all, test_ratio=body.test_ratio
-        )
-
-        dataset_stats: dict[str, Any] = {
-            "n_total": len(X_all),
-            "n_train": len(X_train),
-            "n_test": len(X_test),
-            "feature_names": FEATURE_NAMES,
-            "train_balance": dataset_summary(y_train),
-            "test_balance": dataset_summary(y_test),
-        }
-
-        train_result = train_model(
-            X_train, y_train,
-            n_features=len(FEATURE_NAMES),
-            learning_rate=body.learning_rate,
-            n_epochs=body.n_epochs,
-            batch_size=body.batch_size,
-            l2_lambda=body.l2_lambda,
-            seed=body.seed,
-        )
-
-        train_preds = predict(train_result["weights"], train_result["bias"], X_train)
-        test_preds = predict(train_result["weights"], train_result["bias"], X_test)
-
-        metrics: dict[str, Any] = {
-            "train": evaluate_model(y_train, train_preds),
-            "test": evaluate_model(y_test, test_preds),
-            "final_train_loss": train_result["final_train_loss"],
-        }
-
-        model_dict = model_to_dict(
-            train_result,
-            feature_names=FEATURE_NAMES,
-            symbol=body.symbol,
-            timeframe=body.timeframe,
-            feature_set=body.feature_set,
-        )
-
-        finished_at = utc_now_iso()
-        update_training_job(
-            connection,
-            job_id,
-            status="done",
-            dataset=dataset_stats,
-            metrics=metrics,
-            model=model_dict,
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-
-    except Exception as exc:
-        finished_at = utc_now_iso()
-        update_training_job(
-            connection,
-            job_id,
-            status="failed",
-            error=str(exc),
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-
-    job = get_training_job(connection, job_id)
-    return job or {}
 
 @router.get("/training/jobs")
 def list_training_jobs_endpoint(

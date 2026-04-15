@@ -515,6 +515,51 @@ def test_get_strategy_activity_summary_treats_filled_orders_with_new_status_as_e
         connection.close()
 
 
+def test_get_strategy_activity_summary_prefers_current_positions_over_fill_replay() -> None:
+    connection = make_connection()
+    try:
+        ensure_execution_tables(connection)
+        connection.execute(
+            """
+            INSERT INTO orders (
+                client_order_id, risk_event_id, symbol, timeframe, strategy_name, side, qty, price, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("ppo-buy-flat-mismatch", 1, "SOLUSDT", "1m", "ppo", "BUY", 1.0, 78.87, "FILLED", "2026-04-07 14:35:06"),
+        )
+        order_id = int(
+            connection.execute(
+                "SELECT id FROM orders WHERE client_order_id = 'ppo-buy-flat-mismatch';"
+            ).fetchone()[0]
+        )
+        insert_fill(connection, order_id, "SOLUSDT", "BUY", 1.0, 78.87, "2026-04-07 14:35:07")
+        connection.execute(
+            """
+            INSERT INTO signals (
+                symbol, timeframe, strategy_name, signal_type, short_ma, long_ma, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("SOLUSDT", "1m", "ppo", "SELL", 0.1, 0.9, "2026-04-14 07:44:27"),
+        )
+        connection.execute(
+            """
+            INSERT INTO positions (symbol, qty, avg_price, realized_pnl, updated_at)
+            VALUES ('SOLUSDT', 0.0, 0.0, 0.0, '2026-04-14 07:54:12');
+            """
+        )
+        connection.commit()
+
+        summary = get_strategy_activity_summary(connection)
+
+        by_name = {item["strategy_name"]: item for item in summary}
+        assert by_name["ppo"]["net_position_qty"] == 0.0
+        assert by_name["ppo"]["open_position_symbol"] is None
+        assert by_name["ppo"]["open_entry_price"] is None
+        assert by_name["ppo"]["open_position_opened_at"] is None
+    finally:
+        connection.close()
+
+
 def test_get_strategy_activity_summary_enriches_bid_ask_when_requested(monkeypatch) -> None:
     connection = make_connection()
     try:

@@ -1,7 +1,4 @@
-"""PPO training API routes (async queue-based)."""
-
 import os
-from pathlib import Path as _Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -15,6 +12,7 @@ from app.training.job_service import (
     create_job as create_training_job,
     get_job as get_training_job,
 )
+from app.training.lifecycle import initialize_job_progress
 from app.api.deps import get_db
 
 router = APIRouter()
@@ -47,9 +45,6 @@ def start_ppo_job(
     request: Request,
     connection: DBConnection = Depends(get_db),
 ) -> dict[str, Any]:
-    """Queue a PPO training job for the dedicated training worker."""
-    import json as _json
-
     from app.training.ppo_trainer import resolve_episode_lengths
 
     train_ep_len, eval_ep_len = resolve_episode_lengths(body.timeframe)
@@ -86,11 +81,7 @@ def start_ppo_job(
         feature_set="ppo",
         params=params,
     )
-
-    connection.execute(
-        "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-        (_json.dumps({"pct": 0, "step": 0, "total": body.total_steps}), job_id),
-    )
+    initialize_job_progress(connection, job_id, total=body.total_steps)
     enqueue_job(
         connection,
         "training_ppo",

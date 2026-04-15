@@ -63,7 +63,10 @@ def run_job(
         training_job_id = normalized_payload.get("training_job_id")
         if training_job_id is None:
             raise ValueError("training_ppo job requires training_job_id.")
-        return run_ppo_training_job(int(training_job_id))
+        return run_ppo_training_job(
+            int(training_job_id),
+            queue_job_id=int(normalized_payload["queue_job_id"]) if normalized_payload.get("queue_job_id") is not None else None,
+        )
 
     raise ValueError(f"Unsupported job type: {job_type}")
 
@@ -117,10 +120,12 @@ def _propagate_dependent_job_payload(
     connection.commit()
 
 def _run_leased_job(connection: DBConnection, job: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(job.get("payload") or {})
+    payload.setdefault("queue_job_id", int(job["id"]))
     return run_job(
         connection,
         job_type=str(job["job_type"]),
-        payload=dict(job.get("payload") or {}),
+        payload=payload,
     )
 
 def _run_leased_queue_job(connection: DBConnection, leased_job: dict[str, Any]) -> dict[str, Any]:

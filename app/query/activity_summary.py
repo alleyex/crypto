@@ -234,6 +234,19 @@ def get_strategy_activity_summary(
     orders = get_all_orders(connection)
     fills = get_all_fills(connection)
     fills_by_order_id = _fills_by_order_id(fills)
+    db_positions = {
+        str(symbol): {
+            "qty": float(qty),
+            "avg_price": float(avg_price),
+            "updated_at": updated_at,
+        }
+        for symbol, qty, avg_price, _realized_pnl, updated_at in connection.execute(
+            """
+            SELECT symbol, qty, avg_price, realized_pnl, updated_at
+            FROM positions
+            """
+        ).fetchall()
+    }
     closed_trades = get_strategy_closed_trades(
         connection,
         limit=max(len(strategy_names), per_table_limit),
@@ -315,6 +328,27 @@ def get_strategy_activity_summary(
                 open_position_symbol = sym
                 open_position_opened_at = pos.get("opened_at")
                 break
+
+        # Prefer the current positions table over replayed fills. The replay is
+        # useful for realized PnL/trade stats, but it can drift from the actual
+        # live position state when fills are synced or positions are rebuilt.
+        latest_symbol = (
+            str(latest_signal["symbol"]) if latest_signal and latest_signal.get("symbol") else None
+        )
+        current_position_symbol = open_position_symbol or latest_symbol
+        if current_position_symbol:
+            db_position = db_positions.get(current_position_symbol)
+            if db_position is not None:
+                db_qty = float(db_position["qty"])
+                net_position_qty = db_qty
+                if abs(db_qty) > 1e-9:
+                    open_position_symbol = current_position_symbol
+                    open_entry_price = float(db_position["avg_price"]) if db_position["avg_price"] else None
+                    open_position_opened_at = db_position.get("updated_at")
+                else:
+                    open_position_symbol = None
+                    open_entry_price = None
+                    open_position_opened_at = None
 
         current_price: float | None = None
         price_symbol: str | None = None

@@ -2,10 +2,15 @@ import json
 from typing import Any
 
 from app.core.db import get_connection
-from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
 from app.training.job_service import get_job as get_training_job
-from app.training.job_service import update_job as update_training_job
+from app.training.lifecycle import (
+    mark_job_cancelled,
+    mark_job_done,
+    mark_job_failed,
+    mark_job_running,
+    update_job_progress,
+)
 from app.training.ppo_trainer import run_ppo_training
 
 class CancelledTrainingJob(Exception):
@@ -33,7 +38,7 @@ def _cancel_requested(connection, job_id: int) -> bool:
     progress = job.get("progress_json") or {}
     return bool(progress.get("cancel_requested"))
 
-def run_ppo_training_job(job_id: int) -> dict[str, Any]:
+def run_ppo_training_job(job_id: int, *, queue_job_id: int | None = None) -> dict[str, Any]:
     started_at: str | None = None
     connection = get_connection()
     try:
@@ -46,30 +51,52 @@ def run_ppo_training_job(job_id: int) -> dict[str, Any]:
         params = dict(job.get("params") or {})
         if params.get("job_type") != "ppo":
             raise ValueError(f"Training job {job_id} is not a PPO job.")
-        started_at = utc_now_iso()
-        update_training_job(connection, job_id, status="running", started_at=started_at)
-        connection.execute(
-            "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-            (json.dumps({"pct": 0, "step": 0, "total": int(params.get("total_steps") or 0)}), job_id),
+        started_at = mark_job_running(
+            connection,
+            job_id,
+            total_steps=int(params.get("total_steps") or 0),
         )
-        connection.commit()
+        if queue_job_id is not None:
+            from app.core.job_queue import touch_job_lease
+
+            touch_job_lease(connection, queue_job_id)
     finally:
         connection.close()
 
-    def _on_progress(current: int, total: int) -> None:
-        pct = round(current / total * 100, 1) if total > 0 else 0
-        prog = json.dumps({"pct": pct, "step": current, "total": total})
+    progress_state = {
+        "step": 0,
+        "total": int(params.get("total_steps") or 0),
+        "stage": "initializing",
+    }
+
+    def _sync_progress(*, step: int, total: int, stage: str | None = None) -> None:
         conn = get_connection()
         try:
             if _cancel_requested(conn, job_id):
                 raise CancelledTrainingJob(job_id)
-            conn.execute(
-                "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-                (prog, job_id),
-            )
-            conn.commit()
+            extra = {"stage": stage} if stage else None
+            update_job_progress(conn, job_id, step=step, total=total, extra=extra)
+            if queue_job_id is not None:
+                from app.core.job_queue import touch_job_lease
+
+                touch_job_lease(conn, queue_job_id)
         finally:
             conn.close()
+
+    def _on_status(stage: str) -> None:
+        progress_state["stage"] = stage
+        _sync_progress(
+            step=int(progress_state["step"]),
+            total=int(progress_state["total"]),
+            stage=stage,
+        )
+
+    def _on_progress(current: int, total: int) -> None:
+        progress_state["step"] = int(current)
+        progress_state["total"] = int(total)
+        _sync_progress(step=int(current), total=int(total), stage=str(progress_state["stage"]))
+
+    _on_status("initializing")
 
     try:
         result = run_ppo_training(
@@ -94,6 +121,7 @@ def run_ppo_training_job(job_id: int) -> dict[str, Any]:
             train_frac=float(params.get("train_frac") or 0.70),
             job_id=job_id,
             on_progress=_on_progress,
+            on_status=_on_status,
         )
         metrics = {
             "verdict": result["verdict"],
@@ -108,35 +136,20 @@ def run_ppo_training_job(job_id: int) -> dict[str, Any]:
             "n_train": result["n_train"],
             "fee_rate": result["fee_rate"],
         }
-        finished_at = utc_now_iso()
         conn = get_connection()
         try:
             if _cancel_requested(conn, job_id):
-                update_training_job(
-                    conn,
-                    job_id,
-                    status="cancelled",
-                    error="Cancelled by user.",
-                    started_at=started_at,
-                    finished_at=finished_at,
-                )
-                conn.commit()
+                mark_job_cancelled(conn, job_id, started_at=started_at)
                 raise CancelledTrainingJob(job_id)
-            update_training_job(
+            mark_job_done(
                 conn,
                 job_id,
-                status="done",
                 dataset=dataset,
                 metrics=metrics,
                 model={"model_path": result["model_path"], "job_type": "ppo"},
                 started_at=started_at,
-                finished_at=finished_at,
+                total_steps=int(params.get("total_steps") or 0),
             )
-            conn.execute(
-                "UPDATE training_jobs SET progress_json=? WHERE id=?;",
-                (json.dumps({"pct": 100, "step": int(params.get('total_steps') or 0), "total": int(params.get('total_steps') or 0)}), job_id),
-            )
-            conn.commit()
         finally:
             conn.close()
         return {
@@ -155,36 +168,18 @@ def run_ppo_training_job(job_id: int) -> dict[str, Any]:
             ],
         }
     except CancelledTrainingJob:
-        finished_at = utc_now_iso()
         conn = get_connection()
         try:
-            update_training_job(
-                conn,
-                job_id,
-                status="cancelled",
-                error="Cancelled by user.",
-                started_at=started_at,
-                finished_at=finished_at,
-            )
-            conn.commit()
+            mark_job_cancelled(conn, job_id, started_at=started_at)
         finally:
             conn.close()
         raise
     except MissingTrainingJob:
         raise
     except Exception as exc:
-        finished_at = utc_now_iso()
         conn = get_connection()
         try:
-            update_training_job(
-                conn,
-                job_id,
-                status="failed",
-                error=str(exc),
-                started_at=started_at,
-                finished_at=finished_at,
-            )
-            conn.commit()
+            mark_job_failed(conn, job_id, error=str(exc), started_at=started_at)
         finally:
             conn.close()
         raise

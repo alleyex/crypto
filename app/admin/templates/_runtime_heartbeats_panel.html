@@ -1,0 +1,32 @@
+        <article class="panel data-card">
+          <h2>Runtime Heartbeats</h2>
+          <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
+          <div class="worker-grid">
+            <div class="side-stat">
+              <label>Market Data</label>
+              <div class="value" id="data-worker-status">Loading</div>
+              <div class="inline-note" id="data-worker-detail">Checking market data heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Pipeline</label>
+              <div class="value" id="strategy-worker-status">Loading</div>
+              <div class="inline-note" id="strategy-worker-detail">Checking pipeline heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Scheduler</label>
+              <div class="value" id="risk-worker-status">Loading</div>
+              <div class="inline-note" id="risk-worker-detail">Checking scheduler heartbeat...</div>
+            </div>
+            <div class="side-stat">
+              <label>Alerting</label>
+              <div class="value" id="execution-worker-status">Loading</div>
+              <div class="inline-note" id="execution-worker-detail">Checking alerting heartbeat...</div>
+            </div>
+          </div>
+          <details class="collapsible">
+            <summary>View heartbeat event feed</summary>
+            <div class="collapsible-body">
+              <pre id="heartbeats-json">Loading...</pre>
+            </div>
+          </details>
+        </article>

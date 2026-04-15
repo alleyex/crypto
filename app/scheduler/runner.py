@@ -2,6 +2,7 @@ import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 from app.pipeline.execution_job import run_execution_job
 from app.pipeline.market_data_job import run_market_data_job
@@ -44,6 +45,82 @@ _MODE_TO_JOB_TYPE: dict[str, str] = {
     "execution-only": "execution",
     "training-only": "training_ppo",
 }
+
+
+def _completed_drain_steps(job_id: int, job_type: str, *, batch_id: str | None = None) -> list[dict]:
+    step: dict[str, Any] = {
+        "step": "drain_queue",
+        "status": "completed",
+        "job_id": int(job_id),
+        "job_type": job_type,
+    }
+    if batch_id is not None:
+        step["batch_id"] = batch_id
+        step["remaining_job_types"] = []
+    return [step]
+
+
+def _empty_drain_result(job_type: str) -> dict:
+    return {
+        "status": "completed",
+        "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}],
+    }
+
+
+def _failed_drain_result(
+    *,
+    drain_result: dict,
+    job_type: str,
+    batch_id: str | None = None,
+    remaining_job_types: list[str] | None = None,
+) -> dict:
+    step: dict[str, Any] = {
+        "step": "drain_queue",
+        "status": "failed",
+        "job_id": int(drain_result["job"]["id"]),
+        "job_type": job_type,
+        "error": drain_result["error"],
+        "error_type": drain_result["error_type"],
+    }
+    if batch_id is not None:
+        step["batch_id"] = batch_id
+        step["remaining_job_types"] = remaining_job_types or []
+    return {"status": "failed", "steps": [step]}
+
+
+def _format_single_job_drain_result(drain_result: dict, job_type: str) -> dict:
+    if drain_result["status"] == "completed":
+        result = dict(drain_result.get("result") or {})
+        result["steps"] = _completed_drain_steps(int(drain_result["job"]["id"]), job_type) + list(result.get("steps", []))
+        return result
+    if drain_result["status"] == "empty":
+        return _empty_drain_result(job_type)
+    return _failed_drain_result(drain_result=drain_result, job_type=job_type)
+
+
+def _format_pipeline_drain_result(drain_result: dict) -> dict:
+    if drain_result["status"] == "completed":
+        result = dict(drain_result.get("result") or {})
+        result["steps"] = [
+            {
+                "step": "drain_queue",
+                "status": "completed",
+                "job_id": int(job["id"]),
+                "job_type": str(job["job_type"]),
+                "batch_id": drain_result.get("batch_id"),
+                "remaining_job_types": [],
+            }
+            for job in list(drain_result.get("jobs") or [])
+        ] + list(result.get("steps", []))
+        return result
+    if drain_result["status"] == "empty":
+        return _empty_drain_result("pipeline")
+    return _failed_drain_result(
+        drain_result=drain_result,
+        job_type=str(drain_result["job"]["job_type"]),
+        batch_id=drain_result.get("batch_id"),
+        remaining_job_types=list(drain_result.get("remaining_job_types") or []),
+    )
 
 def _summarize_result(result: dict) -> str:
     queued_items: list[str] = []
@@ -197,41 +274,7 @@ def _run_pipeline_job(
             return result
 
         if orchestration == "queue_drain":
-            drain_result = run_pipeline_batch(connection)
-            if drain_result["status"] == "completed":
-                result = dict(drain_result.get("result") or {})
-                result["steps"] = [
-                    {
-                        "step": "drain_queue",
-                        "status": "completed",
-                        "job_id": int(job["id"]),
-                        "job_type": str(job["job_type"]),
-                        "batch_id": drain_result.get("batch_id"),
-                        "remaining_job_types": [],
-                    }
-                    for job in list(drain_result.get("jobs") or [])
-                ] + list(result.get("steps", []))
-                return result
-            if drain_result["status"] == "empty":
-                return {
-                    "status": "completed",
-                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": "pipeline"}],
-                }
-            return {
-                "status": "failed",
-                "steps": [
-                    {
-                        "step": "drain_queue",
-                        "status": "failed",
-                        "job_id": int(drain_result["job"]["id"]),
-                        "job_type": str(drain_result["job"]["job_type"]),
-                        "batch_id": drain_result.get("batch_id"),
-                        "remaining_job_types": list(drain_result.get("remaining_job_types") or []),
-                        "error": drain_result["error"],
-                        "error_type": drain_result["error_type"],
-                    }
-                ],
-            }
+            return _format_pipeline_drain_result(run_pipeline_batch(connection))
 
         if orchestration == "queue_dispatch":
             jobs = enqueue_pipeline_jobs(
@@ -277,36 +320,7 @@ def _run_worker_job(
         run_migrations(connection)
 
         if orchestration == "queue_drain":
-            drain_result = run_next_queued_job(connection, job_type=job_type)
-            if drain_result["status"] == "completed":
-                result = dict(drain_result.get("result") or {})
-                result["steps"] = [
-                    {
-                        "step": "drain_queue",
-                        "status": "completed",
-                        "job_id": int(drain_result["job"]["id"]),
-                        "job_type": job_type,
-                    }
-                ] + list(result.get("steps", []))
-                return result
-            if drain_result["status"] == "empty":
-                return {
-                    "status": "completed",
-                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}],
-                }
-            return {
-                "status": "failed",
-                "steps": [
-                    {
-                        "step": "drain_queue",
-                        "status": "failed",
-                        "job_id": int(drain_result["job"]["id"]),
-                        "job_type": job_type,
-                        "error": drain_result["error"],
-                        "error_type": drain_result["error_type"],
-                    }
-                ],
-            }
+            return _format_single_job_drain_result(run_next_queued_job(connection, job_type=job_type), job_type)
 
         if orchestration == "queue_dispatch":
             if mode == "strategy-only":
@@ -343,36 +357,7 @@ def _run_worker_job(
         if mode == "execution-only":
             return {"steps": list(run_execution_job(connection, symbol_names=symbol_names)["steps"]), "symbol_names": symbol_names or []}
         if mode == "training-only":
-            drain_result = run_next_queued_job(connection, job_type=job_type)
-            if drain_result["status"] == "completed":
-                result = dict(drain_result.get("result") or {})
-                result["steps"] = [
-                    {
-                        "step": "drain_queue",
-                        "status": "completed",
-                        "job_id": int(drain_result["job"]["id"]),
-                        "job_type": job_type,
-                    }
-                ] + list(result.get("steps", []))
-                return result
-            if drain_result["status"] == "empty":
-                return {
-                    "status": "completed",
-                    "steps": [{"step": "drain_queue", "status": "empty", "job_type": job_type}],
-                }
-            return {
-                "status": "failed",
-                "steps": [
-                    {
-                        "step": "drain_queue",
-                        "status": "failed",
-                        "job_id": int(drain_result["job"]["id"]),
-                        "job_type": job_type,
-                        "error": drain_result["error"],
-                        "error_type": drain_result["error_type"],
-                    }
-                ],
-            }
+            return _format_single_job_drain_result(run_next_queued_job(connection, job_type=job_type), job_type)
     finally:
         connection.close()
 

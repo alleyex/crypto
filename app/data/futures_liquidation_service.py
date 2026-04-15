@@ -174,6 +174,7 @@ _COLLECTOR = _FuturesLiquidationCollector()
 
 def reset_futures_liquidation_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
+    _COLLECTOR.stop()
     _COLLECTOR = _FuturesLiquidationCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))

@@ -1,0 +1,46 @@
+        <!-- Pipeline -->
+        <div class="panel control-card">
+          <h2>Pipeline</h2>
+          <p>Run one full trading cycle and inspect the returned execution summary.</p>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Strategy</div>
+            <select id="pipeline-strategy-select" style="margin-top:6px">
+{% for strategy_name in strategy_names %}
+              <option value="{{ strategy_name }}"{% if strategy_name == default_strategy_name %} selected{% endif %}>{{ strategy_name }}</option>
+{% endfor %}
+            </select>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use all active symbols</span></div>
+            <div id="pipeline-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Orchestration</div>
+            <select id="pipeline-orchestration-select" style="margin-top:6px">
+{% for orchestration_name in pipeline_orchestrations %}
+              <option value="{{ orchestration_name }}"{% if orchestration_name == default_pipeline_orchestration %} selected{% endif %}>{{ orchestration_name }}</option>
+{% endfor %}
+            </select>
+          </div>
+          <div class="fetch-actions" style="margin-top:4px">
+            <button class="fetch-btn-primary" data-action="pipeline">Run Pipeline</button>
+            <button class="fetch-btn-secondary" data-refresh="all">Refresh Data</button>
+          </div>
+          <div class="ctrl-section" style="margin-top:14px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase">Kill Switch</span>
+            <span id="kill-switch-badge" class="chip">Loading…</span>
+            <button class="secondary" id="kill-switch-btn" data-action="kill-switch-toggle" style="padding:3px 14px;font-size:12px">—</button>
+          </div>
+          <div class="auto-refresh" style="margin-top:12px">
+            <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
+            <span id="auto-refresh-status">Auto refresh every 10 seconds.</span>
+          </div>
+          <div class="message" id="pipeline-message" style="display:none"></div>
+          <div id="pipeline-result" style="display:none; margin-top:14px">
+            <span id="pipeline-result-badge" class="pipeline-result-badge"></span>
+            <details style="margin-top:14px">
+              <summary style="cursor:pointer; color:var(--muted); font-size:12px; user-select:none">Raw JSON</summary>
+              <pre id="pipeline-result-json" style="font-size:11px; overflow:auto; margin-top:8px; white-space:pre-wrap; background:var(--surface); padding:10px; border-radius:6px"></pre>
+            </details>
+          </div>
+        </div>

@@ -22,6 +22,7 @@ from app.core.job_queue import (
     retry_job,
     run_next_pipeline_batch,
     run_pipeline_batch,
+    touch_job_lease,
 )
 from app.core.job_runner import run_next_queued_job
 from app.core.migrations import run_migrations
@@ -1047,6 +1048,75 @@ def test_reclaim_stale_leased_jobs_supports_mixed_timestamp_formats() -> None:
         assert job is not None
         assert job["status"] == "queued"
         assert job["started_at"] is None
+    finally:
+        connection.close()
+
+
+def test_reclaim_stale_leased_jobs_keeps_running_training_jobs_leased() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        training_job_id = connection.execute(
+            """
+            INSERT INTO training_jobs (
+                symbol, timeframe, feature_set, status, params_json, progress_json, created_at, started_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                "BTCUSDT",
+                "1m",
+                "v1",
+                "running",
+                json.dumps({"job_type": "ppo", "total_steps": 10_000}),
+                json.dumps({"pct": 0, "step": 0, "total": 10_000}),
+                "2000-01-01T00:00:00+00:00",
+                "2000-01-01T00:00:00+00:00",
+            ),
+        ).lastrowid
+        connection.commit()
+
+        queue_job_id = enqueue_job(connection, "training_ppo", payload={"training_job_id": int(training_job_id)})
+        connection.execute(
+            """
+            UPDATE job_queue
+            SET status = 'leased', started_at = ?
+            WHERE id = ?;
+            """,
+            ("2000-01-01T00:00:00+00:00", queue_job_id),
+        )
+        connection.commit()
+
+        reclaimed = reclaim_stale_leased_jobs(connection, lease_timeout_seconds=300)
+        assert reclaimed == 0
+
+        job = get_job(connection, queue_job_id)
+        assert job is not None
+        assert job["status"] == "leased"
+    finally:
+        connection.close()
+
+
+def test_touch_job_lease_refreshes_started_at_for_leased_job() -> None:
+    connection = make_connection()
+    try:
+        run_migrations(connection)
+        job_id = enqueue_job(connection, "strategy", payload={"strategy_names": ["ppo"]})
+        leased = lease_job_by_id(connection, job_id)
+        assert leased is not None
+
+        connection.execute(
+            "UPDATE job_queue SET started_at = '2000-01-01 00:00:00' WHERE id = ?;",
+            (job_id,),
+        )
+        connection.commit()
+
+        touch_job_lease(connection, job_id)
+        refreshed = get_job(connection, job_id)
+        assert refreshed is not None
+        assert refreshed["status"] == "leased"
+        assert refreshed["started_at"] is not None
+        assert str(refreshed["started_at"]).startswith("20")
+        assert refreshed["started_at"] != "2000-01-01 00:00:00"
     finally:
         connection.close()
 
@@ -2395,5 +2465,4 @@ def test_pipeline_job_modules_run_in_sequence(monkeypatch) -> None:
         assert [step["step"] for step in execution_result["steps"]] == ["paper_execute", "update_positions", "update_pnl", "reconcile_orphan_orders"]
     finally:
         connection.close()
-
 

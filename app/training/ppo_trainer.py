@@ -236,6 +236,7 @@ def run_ppo_training(
     train_frac: float = TRAIN_FRAC,
     job_id: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Train PPO and return results dict.
 
@@ -256,6 +257,8 @@ def run_ppo_training(
         avg_ppo_pct, avg_bnh_pct, avg_edge, win_rate,
         model_path: str (candidate .zip path),
     """
+    if on_status:
+        on_status("starting")
     _ensure_tensorboard_running()
 
     from stable_baselines3 import PPO
@@ -267,6 +270,8 @@ def run_ppo_training(
     feat_cols = get_feature_columns()
 
     # --- Probe latest timestamps to check feature cache ---
+    if on_status:
+        on_status("probing_data")
     conn = get_connection()
     try:
         _row = conn.execute(
@@ -301,10 +306,14 @@ def run_ppo_training(
         raise RuntimeError(f"No candle data for {symbol}/{timeframe}")
 
     # --- Try cache first ---
+    if on_status:
+        on_status("loading_feature_cache")
     df = _load_feature_cache(symbol, timeframe, last_candle_ts, last_aggtrade_ts, feat_cols, last_premium_ts)
 
     if df is None:
         # Cache miss: full load + feature build
+        if on_status:
+            on_status("loading_market_data")
         conn = get_connection()
         try:
             rows = conn.execute(
@@ -353,6 +362,8 @@ def run_ppo_training(
         finally:
             conn.close()
 
+        if on_status:
+            on_status("building_features")
         cols = ["open_time", "open", "high", "low", "close", "volume",
                 "quote_asset_volume", "number_of_trades",
                 "taker_buy_base_volume", "taker_buy_quote_volume"]
@@ -405,6 +416,8 @@ def run_ppo_training(
     _original_fee = _env_mod.FEE_PER_SIDE
     _env_mod.FEE_PER_SIDE = fee_rate
     try:
+        if on_status:
+            on_status("building_env")
         train_env = Monitor(
             CryptoTradingEnv(
                 train_df,
@@ -438,6 +451,8 @@ def run_ppo_training(
             _tb_log = None  # tensorboard unavailable — skip logging
         model = PPO("MlpPolicy", train_env, tensorboard_log=_tb_log, **ppo_kwargs)
 
+        if on_status:
+            on_status("training")
         cb = _make_progress_callback(total_steps, on_progress)
         model.learn(total_timesteps=total_steps, callback=cb, tb_log_name=tb_log_name)
 
@@ -445,6 +460,8 @@ def run_ppo_training(
             on_progress(total_steps, total_steps)
 
         # --- Walk-forward eval ---
+        if on_status:
+            on_status("evaluating")
         eval_results = walk_forward_eval(
             df, model,
             eval_start_idx=train_end,
@@ -480,6 +497,8 @@ def run_ppo_training(
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     suffix = f"_candidate_{job_id}" if job_id is not None else "_candidate"
     model_path = MODELS_DIR / f"ppo_{symbol}_{timeframe}{suffix}"
+    if on_status:
+        on_status("saving_model")
     model.save(str(model_path))
 
     model_meta = {

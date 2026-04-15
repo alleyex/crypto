@@ -238,6 +238,7 @@ _COLLECTOR = _FuturesAggTradeCollector()
 
 def reset_futures_aggtrade_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
+    _COLLECTOR.stop()
     _COLLECTOR = _FuturesAggTradeCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))

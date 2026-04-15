@@ -7,9 +7,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 ARG REQUIREMENTS_FILE=requirements.txt
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt requirements-runtime.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" torch \
     && pip install --no-cache-dir -r "${REQUIREMENTS_FILE}"
 
 COPY app ./app

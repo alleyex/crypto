@@ -186,6 +186,40 @@ def test_run_strategy_job_supports_multiple_symbols(monkeypatch) -> None:
         connection.close()
 
 
+def test_run_strategy_job_continues_after_one_symbol_errors(monkeypatch) -> None:
+    connection = make_connection()
+    try:
+        def fake_generate_registered_signal(conn, strategy_name="ppo", symbol="BTCUSDT", timeframe="1m"):
+            if symbol == "BTCUSDT":
+                raise ValueError("Unexpected observation shape (19,)")
+            return {
+                "id": 12,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy_name": strategy_name,
+                "signal_type": "SELL",
+                "short_ma": 1.0,
+                "long_ma": 2.0,
+            }
+
+        monkeypatch.setattr(
+            "app.pipeline.strategy_job.generate_registered_signal",
+            fake_generate_registered_signal,
+        )
+
+        result = run_strategy_job(connection, strategy_name="ppo", symbol_names=["BTCUSDT", "SOLUSDT"])
+
+        assert result["status"] == "partial_error"
+        assert result["signal_ids"] == [12]
+        assert result["steps"][0]["symbol"] == "BTCUSDT"
+        assert result["steps"][0]["status"] == "error"
+        assert result["steps"][0]["error_type"] == "ValueError"
+        assert result["steps"][1]["symbol"] == "SOLUSDT"
+        assert result["steps"][1]["signal_type"] == "SELL"
+    finally:
+        connection.close()
+
+
 def test_evaluate_signal_id_uses_specific_signal(monkeypatch) -> None:
     connection = make_connection()
     try:
@@ -1429,4 +1463,3 @@ def test_kill_switch_enable_endpoint_accepts_custom_source(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # /metrics endpoint
 # ---------------------------------------------------------------------------
-

@@ -13,31 +13,14 @@ def render_admin_page() -> str:
     from app.core.settings import DEFAULT_STRATEGY_NAME
     from app.strategy.registry import list_registered_strategies
 
-    strategy_options = "\n".join(
-        (
-            f'              <option value="{name}"'
-            + (' selected' if name == DEFAULT_STRATEGY_NAME else '')
-            + f">{name}</option>"
-        )
-        for name in list_registered_strategies()
-    )
-    closed_trade_strategy_options = "\n".join(
-        ['              <option value="all">all</option>']
-        + [f'              <option value="{name}">{name}</option>' for name in list_registered_strategies()]
-    )
-    pipeline_orchestration_options = "\n".join(
-        (
-            f'              <option value="{name}"'
-            + (' selected' if name == DEFAULT_PIPELINE_ORCHESTRATION else '')
-            + f">{name}</option>"
-        )
-        for name in ("direct", "queue_dispatch", "queue_drain", "queue_batch")
-    )
+    strategy_names = list_registered_strategies()
+    pipeline_orchestrations = ["direct", "queue_dispatch", "queue_drain", "queue_batch"]
 
     template = _env.get_template("admin.html")
     return template.render(
-        strategy_options=strategy_options,
-        closed_trade_strategy_options=closed_trade_strategy_options,
-        pipeline_orchestration_options=pipeline_orchestration_options,
+        strategy_names=strategy_names,
+        closed_trade_strategy_names=["all", *strategy_names],
+        pipeline_orchestrations=pipeline_orchestrations,
         default_strategy_name=DEFAULT_STRATEGY_NAME,
+        default_pipeline_orchestration=DEFAULT_PIPELINE_ORCHESTRATION,
     )

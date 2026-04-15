@@ -5,6 +5,7 @@ from typing import Any
 
 from app.core.db import DBConnection
 from app.core.db import fetch_all_as_dicts
+from app.core.db import get_backend_name
 from app.core.db import insert_and_get_rowid
 from app.core.db import utc_now_iso
 from app.core.migrations import run_migrations
@@ -32,6 +33,20 @@ INSERT INTO job_queue (
     batch_id,
     created_at
 ) VALUES (?, 'queued', ?, NULL, NULL, ?, ?, ?);
+"""
+
+_JOB_SELECT_COLUMNS = """
+    id,
+    job_type,
+    status,
+    payload_json,
+    result_json,
+    error_message,
+    attempt_count,
+    depends_on_job_id,
+    created_at,
+    started_at,
+    completed_at
 """
 
 def ensure_table(connection: DBConnection) -> None:
@@ -145,17 +160,7 @@ def list_jobs(
         connection,
         f"""
         SELECT
-            id,
-            job_type,
-            status,
-            payload_json,
-            result_json,
-            error_message,
-            attempt_count,
-            depends_on_job_id,
-            created_at,
-            started_at,
-            completed_at
+            {_JOB_SELECT_COLUMNS}
         FROM job_queue
         {where_sql}
         ORDER BY id DESC
@@ -169,19 +174,9 @@ def get_job(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
     ensure_table(connection)
     rows = fetch_all_as_dicts(
         connection,
-        """
+        f"""
         SELECT
-            id,
-            job_type,
-            status,
-            payload_json,
-            result_json,
-            error_message,
-            attempt_count,
-            depends_on_job_id,
-            created_at,
-            started_at,
-            completed_at
+            {_JOB_SELECT_COLUMNS}
         FROM job_queue
         WHERE id = ?
         LIMIT 1;
@@ -191,8 +186,68 @@ def get_job(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
     normalized = _normalize_rows(rows)
     return normalized[0] if normalized else None
 
+
+def _lease_next_job_postgres(connection: DBConnection, job_type: str | None = None) -> dict[str, Any] | None:
+    clauses = [
+        "status = 'queued'",
+        "(depends_on_job_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM job_queue dep WHERE dep.id = job_queue.depends_on_job_id AND dep.status = 'completed'"
+        "))",
+    ]
+    params: list[Any] = []
+    if job_type is not None:
+        clauses.append("job_type = ?")
+        params.append(job_type)
+
+    rows = fetch_all_as_dicts(
+        connection,
+        f"""
+        WITH next_job AS (
+            SELECT id
+            FROM job_queue
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE job_queue
+        SET
+            status = 'leased',
+            attempt_count = attempt_count + 1,
+            started_at = ?
+        WHERE id = (SELECT id FROM next_job)
+        RETURNING {_JOB_SELECT_COLUMNS};
+        """,
+        tuple(params + [utc_now_iso()]),
+    )
+    connection.commit()
+    normalized = _normalize_rows(rows)
+    return normalized[0] if normalized else None
+
+
+def _lease_job_by_id_postgres(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
+    rows = fetch_all_as_dicts(
+        connection,
+        f"""
+        UPDATE job_queue
+        SET
+            status = 'leased',
+            attempt_count = attempt_count + 1,
+            started_at = ?
+        WHERE id = ? AND status = 'queued'
+        RETURNING {_JOB_SELECT_COLUMNS};
+        """,
+        (utc_now_iso(), job_id),
+    )
+    connection.commit()
+    normalized = _normalize_rows(rows)
+    return normalized[0] if normalized else None
+
 def lease_next_job(connection: DBConnection, job_type: str | None = None) -> dict[str, Any] | None:
     ensure_table(connection)
+    if get_backend_name(connection) == "postgres":
+        return _lease_next_job_postgres(connection, job_type=job_type)
+
     clauses = [
         "status = 'queued'",
         "(depends_on_job_id IS NULL OR EXISTS ("
@@ -235,6 +290,9 @@ def lease_next_job(connection: DBConnection, job_type: str | None = None) -> dic
 
 def lease_job_by_id(connection: DBConnection, job_id: int) -> dict[str, Any] | None:
     ensure_table(connection)
+    if get_backend_name(connection) == "postgres":
+        return _lease_job_by_id_postgres(connection, job_id)
+
     connection.execute(
         """
         UPDATE job_queue
@@ -251,6 +309,19 @@ def lease_job_by_id(connection: DBConnection, job_id: int) -> dict[str, Any] | N
     if job is None or job["status"] != "leased":
         return None
     return job
+
+
+def touch_job_lease(connection: DBConnection, job_id: int) -> None:
+    ensure_table(connection)
+    connection.execute(
+        """
+        UPDATE job_queue
+        SET started_at = ?
+        WHERE id = ? AND status = 'leased';
+        """,
+        (utc_now_iso(), job_id),
+    )
+    connection.commit()
 
 def complete_job(
     connection: DBConnection,
@@ -371,7 +442,7 @@ def reclaim_stale_leased_jobs(
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=lease_timeout_seconds)).isoformat()
     stale_rows = connection.execute(
         """
-        SELECT id FROM job_queue
+        SELECT id, job_type, payload_json FROM job_queue
         WHERE status = 'leased'
           AND started_at IS NOT NULL
           AND started_at < ?
@@ -381,7 +452,25 @@ def reclaim_stale_leased_jobs(
     ).fetchall()
     if not stale_rows:
         return 0
-    stale_ids = [int(row[0]) for row in stale_rows]
+    stale_ids: list[int] = []
+    for row in stale_rows:
+        job_id = int(row[0])
+        job_type = str(row[1] or "")
+        raw_payload = row[2]
+        if job_type == "training_ppo":
+            payload = json.loads(raw_payload) if raw_payload else {}
+            training_job_id = payload.get("training_job_id")
+            if training_job_id is not None:
+                training_status_row = connection.execute(
+                    "SELECT status FROM training_jobs WHERE id = ? LIMIT 1;",
+                    (int(training_job_id),),
+                ).fetchone()
+                training_status = str(training_status_row[0] or "").lower() if training_status_row else ""
+                if training_status == "running":
+                    continue
+        stale_ids.append(job_id)
+    if not stale_ids:
+        return 0
     placeholders = ", ".join("?" for _ in stale_ids)
     connection.execute(
         f"UPDATE job_queue SET status = 'queued', started_at = NULL WHERE id IN ({placeholders});",
@@ -389,4 +478,3 @@ def reclaim_stale_leased_jobs(
     )
     connection.commit()
     return len(stale_ids)
-

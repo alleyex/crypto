@@ -313,6 +313,7 @@ _COLLECTOR = _FuturesOrderBookCollector()
 
 def reset_futures_orderbook_runtime(symbols: list[str] | None = None) -> dict[str, Any]:
     global _COLLECTOR
+    _COLLECTOR.stop()
     _COLLECTOR = _FuturesOrderBookCollector()
     if symbols:
         _COLLECTOR.ensure_started(list(symbols))

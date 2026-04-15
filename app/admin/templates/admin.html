@@ -1919,125 +1919,8 @@
           <p>Operational controls stay near the top, while low-level diagnostics move further down the page.</p>
         </div>
       <section class="controls">
-
-        <!-- Pipeline -->
-        <div class="panel control-card">
-          <h2>Pipeline</h2>
-          <p>Run one full trading cycle and inspect the returned execution summary.</p>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Strategy</div>
-            <select id="pipeline-strategy-select" style="margin-top:6px">
-{{ strategy_options | safe }}
-            </select>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Symbols <span class="fetch-field-hint">leave empty to use all active symbols</span></div>
-            <div id="pipeline-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Orchestration</div>
-            <select id="pipeline-orchestration-select" style="margin-top:6px">
-{{ pipeline_orchestration_options | safe }}
-            </select>
-          </div>
-          <div class="fetch-actions" style="margin-top:4px">
-            <button class="fetch-btn-primary" data-action="pipeline">Run Pipeline</button>
-            <button class="fetch-btn-secondary" data-refresh="all">Refresh Data</button>
-          </div>
-          <div class="ctrl-section" style="margin-top:14px;display:flex;align-items:center;gap:12px">
-            <span style="font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase">Kill Switch</span>
-            <span id="kill-switch-badge" class="chip">Loading…</span>
-            <button class="secondary" id="kill-switch-btn" data-action="kill-switch-toggle" style="padding:3px 14px;font-size:12px">—</button>
-          </div>
-          <div class="auto-refresh" style="margin-top:12px">
-            <button class="secondary" data-action="auto-refresh-toggle">Pause Auto Refresh</button>
-            <span id="auto-refresh-status">Auto refresh every 10 seconds.</span>
-          </div>
-          <div class="message" id="pipeline-message" style="display:none"></div>
-          <div id="pipeline-result" style="display:none; margin-top:14px">
-            <span id="pipeline-result-badge" class="pipeline-result-badge"></span>
-            <details style="margin-top:14px">
-              <summary style="cursor:pointer; color:var(--muted); font-size:12px; user-select:none">Raw JSON</summary>
-              <pre id="pipeline-result-json" style="font-size:11px; overflow:auto; margin-top:8px; white-space:pre-wrap; background:var(--surface); padding:10px; border-radius:6px"></pre>
-            </details>
-          </div>
-        </div>
-
-        <!-- Scheduler -->
-        <div class="panel control-card scheduler-card">
-          <h2>Scheduler</h2>
-          <p>Pause or resume automatic execution without touching launchd state directly.</p>
-
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Active Strategies</div>
-            <div id="scheduler-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
-            <div id="scheduler-disabled-strategy-pills" class="toggle-pill-group" style="margin-top:4px"></div>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Active Symbols</div>
-            <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Active Timeframes</div>
-            <div id="scheduler-timeframe-pills" class="toggle-pill-group" style="margin-top:6px"></div>
-          </div>
-          <div style="margin-bottom:18px">
-            <button class="fetch-btn-primary" data-action="scheduler-strategy-save">Apply Strategy State</button>
-          </div>
-
-          <hr class="ctrl-divider" />
-
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Execution Backend</div>
-            <div style="display:flex; gap:8px; align-items:center; margin-top:6px">
-              <select id="execution-backend-select">
-                <option value="paper">paper</option>
-                <option value="noop">noop</option>
-                <option value="simulated_live">simulated_live</option>
-                <option value="binance">binance</option>
-              </select>
-              <button class="fetch-btn-secondary" data-action="execution-backend-save">Apply</button>
-            </div>
-          </div>
-
-          <hr class="ctrl-divider" />
-
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Strategy Limit <span class="fetch-field-hint">how many enabled strategies run</span></div>
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px">
-              <input id="scheduler-effective-limit-input" class="limit-input" type="number" step="1" min="1" placeholder="all" style="width:72px" />
-              <button class="secondary" type="button" data-action="scheduler-preset-top1">top-1</button>
-              <button class="secondary" type="button" data-action="scheduler-preset-top2">top-2</button>
-              <button class="secondary" type="button" data-action="scheduler-preset-all">all</button>
-            </div>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Execution Priority <span class="fetch-field-hint">lower number runs first</span></div>
-            <div id="scheduler-priority-controls" style="display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:6px; align-items:center"></div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
-              <button class="secondary" type="button" data-action="scheduler-priority-sequential">Sequential</button>
-              <button class="secondary" type="button" data-action="scheduler-priority-reverse">Reverse</button>
-              <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
-              <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset</button>
-            </div>
-          </div>
-          <div class="ctrl-section">
-            <div class="fetch-field-label">Disabled Notes <span class="fetch-field-hint">explain why a strategy is paused</span></div>
-            <div id="scheduler-disabled-note-controls" style="margin-top:6px"></div>
-            <button class="secondary" type="button" data-action="scheduler-clear-notes" style="margin-top:8px">Clear Notes</button>
-          </div>
-          <div class="inline-note" id="scheduler-preset-detail" style="margin-bottom:16px">
-            Limit presets change how many enabled strategies run. Priority presets reorder the scheduler execution sequence.
-          </div>
-
-          <hr class="ctrl-divider" />
-
-          <div style="display:flex; gap:8px">
-            <button class="fetch-btn-primary" data-action="scheduler-start">Start</button>
-            <button class="danger" data-action="scheduler-stop">Stop</button>
-          </div>
-          <div class="message" id="scheduler-message"></div>
-        </div>
+{% include "_pipeline_controls.html" %}
+{% include "_scheduler_controls.html" %}
 
 
       </section>
@@ -2061,71 +1944,8 @@
             <div class="strategy-card">Loading...</div>
           </div>
         </article>
-        <article class="panel data-card">
-          <h2>Queue Summary</h2>
-          <p>Queued worker job counts, the latest queue entries, and direct queue recovery actions.</p>
-          <div class="inline-controls">
-            <label for="queue-filter-select">Filter</label>
-            <select id="queue-filter-select">
-              <option value="all">all</option>
-              <option value="failed">failed only</option>
-              <option value="queued">queued only</option>
-              <option value="market_data">market_data</option>
-              <option value="strategy">strategy</option>
-              <option value="risk">risk</option>
-              <option value="execution">execution</option>
-            </select>
-          </div>
-          <div class="button-row" style="margin-bottom: 16px;">
-            <button class="secondary" data-action="queue-recover-pipeline">Recover Stale Pipeline Batch</button>
-            <button class="secondary" data-action="queue-clear-pipeline">Clear Stale Pipeline Batch</button>
-            <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
-            <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
-            <button class="secondary" data-action="queue-drain-risk">Drain Risk Job</button>
-            <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
-            <button class="secondary" data-action="queue-retry-strategy">Retry Failed Strategy Job</button>
-            <button class="secondary" data-action="queue-retry-risk">Retry Failed Risk Job</button>
-            <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
-          </div>
-          <div class="inline-note" style="margin-bottom: 12px;">Pipeline dispatch/drain now lives in the Pipeline panel via the orchestration selector.</div>
-          <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
-          <div class="trade-list" id="queue-board">
-            <div class="strategy-card">Loading...</div>
-          </div>
-          <pre id="queue-json">Loading...</pre>
-        </article>
-        <article class="panel data-card">
-          <h2>Runtime Heartbeats</h2>
-          <p>Latest liveness records for scheduler, pipeline, market data, split workers, and alerting.</p>
-          <div class="worker-grid">
-            <div class="side-stat">
-              <label>Market Data</label>
-              <div class="value" id="data-worker-status">Loading</div>
-              <div class="inline-note" id="data-worker-detail">Checking market data heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Pipeline</label>
-              <div class="value" id="strategy-worker-status">Loading</div>
-              <div class="inline-note" id="strategy-worker-detail">Checking pipeline heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Scheduler</label>
-              <div class="value" id="risk-worker-status">Loading</div>
-              <div class="inline-note" id="risk-worker-detail">Checking scheduler heartbeat...</div>
-            </div>
-            <div class="side-stat">
-              <label>Alerting</label>
-              <div class="value" id="execution-worker-status">Loading</div>
-              <div class="inline-note" id="execution-worker-detail">Checking alerting heartbeat...</div>
-            </div>
-          </div>
-          <details class="collapsible">
-            <summary>View heartbeat event feed</summary>
-            <div class="collapsible-body">
-              <pre id="heartbeats-json">Loading...</pre>
-            </div>
-          </details>
-        </article>
+{% include "_queue_summary_panel.html" %}
+{% include "_runtime_heartbeats_panel.html" %}
         <article class="panel data-card">
           <h2>Scheduler Logs</h2>
           <p>Recent scheduler output lines.</p>
@@ -2181,7 +2001,9 @@
           <div class="inline-controls">
             <label for="closed-trades-strategy-select">Strategy</label>
             <select id="closed-trades-strategy-select">
-{{ closed_trade_strategy_options | safe }}
+{% for strategy_name in closed_trade_strategy_names %}
+              <option value="{{ strategy_name }}">{{ strategy_name }}</option>
+{% endfor %}
             </select>
             <button class="secondary" type="button" id="closed-trades-reset-button">Reset</button>
           </div>
@@ -6052,7 +5874,8 @@
         if (job.status === "running" && prog) {
           el("ppo-progress-wrap").style.display = "block";
           el("ppo-progress-bar").style.width    = (prog.pct || 0) + "%";
-          el("ppo-progress-label").textContent  = `${prog.pct ?? 0}% (${(prog.step ?? 0).toLocaleString()} / ${(prog.total ?? 0).toLocaleString()} steps)`;
+          const stage = prog.stage ? ` · ${String(prog.stage).replaceAll("_", " ")}` : "";
+          el("ppo-progress-label").textContent  = `${prog.pct ?? 0}% (${(prog.step ?? 0).toLocaleString()} / ${(prog.total ?? 0).toLocaleString()} steps)${stage}`;
         } else {
           el("ppo-progress-wrap").style.display = "none";
         }

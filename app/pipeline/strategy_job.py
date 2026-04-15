@@ -23,14 +23,31 @@ def run_strategy_job(
     active_timeframe_names = dedup_ordered(timeframe_names)
     signal_steps: list[dict[str, Any]] = []
     generated_signal_results: list[dict[str, Any]] = []
+    had_error = False
     for symbol_name in active_symbol_names:
         for timeframe_name in active_timeframe_names:
-            signal_result = generate_registered_signal(
-                connection,
-                strategy_name=strategy_name,
-                symbol=symbol_name,
-                timeframe=timeframe_name,
-            )
+            try:
+                signal_result = generate_registered_signal(
+                    connection,
+                    strategy_name=strategy_name,
+                    symbol=symbol_name,
+                    timeframe=timeframe_name,
+                )
+            except Exception as exc:
+                had_error = True
+                signal_steps.append(
+                    {
+                        "step": "generate_signal",
+                        "status": "error",
+                        "reason": str(exc),
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "strategy_name": strategy_name,
+                        "symbol": symbol_name,
+                        "timeframe": timeframe_name,
+                    }
+                )
+                continue
             if signal_result is None:
                 signal_steps.append(
                     {
@@ -48,14 +65,18 @@ def run_strategy_job(
 
     if not generated_signal_results:
         return {
-            "status": "completed",
+            "status": "partial_error" if had_error else "completed",
             "steps": signal_steps,
-            "terminal_message": "Pipeline run completed with skipped signal generation.",
+            "terminal_message": (
+                "Pipeline run completed with strategy errors."
+                if had_error
+                else "Pipeline run completed with skipped signal generation."
+            ),
         }
 
     signal_ids = [int(s["id"]) for s in generated_signal_results]
     return {
-        "status": "ok",
+        "status": "partial_error" if had_error else "ok",
         "symbol_names": active_symbol_names,
         "timeframe_names": active_timeframe_names,
         "signal_ids": signal_ids,

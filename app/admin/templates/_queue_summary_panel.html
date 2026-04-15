@@ -1,0 +1,33 @@
+        <article class="panel data-card">
+          <h2>Queue Summary</h2>
+          <p>Queued worker job counts, the latest queue entries, and direct queue recovery actions.</p>
+          <div class="inline-controls">
+            <label for="queue-filter-select">Filter</label>
+            <select id="queue-filter-select">
+              <option value="all">all</option>
+              <option value="failed">failed only</option>
+              <option value="queued">queued only</option>
+              <option value="market_data">market_data</option>
+              <option value="strategy">strategy</option>
+              <option value="risk">risk</option>
+              <option value="execution">execution</option>
+            </select>
+          </div>
+          <div class="button-row" style="margin-bottom: 16px;">
+            <button class="secondary" data-action="queue-recover-pipeline">Recover Stale Pipeline Batch</button>
+            <button class="secondary" data-action="queue-clear-pipeline">Clear Stale Pipeline Batch</button>
+            <button class="secondary" data-action="queue-enqueue-strategy">Enqueue Strategy Job</button>
+            <button class="secondary" data-action="queue-drain-strategy">Drain Strategy Job</button>
+            <button class="secondary" data-action="queue-drain-risk">Drain Risk Job</button>
+            <button class="secondary" data-action="queue-drain-execution">Drain Execution Job</button>
+            <button class="secondary" data-action="queue-retry-strategy">Retry Failed Strategy Job</button>
+            <button class="secondary" data-action="queue-retry-risk">Retry Failed Risk Job</button>
+            <button class="secondary" data-action="queue-retry-execution">Retry Failed Execution Job</button>
+          </div>
+          <div class="inline-note" style="margin-bottom: 12px;">Pipeline dispatch/drain now lives in the Pipeline panel via the orchestration selector.</div>
+          <div class="message" id="queue-message">No queue action triggered from this page yet.</div>
+          <div class="trade-list" id="queue-board">
+            <div class="strategy-card">Loading...</div>
+          </div>
+          <pre id="queue-json">Loading...</pre>
+        </article>

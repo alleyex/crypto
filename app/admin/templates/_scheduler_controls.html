@@ -1,0 +1,75 @@
+        <!-- Scheduler -->
+        <div class="panel control-card scheduler-card">
+          <h2>Scheduler</h2>
+          <p>Pause or resume automatic execution without touching launchd state directly.</p>
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Strategies</div>
+            <div id="scheduler-strategy-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+            <div id="scheduler-disabled-strategy-pills" class="toggle-pill-group" style="margin-top:4px"></div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Symbols</div>
+            <div id="scheduler-symbol-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Active Timeframes</div>
+            <div id="scheduler-timeframe-pills" class="toggle-pill-group" style="margin-top:6px"></div>
+          </div>
+          <div style="margin-bottom:18px">
+            <button class="fetch-btn-primary" data-action="scheduler-strategy-save">Apply Strategy State</button>
+          </div>
+
+          <hr class="ctrl-divider" />
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Execution Backend</div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:6px">
+              <select id="execution-backend-select">
+                <option value="paper">paper</option>
+                <option value="noop">noop</option>
+                <option value="simulated_live">simulated_live</option>
+                <option value="binance">binance</option>
+              </select>
+              <button class="fetch-btn-secondary" data-action="execution-backend-save">Apply</button>
+            </div>
+          </div>
+
+          <hr class="ctrl-divider" />
+
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Strategy Limit <span class="fetch-field-hint">how many enabled strategies run</span></div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px">
+              <input id="scheduler-effective-limit-input" class="limit-input" type="number" step="1" min="1" placeholder="all" style="width:72px" />
+              <button class="secondary" type="button" data-action="scheduler-preset-top1">top-1</button>
+              <button class="secondary" type="button" data-action="scheduler-preset-top2">top-2</button>
+              <button class="secondary" type="button" data-action="scheduler-preset-all">all</button>
+            </div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Execution Priority <span class="fetch-field-hint">lower number runs first</span></div>
+            <div id="scheduler-priority-controls" style="display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:6px; align-items:center"></div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+              <button class="secondary" type="button" data-action="scheduler-priority-sequential">Sequential</button>
+              <button class="secondary" type="button" data-action="scheduler-priority-reverse">Reverse</button>
+              <button class="secondary" type="button" data-action="scheduler-priority-active-first">Active first</button>
+              <button class="secondary" type="button" data-action="scheduler-reset-priorities">Reset</button>
+            </div>
+          </div>
+          <div class="ctrl-section">
+            <div class="fetch-field-label">Disabled Notes <span class="fetch-field-hint">explain why a strategy is paused</span></div>
+            <div id="scheduler-disabled-note-controls" style="margin-top:6px"></div>
+            <button class="secondary" type="button" data-action="scheduler-clear-notes" style="margin-top:8px">Clear Notes</button>
+          </div>
+          <div class="inline-note" id="scheduler-preset-detail" style="margin-bottom:16px">
+            Limit presets change how many enabled strategies run. Priority presets reorder the scheduler execution sequence.
+          </div>
+
+          <hr class="ctrl-divider" />
+
+          <div style="display:flex; gap:8px">
+            <button class="fetch-btn-primary" data-action="scheduler-start">Start</button>
+            <button class="danger" data-action="scheduler-stop">Stop</button>
+          </div>
+          <div class="message" id="scheduler-message"></div>
+        </div>
