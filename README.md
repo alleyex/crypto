@@ -1,6 +1,22 @@
 # Crypto Trading System
 
-An automated paper-trading system for Binance spot markets. Runs a full signal-to-execution pipeline on a scheduled loop, with a web-based admin console and Telegram alerting.
+Python framework for systematic crypto trading on Binance Spot. Runs a full signal-to-execution pipeline with a PPO reinforcement-learning strategy, FastAPI admin console, adaptive risk filters, Telegram alerting, and multi-backend execution (paper / simulated / live).
+
+> **Live demo (perpetual-futures sibling project, separate codebase):**
+> https://perp-alleyex.duckdns.org/ — async WebSocket ingestion, three concurrent live runners with 45+ hours uptime, walk-forward backtest sweep, drift monitoring. No login required.
+
+**Stack**: Python 3.12 · FastAPI · PPO (Stable-Baselines3) · PostgreSQL / SQLite · Docker · pytest · systemd / launchd
+
+## Highlights
+
+- **PPO reinforcement learning** strategy with custom trading environment
+- **Scheduled pipeline orchestration** — full signal-to-execution loop with risk gating
+- **Adaptive risk filters** — cooldowns, position limits, kill switches, daily-loss caps
+- **FastAPI admin console** — health monitoring, candle/signal/order inspection, pipeline triggers
+- **Multi-backend execution** — `paper`, `noop`, `simulated_live`, `binance` (real Spot API)
+- **Telegram alerting** with deduplication on scheduler/kill-switch/queue state changes
+- **One-command Docker deployment** + systemd service templates for Linux production
+- **Soak validation framework** for continuous-operation acceptance testing
 
 ## Architecture
 
